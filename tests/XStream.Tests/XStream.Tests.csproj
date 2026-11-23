@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Dependency-free test runner. Run: dotnet run (project tests/XStream.Tests) -->
+  <PropertyGroup><OutputType>Exe</OutputType><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/XStream.Core/XStream.Core.csproj" />
+    <ProjectReference Include="../../src/XStream.Player/XStream.Player.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    XStream launcher: sign in, pick a console, tune settings, watch the live connection.
+    The stream itself runs in a second copy of this app (started with "play-child <serverId>") so the SDL
+    video window owns that process's main thread, which macOS requires.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>XStream</AssemblyName>
+    <RootNamespace>XStream.App</RootNamespace>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <ApplicationManifest Condition="'$(OS)' == 'Windows_NT'">app.manifest</ApplicationManifest>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <!-- Exe icon on Windows: Explorer, taskbar, and the SDL video window (same exe). -->
+    <ApplicationIcon>Assets/xstream.ico</ApplicationIcon>
+    <Product>XStream</Product>
+    <Version>0.2.0</Version>
+    <Description>Xbox remote play client built around stream stability</Description>
+  </PropertyGroup>
+  <!-- Release publish (scripts/publish-windows.sh passes XsTrim=true): drop framework code XStream never uses.
+       Partial mode only trims framework assemblies; ours, SIPSorcery and BouncyCastle are kept whole. -->
+  <PropertyGroup Condition="'$(XsTrim)' == 'true'">
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>partial</TrimMode>
+    <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
+    <!-- Settings, tokens and the launcher/stream messages use reflection-based System.Text.Json. -->
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+  <ItemGroup>
+    <AvaloniaResource Include="Assets/xstream.png" />
+    <!-- Single-file Windows build: SDL2 + FFmpeg packed inside the exe, unpacked on first launch (NativeBundle). -->
+    <EmbeddedResource Include="$(XsNativeBundle)" LogicalName="natives.zip" Condition="'$(XsNativeBundle)' != ''" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.23" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.23" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.23" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.23" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+    <PackageReference Include="Avalonia.Diagnostics" Version="11.3.23" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../XStream.Core/XStream.Core.csproj" />
+    <ProjectReference Include="../XStream.Player/XStream.Player.csproj" />
+  </ItemGroup>
+</Project>

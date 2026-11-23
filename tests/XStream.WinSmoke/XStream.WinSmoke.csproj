@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Windows smoke test, run under Wine in Docker by tests/wine/run.sh: drives the real video path
+       (test pattern -> RTP -> decoder -> window/renderer -> screenshot) and checks the pixels. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/XStream.Core/XStream.Core.csproj" />
+    <ProjectReference Include="../../src/XStream.Player/XStream.Player.csproj" />
+  </ItemGroup>
+</Project>

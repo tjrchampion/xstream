@@ -1,0 +1,104 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:XStream.App.ViewModels"
+             x:Class="XStream.App.Views.SignInView"
+             x:DataType="vm:SignInViewModel">
+  <Panel>
+    <!-- Soft glow behind the card -->
+    <Panel.Background>
+      <RadialGradientBrush Center="50%,30%" GradientOrigin="50%,30%" RadiusX="70%" RadiusY="70%">
+        <GradientStop Color="#1A3DDC97" Offset="0" />
+        <GradientStop Color="#000C0E12" Offset="1" />
+      </RadialGradientBrush>
+    </Panel.Background>
+
+    <Border Classes="card" Width="460" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="34">
+      <StackPanel Spacing="22">
+        <StackPanel Orientation="Horizontal" Spacing="12">
+          <Image Source="avares://XStream/Assets/xstream.png" Width="42" Height="42" RenderOptions.BitmapInterpolationMode="HighQuality" />
+          <StackPanel VerticalAlignment="Center">
+            <TextBlock Text="XStream" FontSize="20" FontWeight="Bold" />
+            <TextBlock Text="Play your console from anywhere in the house" Classes="caption" />
+          </StackPanel>
+        </StackPanel>
+
+        <!-- Start -->
+        <StackPanel Spacing="16" IsVisible="{Binding IsIdle}">
+          <StackPanel Spacing="6">
+            <TextBlock Classes="h2" Text="Sign in with your Microsoft account" />
+            <TextBlock Classes="muted" TextWrapping="Wrap"
+                       Text="You'll get a short code. Enter it on your phone or computer to approve this device. Your password never goes through XStream." />
+          </StackPanel>
+          <Button Classes="primary" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                  Command="{Binding StartCommand}" Content="Get a sign-in code" />
+        </StackPanel>
+
+        <!-- Busy -->
+        <StackPanel Spacing="14" IsVisible="{Binding IsBusy}" HorizontalAlignment="Center" Margin="0,10">
+          <ProgressBar IsIndeterminate="True" Width="220" />
+          <TextBlock Classes="muted" HorizontalAlignment="Center" Text="Talking to Xbox…" />
+        </StackPanel>
+
+        <!-- Code -->
+        <StackPanel Spacing="18" IsVisible="{Binding IsWaiting}">
+          <StackPanel Spacing="10">
+            <TextBlock Classes="label" Text="STEP 1 · OPEN THIS PAGE" />
+            <Button Classes="ghost" HorizontalAlignment="Stretch" Command="{Binding OpenLinkCommand}">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="{Binding VerificationUri}" Foreground="{StaticResource Info}" VerticalAlignment="Center" />
+                <PathIcon Grid.Column="1" Data="{StaticResource Icon.OpenLink}" Foreground="{StaticResource Muted}" />
+              </Grid>
+            </Button>
+          </StackPanel>
+          <StackPanel Spacing="10">
+            <TextBlock Classes="label" Text="STEP 2 · ENTER THIS CODE" />
+            <Border Classes="tile" Padding="18,16">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="{Binding UserCode}" Classes="mono" FontSize="32" FontWeight="Bold" LetterSpacing="6"
+                           VerticalAlignment="Center" />
+                <Button Grid.Column="1" Classes="ghost" Command="{Binding CopyCodeCommand}" VerticalAlignment="Center">
+                  <StackPanel Orientation="Horizontal" Spacing="7">
+                    <PathIcon Data="{StaticResource Icon.Copy}" IsVisible="{Binding !Copied}" />
+                    <PathIcon Data="{StaticResource Icon.Check}" Foreground="{StaticResource Accent}" IsVisible="{Binding Copied}" />
+                    <TextBlock Text="Copy" IsVisible="{Binding !Copied}" />
+                    <TextBlock Text="Copied" Foreground="{StaticResource Accent}" IsVisible="{Binding Copied}" />
+                  </StackPanel>
+                </Button>
+              </Grid>
+            </Border>
+          </StackPanel>
+          <Grid ColumnDefinitions="*,Auto">
+            <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
+              <Ellipse Classes="dot good pulse" />
+              <TextBlock Classes="muted" FontSize="13" Text="Waiting for approval" />
+              <TextBlock Classes="caption faint" Text="{Binding ExpiresText}" VerticalAlignment="Center" />
+            </StackPanel>
+            <Button Grid.Column="1" Classes="ghost" Content="Cancel" Command="{Binding CancelCommand}" />
+          </Grid>
+        </StackPanel>
+
+        <!-- Error -->
+        <StackPanel Spacing="14" IsVisible="{Binding IsFailed}">
+          <Border Classes="banner bad">
+            <Grid ColumnDefinitions="Auto,*">
+              <PathIcon Data="{StaticResource Icon.Alert}" Foreground="{StaticResource Bad}" Width="16" Height="16" VerticalAlignment="Top" Margin="0,2,10,0" />
+              <TextBlock Grid.Column="1" Text="{Binding Error}" TextWrapping="Wrap" />
+            </Grid>
+          </Border>
+          <Button Classes="primary" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                  Command="{Binding StartCommand}" Content="Try again" />
+        </StackPanel>
+
+        <TextBlock Classes="caption faint" TextWrapping="Wrap" TextAlignment="Center"
+                   Text="Not affiliated with Microsoft or Xbox. Uses the same sign-in as the Xbox app." />
+        <Button Classes="ghost" HorizontalAlignment="Center" Padding="14,8"
+                Command="{Binding $parent[Window].((vm:MainViewModel)DataContext).ExitCommand}">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <PathIcon Data="{StaticResource Icon.Power}" Width="14" Height="14" Foreground="{StaticResource Bad}" />
+            <TextBlock Text="Exit XStream" />
+          </StackPanel>
+        </Button>
+      </StackPanel>
+    </Border>
+  </Panel>
+</UserControl>

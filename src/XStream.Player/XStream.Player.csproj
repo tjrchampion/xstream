@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- One play session (session setup, WebRTC, video, controller, logging), shared by the CLI and the launcher UI. -->
+  <PropertyGroup><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup>
+  <ItemGroup>
+    <!-- Same version Avalonia uses, so the launcher process loads a single copy. Draws the in-stream overlay. -->
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp.NativeAssets.macOS" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="2.88.9" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../XStream.Core/XStream.Core.csproj" />
+    <ProjectReference Include="../XStream.WebRtc/XStream.WebRtc.csproj" />
+  </ItemGroup>
+</Project>

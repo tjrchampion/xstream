@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    WebRTC transport via SIPSorcery (pure C#, macOS and Windows).
+    Run scripts/get-sipsorcery.sh (or .ps1) once to build against the patched source in
+    third_party/sipsorcery: it adds unordered, never-retransmit data channels so a lost controller
+    packet never delays the ones after it. Without it, the unpatched NuGet package is used and the
+    input channel falls back to ordered + reliable.
+  -->
+  <PropertyGroup>
+    <PatchedSipSorcery>$(MSBuildThisFileDirectory)../../third_party/sipsorcery/src/SIPSorcery/SIPSorcery.csproj</PatchedSipSorcery>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(PatchedSipSorcery)')">
+    <ProjectReference Include="$(PatchedSipSorcery)" />
+  </ItemGroup>
+  <ItemGroup Condition="!Exists('$(PatchedSipSorcery)')">
+    <PackageReference Include="SIPSorcery" Version="8.*" />
+  </ItemGroup>
+  <ItemGroup><ProjectReference Include="../XStream.Core/XStream.Core.csproj" /></ItemGroup>
+</Project>

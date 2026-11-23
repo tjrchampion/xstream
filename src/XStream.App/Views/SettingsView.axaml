@@ -1,0 +1,358 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:XStream.App.ViewModels"
+             x:Class="XStream.App.Views.SettingsView"
+             x:DataType="vm:SettingsViewModel">
+  <UserControl.Styles>
+    <Style Selector="ToggleSwitch">
+      <Setter Property="OnContent" Value="" /><Setter Property="OffContent" Value="" />
+      <Setter Property="HorizontalAlignment" Value="Right" /><Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="MinWidth" Value="0" />
+    </Style>
+  </UserControl.Styles>
+
+  <ScrollViewer>
+    <StackPanel Margin="36,32,36,36" Spacing="22" MaxWidth="960">
+      <StackPanel Spacing="4">
+        <TextBlock Classes="h1" Text="Settings" />
+        <TextBlock Classes="muted" Text="Changes are saved straight away. Profile, bitrate, picture, sound and rumble also change a running stream." />
+      </StackPanel>
+
+      <!-- Profile -->
+      <Border Classes="card">
+        <StackPanel Spacing="16">
+          <StackPanel Spacing="3">
+            <TextBlock Classes="h2" Text="Stream profile" />
+            <TextBlock Classes="caption" Text="How XStream trades latency for a steady picture when the network gets rough." />
+          </StackPanel>
+          <ItemsControl ItemsSource="{Binding Profiles}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate><UniformGrid Rows="1" ColumnSpacing="12" /></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:ProfileOption">
+                <RadioButton Classes="profile" GroupName="profile" IsChecked="{Binding IsSelected}">
+                  <StackPanel Spacing="6">
+                    <Grid ColumnDefinitions="*,Auto">
+                      <TextBlock Classes="h3" Text="{Binding Title}" />
+                      <PathIcon Grid.Column="1" Data="{StaticResource Icon.Check}" Width="15" Height="15"
+                                Foreground="{StaticResource Accent}" IsVisible="{Binding IsSelected}" />
+                    </Grid>
+                    <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Text="{Binding Blurb}" />
+                    <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding Detail}" />
+                  </StackPanel>
+                </RadioButton>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+
+      <!-- Bitrate -->
+      <Border Classes="card">
+        <StackPanel Spacing="6">
+          <TextBlock Classes="h2" Text="Bitrate" />
+          <Grid Classes="row" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Maximum" />
+              <TextBlock Classes="caption" Text="The console never sends more than this. Higher is sharper if your network keeps up." />
+            </StackPanel>
+            <TextBlock Grid.Column="1" Classes="mono" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Text="{Binding MaxMbpsText}" VerticalAlignment="Center" />
+            <Slider Grid.Row="1" Grid.ColumnSpan="2" Minimum="5" Maximum="60" SmallChange="1" LargeChange="5"
+                    TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding MaxMbps}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Starting bitrate" />
+              <TextBlock Classes="caption" TextWrapping="Wrap"
+                         Text="Where the stream starts before anything is measured; it then climbs toward the maximum. If a session report says the console ignores bitrate caps, lower the maximum instead." />
+            </StackPanel>
+            <TextBlock Grid.Column="1" Classes="mono" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Text="{Binding StartMbpsText}" VerticalAlignment="Center" Margin="16,0,0,0" />
+            <Slider Grid.Row="1" Grid.ColumnSpan="2" Minimum="2" Maximum="60" SmallChange="1" LargeChange="5"
+                    TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding StartMbps}" />
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <!-- Video -->
+      <Border Classes="card">
+        <StackPanel>
+          <TextBlock Classes="h2" Text="Video" Margin="0,0,0,6" />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Connection alerts" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="A short message over the game when the connection or frame rate suffers, when it recovers, and when the battery runs low." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding ConnectionAlerts}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Clarity boost" />
+              <TextBlock Classes="caption" TextWrapping="Wrap"
+                         Text="Sharpens edges before the picture is scaled up to your screen, without halos (about 1 ms per frame). Change it live from the stream menu to compare." />
+            </StackPanel>
+            <ItemsControl Grid.Column="1" ItemsSource="{Binding ClarityOptions}" VerticalAlignment="Center">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="6" /></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:ClarityOption">
+                  <RadioButton Classes="profile seg" GroupName="clarity" IsChecked="{Binding IsSelected}">
+                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13" />
+                  </RadioButton>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Full screen" />
+              <TextBlock Classes="caption" Text="Borderless full screen. Also what AMD Fluid Motion Frames needs on the ROG Ally X." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding Fullscreen}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="GPU video decoding" />
+              <TextBlock Classes="caption" Text="D3D11VA on Windows, VideoToolbox on Mac. Turn off only to troubleshoot." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding HardwareDecode}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Picture" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="The console always sends 16:9. On a 16:10 screen (MacBooks) Fit shows bars; Fill covers the screen by trimming the sides (about 5-7% each); Stretch covers it with everything visible, but 11-15% taller. Switch live from the stream menu." />
+            </StackPanel>
+            <ComboBox Grid.Column="1" MinWidth="250" VerticalAlignment="Center" ItemsSource="{Binding ScalingModes}" SelectedIndex="{Binding ScalingIndex}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Resolution" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Maximum lets the console send its highest tier; it needs a strong network and a high maximum bitrate (30+ Mbps)." />
+            </StackPanel>
+            <ComboBox Grid.Column="1" MinWidth="250" VerticalAlignment="Center" ItemsSource="{Binding Resolutions}" SelectedIndex="{Binding ResolutionIndex}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="V-Sync" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Off shows each frame the moment it's decoded (tear-free on VRR screens). On removes tearing elsewhere, at up to one refresh of extra lag." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding VSync}" />
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <!-- Audio and controller -->
+      <Border Classes="card">
+        <StackPanel>
+          <TextBlock Classes="h2" Text="Sound and controller" Margin="0,0,0,6" />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Game audio" />
+              <TextBlock Classes="caption" Text="Kept about 40 ms behind (30 on Competitive, 80 on Smooth) so it stays in sync. Mute it from the stream menu." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding Audio}" />
+          </Grid>
+          <Grid Classes="row" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" IsEnabled="{Binding Audio}">
+            <TextBlock FontWeight="SemiBold" Text="Volume" />
+            <TextBlock Grid.Column="1" Classes="mono" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Text="{Binding VolumeText}" />
+            <Slider Grid.Row="1" Grid.ColumnSpan="2" Minimum="0" Maximum="100" SmallChange="5" LargeChange="10" TickFrequency="5" IsSnapToTickEnabled="True" Value="{Binding Volume}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Rumble strength" />
+              <TextBlock Classes="caption" Text="Controller vibration from the game." />
+            </StackPanel>
+            <TextBlock Grid.Column="1" Classes="mono" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Text="{Binding RumbleText}" VerticalAlignment="Center" />
+            <Slider Grid.Row="1" Grid.ColumnSpan="2" Minimum="0" Maximum="100" SmallChange="10" LargeChange="25" TickFrequency="5" IsSnapToTickEnabled="True" Value="{Binding RumbleStrength}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Trigger rumble" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Impulse-trigger vibration. Off matches the Xbox web player; racing games buzz the triggers constantly on the throttle." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding TriggerRumble}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Microphone (party and game chat)" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Sends this device's microphone to the console so friends in your party hear you. Toggle it from the stream menu too." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding Microphone}" />
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <!-- Launcher -->
+      <Border Classes="card">
+        <StackPanel>
+          <TextBlock Classes="h2" Text="Launcher" Margin="0,0,0,6" />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Open full screen" />
+              <TextBlock Classes="caption" Text="Best on the ROG Ally and other handhelds. F11 switches at any time." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding LauncherFullscreen}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Connect on launch" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Go straight into your last console when XStream opens. Press B on the connecting screen to stay in the launcher." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding AutoConnect}" />
+          </Grid>
+          <Separator IsVisible="{Binding IsWindows}" />
+          <Grid Classes="row" ColumnDefinitions="*,Auto" IsVisible="{Binding IsWindows}">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Run the display at 60 Hz while streaming" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="The console sends 60 frames a second. On a 120 Hz screen (ROG Ally) this paces frames evenly and saves battery. Switches back afterwards." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding MatchRefreshRate}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Show on Discord" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="&quot;Playing Forza Horizon 5 via XStream&quot; on your Discord profile while you stream (when Discord is running)." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding DiscordStatus}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Hide while streaming" />
+              <TextBlock Classes="caption" Text="Minimise this window once a full-screen stream starts; it comes back when the stream ends." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding HideLauncherWhileStreaming}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Controller navigation" />
+              <TextBlock Classes="caption" Text="Move around with the D-pad or stick, A to select, B to go back, LB/RB to switch pages." />
+              <TextBlock Classes="caption faint" Text="{Binding ControllerStatus}" Margin="0,2,0,0" />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding ControllerNavigation}" />
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <!-- System check -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <Grid ColumnDefinitions="*,Auto">
+            <StackPanel Spacing="3">
+              <TextBlock Classes="h2" Text="System check" />
+              <TextBlock Classes="caption" Text="What the stream needs on this device." />
+            </StackPanel>
+            <Button Grid.Column="1" Classes="ghost" Command="{Binding RunChecksCommand}" VerticalAlignment="Center">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <PathIcon Data="{StaticResource Icon.Refresh}" />
+                <TextBlock Text="Check again" />
+              </StackPanel>
+            </Button>
+          </Grid>
+          <ItemsControl ItemsSource="{Binding Checks}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:CheckItem">
+                <Border Classes="tile" Margin="0,0,0,8">
+                  <Grid ColumnDefinitions="Auto,*">
+                    <Border Width="24" Height="24" CornerRadius="12" VerticalAlignment="Top" Margin="0,1,12,0"
+                            Background="{StaticResource AccentSoft}" IsVisible="{Binding Ok}">
+                      <PathIcon Data="{StaticResource Icon.Check}" Width="12" Height="12" Foreground="{StaticResource Accent}" />
+                    </Border>
+                    <Border Width="24" Height="24" CornerRadius="12" VerticalAlignment="Top" Margin="0,1,12,0"
+                            Background="{StaticResource WarnSoft}" IsVisible="{Binding !Ok}">
+                      <PathIcon Data="{StaticResource Icon.Alert}" Width="12" Height="12" Foreground="{StaticResource Warn}" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Spacing="2">
+                      <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                      <TextBlock Classes="caption" Text="{Binding Detail}" TextWrapping="Wrap" />
+                      <SelectableTextBlock Classes="mono" FontSize="12" Foreground="{StaticResource Warn}" Text="{Binding Fix}"
+                                           IsVisible="{Binding HasFix}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                    </StackPanel>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+
+      <!-- Updates -->
+      <Border Classes="card">
+        <StackPanel>
+          <TextBlock Classes="h2" Text="Updates" Margin="0,0,0,6" />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="{Binding VersionText}" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="New versions download in the background and install when you restart XStream. Every update is checked against XStream's signature first." />
+              <TextBlock Classes="caption" Foreground="{StaticResource Accent}" Text="{Binding UpdateStatus}" TextWrapping="Wrap" Margin="0,4,0,0"
+                         IsVisible="{Binding UpdateStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+            <Button Grid.Column="1" Classes="ghost" Command="{Binding CheckForUpdatesCommand}" VerticalAlignment="Center">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <PathIcon Data="{StaticResource Icon.Refresh}" />
+                <TextBlock Text="Check now" />
+              </StackPanel>
+            </Button>
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Update automatically" />
+              <TextBlock Classes="caption" Text="Check when XStream opens and every few hours." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding AutoUpdate}" />
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <!-- Data -->
+      <Border Classes="card">
+        <StackPanel Spacing="14">
+          <StackPanel Spacing="3">
+            <TextBlock Classes="h2" Text="Data and account" />
+            <TextBlock Classes="caption">
+              <Run Text="Sign-in, settings and session logs are kept in " /><Run Text="{Binding DataFolder}" FontFamily="Menlo, Consolas, monospace" />
+            </TextBlock>
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <Button Classes="ghost" Command="{Binding OpenDataFolderCommand}">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <PathIcon Data="{StaticResource Icon.Folder}" />
+                <TextBlock Text="Open folder" />
+              </StackPanel>
+            </Button>
+            <Button Classes="ghost" Command="{Binding ExportDiagnosticsCommand}" ToolTip.Tip="Zip of recent session logs, crash reports and device info (no sign-in details)">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <PathIcon Data="{StaticResource Icon.Bug}" />
+                <TextBlock Text="Export diagnostics" />
+              </StackPanel>
+            </Button>
+            <Button Classes="ghost" Content="Reset settings" Command="{Binding ResetDefaultsCommand}" />
+            <Button Classes="danger" Command="{Binding SignOutCommand}">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <PathIcon Data="{StaticResource Icon.Logout}" />
+                <TextBlock Text="Sign out" />
+              </StackPanel>
+            </Button>
+          </StackPanel>
+          <TextBlock Classes="caption" Text="{Binding DiagnosticsStatus}" TextWrapping="Wrap"
+                     IsVisible="{Binding DiagnosticsStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        </StackPanel>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

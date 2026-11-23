@@ -1,0 +1,24 @@
+# Build output
+bin/
+obj/
+*.user
+.vs/
+.idea/
+
+# Release builds and test output (scripts/publish-windows.sh, tests/wine/run.sh)
+dist/
+
+# Downloads and builds made by the scripts (SDL2, FFmpeg sources/builds, patched SIPSorcery)
+.cache/
+third_party/
+
+# Simulator output (dotnet run --project src/XStream.Sim)
+results.json
+
+# Signing material: never commit certificates or keys (the update key lives in ~/.xstream-release)
+*.pfx
+*.p12
+*.pem
+*.key
+
+.DS_Store

@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><AssemblyName>xstream</AssemblyName></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../XStream.Core/XStream.Core.csproj" />
+    <ProjectReference Include="../XStream.WebRtc/XStream.WebRtc.csproj" />
+    <ProjectReference Include="../XStream.Player/XStream.Player.csproj" />
+  </ItemGroup>
+</Project>

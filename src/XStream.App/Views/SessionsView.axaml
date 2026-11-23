@@ -1,0 +1,73 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:XStream.App.ViewModels"
+             xmlns:app="using:XStream.App"
+             x:Class="XStream.App.Views.SessionsView"
+             x:DataType="vm:SessionsViewModel">
+  <UserControl.Styles>
+    <Style Selector="TextBlock.warnText"><Setter Property="Foreground" Value="{StaticResource Warn}" /></Style>
+  </UserControl.Styles>
+  <ScrollViewer>
+    <StackPanel Margin="36,32,36,36" Spacing="22" MaxWidth="1100">
+      <Grid ColumnDefinitions="*,Auto">
+        <StackPanel Spacing="4">
+          <TextBlock Classes="h1" Text="Sessions" />
+          <TextBlock Classes="muted" Text="How each stream went: freezes, bitrate, ping and loss." />
+          <TextBlock Classes="caption" Foreground="{StaticResource Accent}" Text="{Binding Totals}" Margin="0,4,0,0" />
+        </StackPanel>
+        <Button Grid.Column="1" Classes="ghost" Command="{Binding OpenLogsCommand}" VerticalAlignment="Center">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <PathIcon Data="{StaticResource Icon.Folder}" />
+            <TextBlock Text="Open logs folder" />
+          </StackPanel>
+        </Button>
+      </Grid>
+
+      <Border Classes="card" IsVisible="{Binding IsEmpty}" Padding="36">
+        <StackPanel Spacing="10" HorizontalAlignment="Center">
+          <Border Width="60" Height="60" CornerRadius="18" Background="{StaticResource Surface2}" HorizontalAlignment="Center">
+            <PathIcon Data="{StaticResource Icon.History}" Width="26" Height="26" Foreground="{StaticResource Muted}" />
+          </Border>
+          <TextBlock Classes="h2" Text="No sessions yet" HorizontalAlignment="Center" />
+          <TextBlock Classes="muted" Text="Every stream is logged here when it ends." HorizontalAlignment="Center" />
+        </StackPanel>
+      </Border>
+
+      <ItemsControl ItemsSource="{Binding Sessions}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:SessionItemViewModel">
+            <Border Classes="card" Padding="18,16" Margin="0,0,0,10">
+              <Grid ColumnDefinitions="Auto,220,*,Auto">
+                <Ellipse Classes="dot" VerticalAlignment="Center" Margin="0,0,16,0"
+                         Classes.good="{Binding Quality, Converter={x:Static app:Conv.Is}, ConverterParameter=good}"
+                         Classes.warn="{Binding Quality, Converter={x:Static app:Conv.Is}, ConverterParameter=warn}"
+                         Classes.bad="{Binding Quality, Converter={x:Static app:Conv.Is}, ConverterParameter=bad}" />
+                <StackPanel Grid.Column="1" Spacing="3" VerticalAlignment="Center">
+                  <TextBlock FontWeight="SemiBold" Text="{Binding Date}" />
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Border Classes="chip"><TextBlock Text="{Binding Profile}" /></Border>
+                    <TextBlock Classes="caption" Text="{Binding Duration}" VerticalAlignment="Center" />
+                  </StackPanel>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Spacing="6" VerticalAlignment="Center" Margin="12,0">
+                  <StackPanel Orientation="Horizontal" Spacing="22">
+                    <StackPanel><TextBlock Classes="label" Text="FREEZES" /><TextBlock FontSize="13" Text="{Binding Freezes}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="label" Text="BITRATE" /><TextBlock FontSize="13" Text="{Binding Bitrate}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="label" Text="PING" /><TextBlock FontSize="13" Text="{Binding Ping}" /></StackPanel>
+                    <StackPanel><TextBlock Classes="label" Text="LOSS" /><TextBlock FontSize="13" Text="{Binding Loss}" /></StackPanel>
+                  </StackPanel>
+                  <TextBlock Classes="caption" Text="{Binding MainVerdict}" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Classes="caption" Classes.warnText="{Binding CapsIgnored}" Text="{Binding Caps}" IsVisible="{Binding HasCaps}" />
+                </StackPanel>
+                <Button Grid.Column="3" Classes="icon" VerticalAlignment="Center" ToolTip.Tip="Show log file"
+                        Command="{Binding $parent[ItemsControl].((vm:SessionsViewModel)DataContext).RevealCommand}" CommandParameter="{Binding}">
+                  <PathIcon Data="{StaticResource Icon.Folder}" Foreground="{StaticResource Muted}" />
+                </Button>
+              </Grid>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

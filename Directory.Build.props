@@ -1,0 +1,17 @@
+<Project>
+  <PropertyGroup>
+    <!-- .NET 10 LTS: runs on macOS (Apple Silicon/Intel) and Windows x64 (ROG Ally X). Override with -p:XsTfm=net11.0 -->
+    <XsTfm Condition="'$(XsTfm)' == ''">net10.0</XsTfm>
+    <TargetFramework>$(XsTfm)</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Shown in the exe's Properties → Details on Windows. -->
+    <Product>XStream</Product>
+    <Company>XStream contributors</Company>
+    <Copyright>Copyright (c) 2026 XStream contributors. MIT License.</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+</Project>

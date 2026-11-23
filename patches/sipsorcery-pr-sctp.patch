@@ -1,0 +1,706 @@
+# XStream patch for SIPSorcery: unordered + partially reliable data channels (RFC 3758 PR-SCTP).
+# Base commit: 6f379fdba939398a51b567064613e1772538a1c8
+# Apply with scripts/get-sipsorcery.sh (macOS/Linux) or scripts/get-sipsorcery.ps1 (Windows).
+diff --git a/src/SIPSorcery/net/SCTP/Chunks/SctpChunk.cs b/src/SIPSorcery/net/SCTP/Chunks/SctpChunk.cs
+index 0fe9648..12f7347 100644
+--- a/src/SIPSorcery/net/SCTP/Chunks/SctpChunk.cs
++++ b/src/SIPSorcery/net/SCTP/Chunks/SctpChunk.cs
+@@ -62,7 +62,7 @@ namespace SIPSorcery.Net
+         //AUTH = 15,
+         //PKTDROP = 129,
+         //RE_CONFIG = 130,
+-        //FORWARDTSN = 192,
++        FORWARDTSN = 192,   // RFC3758 Partial Reliability.
+         //ASCONF = 193,
+         //ASCONF_ACK = 128,
+     }
+@@ -351,6 +351,8 @@ namespace SIPSorcery.Net
+                         return SctpInitChunk.ParseChunk(buffer, posn);
+                     case SctpChunkType.SHUTDOWN:
+                         return SctpShutdownChunk.ParseChunk(buffer, posn);
++                    case SctpChunkType.FORWARDTSN:
++                        return SctpForwardTsnChunk.ParseChunk(buffer, posn);
+                     default:
+                         logger.LogDebug("TODO: Implement parsing logic for well known chunk type {ChunkType}.", (SctpChunkType)chunkType);
+                         return ParseBaseChunk(buffer, posn);
+diff --git a/src/SIPSorcery/net/SCTP/Chunks/SctpDataChunk.cs b/src/SIPSorcery/net/SCTP/Chunks/SctpDataChunk.cs
+index c066683..194272c 100644
+--- a/src/SIPSorcery/net/SCTP/Chunks/SctpDataChunk.cs
++++ b/src/SIPSorcery/net/SCTP/Chunks/SctpDataChunk.cs
+@@ -42,6 +42,12 @@ namespace SIPSorcery.Net
+         /// </summary>
+         public bool Unordered { get; set; } = false;
+ 
++        /// <summary>
++        /// Sender side only, not serialised. Maximum number of retransmissions before the chunk is
++        /// abandoned (RFC3758 PR-SCTP "limited retransmission" policy). -1 means fully reliable.
++        /// </summary>
++        public int MaxRetransmits { get; set; } = -1;
++
+         /// <summary>
+         /// The (B)eginning fragment bit, if set, indicates the first fragment
+         /// of a user message.
+diff --git a/src/SIPSorcery/net/SCTP/Chunks/SctpForwardTsnChunk.cs b/src/SIPSorcery/net/SCTP/Chunks/SctpForwardTsnChunk.cs
+new file mode 100644
+index 0000000..79ec468
+--- /dev/null
++++ b/src/SIPSorcery/net/SCTP/Chunks/SctpForwardTsnChunk.cs
+@@ -0,0 +1,95 @@
++//-----------------------------------------------------------------------------
++// Filename: SctpForwardTsnChunk.cs
++//
++// Description: Represents the SCTP FORWARD TSN chunk used by Partial
++// Reliability (PR-SCTP) to tell the receiver to stop waiting for abandoned
++// DATA chunks.
++//
++// Remarks:
++// Defined in RFC3758 "Stream Control Transmission Protocol (SCTP) Partial
++// Reliability Extension" section 3.2.
++// https://tools.ietf.org/html/rfc3758#section-3.2
++//
++//  0                   1                   2                   3
++//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
++// |   Type = 192  |  Flags = 0x00 |        Length = Variable      |
++// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
++// |                      New Cumulative TSN                       |
++// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
++// |         Stream-1              |       Stream Sequence-1       |
++// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
++// \                                                               /
++// /                              ...                              \
++// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
++//
++// License:
++// BSD 3-Clause "New" or "Revised" License, see included LICENSE.md file.
++//-----------------------------------------------------------------------------
++
++using System.Collections.Generic;
++using SIPSorcery.Sys;
++
++namespace SIPSorcery.Net
++{
++    public class SctpForwardTsnChunk : SctpChunk
++    {
++        public const int FIXED_PARAMETERS_LENGTH = 4;
++
++        /// <summary>
++        /// The receiver should treat every TSN up to and including this one as received.
++        /// </summary>
++        public uint NewCumulativeTSN;
++
++        /// <summary>
++        /// Ordered streams whose skipped messages the receiver should stop waiting for.
++        /// Empty when only unordered messages were abandoned.
++        /// </summary>
++        public List<(ushort StreamID, ushort StreamSeqNum)> Streams = new List<(ushort, ushort)>();
++
++        private SctpForwardTsnChunk() : base(SctpChunkType.FORWARDTSN)
++        { }
++
++        public SctpForwardTsnChunk(uint newCumulativeTSN) : base(SctpChunkType.FORWARDTSN)
++        {
++            NewCumulativeTSN = newCumulativeTSN;
++        }
++
++        public override ushort GetChunkLength(bool padded)
++        {
++            var len = (ushort)(SCTP_CHUNK_HEADER_LENGTH + FIXED_PARAMETERS_LENGTH + Streams.Count * 4);
++            return padded ? SctpPadding.PadTo4ByteBoundary(len) : len;
++        }
++
++        public override ushort WriteTo(byte[] buffer, int posn)
++        {
++            WriteChunkHeader(buffer, posn);
++            int p = posn + SCTP_CHUNK_HEADER_LENGTH;
++            NetConvert.ToBuffer(NewCumulativeTSN, buffer, p);
++            p += 4;
++            foreach (var (stream, ssn) in Streams)
++            {
++                NetConvert.ToBuffer(stream, buffer, p);
++                NetConvert.ToBuffer(ssn, buffer, p + 2);
++                p += 4;
++            }
++            return GetChunkLength(true);
++        }
++
++        public static SctpForwardTsnChunk ParseChunk(byte[] buffer, int posn)
++        {
++            var chunk = new SctpForwardTsnChunk();
++            ushort chunkLen = chunk.ParseFirstWord(buffer, posn);
++            int p = posn + SCTP_CHUNK_HEADER_LENGTH;
++            chunk.NewCumulativeTSN = NetConvert.ParseUInt32(buffer, p);
++            p += 4;
++            int end = posn + chunkLen;
++            while (p + 4 <= end)
++            {
++                chunk.Streams.Add((NetConvert.ParseUInt16(buffer, p), NetConvert.ParseUInt16(buffer, p + 2)));
++                p += 4;
++            }
++            return chunk;
++        }
++    }
++}
+diff --git a/src/SIPSorcery/net/SCTP/Chunks/SctpInitChunk.cs b/src/SIPSorcery/net/SCTP/Chunks/SctpInitChunk.cs
+index 166aa56..395d93b 100644
+--- a/src/SIPSorcery/net/SCTP/Chunks/SctpInitChunk.cs
++++ b/src/SIPSorcery/net/SCTP/Chunks/SctpInitChunk.cs
+@@ -41,7 +41,8 @@ namespace SIPSorcery.Net
+         CookiePreservative = 9,
+         HostNameAddress = 11,
+         SupportedAddressTypes = 12,
+-        EcnCapable = 32768
++        EcnCapable = 32768,
++        ForwardTsnSupported = 49152     // 0xC000, RFC3758 Partial Reliability.
+     }
+ 
+     /// <summary>
+@@ -118,6 +119,13 @@ namespace SIPSorcery.Net
+         /// </summary>
+         public List<SctpInitChunkParameterType> SupportedAddressTypes = new List<SctpInitChunkParameterType>();
+ 
++        /// <summary>
++        /// Optional. Advertises (when sending) or reports (when parsed) support for the FORWARD TSN
++        /// chunk (RFC3758 Partial Reliability). WebRTC data channels require it (RFC8831), so chunks
++        /// created by this stack advertise it by default.
++        /// </summary>
++        public bool ForwardTsnSupported;
++
+         /// <summary>
+         /// INIT ACK only. Mandatory. This parameter value MUST contain all the necessary state and
+         /// parameter information required for the sender of this INIT ACK to create the association, 
+@@ -152,6 +160,7 @@ namespace SIPSorcery.Net
+             NumberInboundStreams = numberInboundStreams;
+             InitialTSN = initialTSN;
+             ARwnd = arwnd;
++            ForwardTsnSupported = true;
+         }
+ 
+         /// <summary>
+@@ -194,6 +203,11 @@ namespace SIPSorcery.Net
+                     SctpPadding.PadTo4ByteBoundary(StateCookie.Length);
+             }
+ 
++            if (ForwardTsnSupported)
++            {
++                len += SctpTlvChunkParameter.SCTP_PARAMETER_HEADER_LENGTH;
++            }
++
+             foreach (var unrecognised in UnrecognizedPeerParameters)
+             {
+                 len += SctpTlvChunkParameter.SCTP_PARAMETER_HEADER_LENGTH +
+@@ -256,6 +270,12 @@ namespace SIPSorcery.Net
+                     new SctpTlvChunkParameter((ushort)SctpInitChunkParameterType.StateCookie, StateCookie));
+             }
+ 
++            if (ForwardTsnSupported)
++            {
++                varParams.Add(
++                    new SctpTlvChunkParameter((ushort)SctpInitChunkParameterType.ForwardTsnSupported, new byte[0]));
++            }
++
+             foreach (var unrecognised in UnrecognizedPeerParameters)
+             {
+                 varParams.Add(
+@@ -335,7 +355,9 @@ namespace SIPSorcery.Net
+             int paramPosn = startPosn + FIXED_PARAMETERS_LENGTH;
+             int paramsBufferLength = chunkLen - SCTP_CHUNK_HEADER_LENGTH - FIXED_PARAMETERS_LENGTH;
+ 
+-            if (paramPosn < paramsBufferLength)
++            // paramPosn is an absolute buffer position and paramsBufferLength a length, so the original
++            // "paramPosn < paramsBufferLength" test skipped the optional parameters of any small INIT.
++            if (paramsBufferLength > 0)
+             {
+                 bool stopProcessing = false;
+ 
+@@ -378,6 +400,10 @@ namespace SIPSorcery.Net
+                         case (ushort)SctpInitChunkParameterType.EcnCapable:
+                             break;
+ 
++                        case (ushort)SctpInitChunkParameterType.ForwardTsnSupported:
++                            initChunk.ForwardTsnSupported = true;
++                            break;
++
+                         case (ushort)SctpInitChunkParameterType.StateCookie:
+                             // Used with INIT ACK chunks only.
+                             initChunk.StateCookie = varParam.ParameterValue;
+diff --git a/src/SIPSorcery/net/SCTP/SctpAssociation.cs b/src/SIPSorcery/net/SCTP/SctpAssociation.cs
+index ad6069c..bcde16e 100644
+--- a/src/SIPSorcery/net/SCTP/SctpAssociation.cs
++++ b/src/SIPSorcery/net/SCTP/SctpAssociation.cs
+@@ -222,6 +222,7 @@ namespace SIPSorcery.Net
+ 
+             _dataReceiver = new SctpDataReceiver(ARwnd, _defaultMTU, 0);
+             _dataSender = new SctpDataSender(ID, this.SendChunk, defaultMTU, Crypto.GetRandomUInt(true), DEFAULT_ADVERTISED_RECEIVE_WINDOW);
++            _dataSender._sendControlChunk = this.SendChunk;
+ 
+             State = SctpAssociationState.Closed;
+         }
+@@ -330,6 +331,7 @@ namespace SIPSorcery.Net
+                 if (_dataSender == null)
+                 {
+                     _dataSender = new SctpDataSender(ID, this.SendChunk, _defaultMTU, cookie.TSN, cookie.RemoteARwnd);
++                    _dataSender._sendControlChunk = this.SendChunk;
+                 }
+ 
+                 InitRemoteProperties(cookie.RemoteTag, cookie.RemoteTSN, cookie.RemoteARwnd);
+@@ -534,6 +536,21 @@ namespace SIPSorcery.Net
+ 
+                         case SctpChunkType.SACK:
+                             _dataSender.GotSack(chunk as SctpSackChunk);
++                            _dataSender.SendForwardTsnIfNeeded(DateTime.Now);
++                            break;
++
++                        case SctpChunkType.FORWARDTSN:
++                            // RFC3758 3.6: skip abandoned TSNs, then SACK so the sender learns the new cumulative TSN.
++                            var released = _dataReceiver.OnForwardTsn(chunk as SctpForwardTsnChunk);
++                            var fwdSack = _dataReceiver.GetSackChunk();
++                            if (fwdSack != null)
++                            {
++                                SendChunk(fwdSack);
++                            }
++                            foreach (var frame in released)
++                            {
++                                OnData?.Invoke(frame);
++                            }
+                             break;
+ 
+                         case var _ when chunkType == SctpChunkType.SHUTDOWN && State == SctpAssociationState.Established:
+@@ -592,6 +609,16 @@ namespace SIPSorcery.Net
+         /// <param name="offset">The offset in <paramref name="data"/> at which to begin sending. Defaults to 0.</param>
+         /// <param name="count">The number of bytes to send. Defaults to -1, meaning all bytes from <paramref name="offset"/> to the end of the array.</param>
+         public void SendData(ushort streamID, uint ppid, byte[] data, int offset = 0, int count = -1)
++        {
++            SendData(streamID, ppid, data, offset, count, false, -1);
++        }
++
++        /// <summary>
++        /// Sends a DATA chunk with explicit ordering and partial reliability (RFC3758).
++        /// </summary>
++        /// <param name="unordered">Deliver on arrival, never behind an earlier missing message.</param>
++        /// <param name="maxRetransmits">-1 fully reliable; 0..n retransmissions before the message is abandoned.</param>
++        public void SendData(ushort streamID, uint ppid, byte[] data, int offset, int count, bool unordered, int maxRetransmits)
+         {
+             if (_wasAborted)
+             {
+@@ -605,7 +632,7 @@ namespace SIPSorcery.Net
+             }
+             else
+             {
+-                _dataSender.SendData(streamID, ppid, data, offset, count);
++                _dataSender.SendData(streamID, ppid, data, offset, count, unordered, maxRetransmits);
+             }
+         }
+ 
+diff --git a/src/SIPSorcery/net/SCTP/SctpDataReceiver.cs b/src/SIPSorcery/net/SCTP/SctpDataReceiver.cs
+index 9676012..33b98d9 100644
+--- a/src/SIPSorcery/net/SCTP/SctpDataReceiver.cs
++++ b/src/SIPSorcery/net/SCTP/SctpDataReceiver.cs
+@@ -319,6 +319,82 @@ namespace SIPSorcery.Net
+             }
+         }
+ 
++        /// <summary>
++        /// Handles a FORWARD TSN chunk (RFC3758 3.6): the sender abandoned every TSN up to
++        /// <see cref="SctpForwardTsnChunk.NewCumulativeTSN"/>, so stop waiting for them. Without this a
++        /// single abandoned chunk would hold the cumulative TSN back forever and the receive window
++        /// check would eventually reject all new data on every channel.
++        /// </summary>
++        /// <returns>Ordered-stream frames that became deliverable because skipped messages no longer block them.</returns>
++        public List<SctpDataFrame> OnForwardTsn(SctpForwardTsnChunk fwd)
++        {
++            var released = new List<SctpDataFrame>();
++            uint newCum = fwd.NewCumulativeTSN;
++
++            unchecked
++            {
++                if (_inOrderReceiveCount == 0)
++                {
++                    if (!IsNewerOrEqual(_initialTSN, newCum))
++                    {
++                        return released; // older than anything we expect
++                    }
++                    _lastInOrderTSN = newCum;
++                    _inOrderReceiveCount = 1;
++                }
++                else if (IsNewer(_lastInOrderTSN, newCum))
++                {
++                    _lastInOrderTSN = newCum;
++                }
++                else
++                {
++                    return released; // duplicate or stale FORWARD TSN
++                }
++
++                foreach (var tsn in _forwardTSN.Keys.Where(t => !IsNewer(newCum, t)).ToList())
++                {
++                    _forwardTSN.Remove(tsn);
++                }
++                foreach (var tsn in _fragmentedChunks.Keys.Where(t => !IsNewer(newCum, t)).ToList())
++                {
++                    _fragmentedChunks.Remove(tsn);
++                }
++                while (_forwardTSN.ContainsKey(_lastInOrderTSN + 1))
++                {
++                    _lastInOrderTSN++;
++                    _inOrderReceiveCount++;
++                    _forwardTSN.Remove(_lastInOrderTSN);
++                }
++
++                // Ordered streams: treat skipped stream sequence numbers as delivered, then release
++                // anything that was queued behind them.
++                foreach (var (streamID, ssn) in fwd.Streams)
++                {
++                    if (!_streamLatestSeqNums.TryGetValue(streamID, out var latest) || (short)(ssn - latest) > 0)
++                    {
++                        _streamLatestSeqNums[streamID] = ssn;
++                    }
++                    if (_streamOutOfOrderFrames.TryGetValue(streamID, out var queued))
++                    {
++                        foreach (var old in queued.Keys.Where(k => (short)(k - _streamLatestSeqNums[streamID]) <= 0).ToList())
++                        {
++                            queued.Remove(old);
++                        }
++                        ushort next = (ushort)(_streamLatestSeqNums[streamID] + 1);
++                        while (queued.TryGetValue(next, out var frame))
++                        {
++                            released.Add(frame);
++                            queued.Remove(next);
++                            _streamLatestSeqNums[streamID] = next;
++                            next++;
++                        }
++                    }
++                }
++            }
++
++            return released;
++        }
++
+         /// <summary>
+         /// Gets a SACK chunk that represents the current state of the receiver.
+         /// </summary>
+diff --git a/src/SIPSorcery/net/SCTP/SctpDataSender.cs b/src/SIPSorcery/net/SCTP/SctpDataSender.cs
+index a37cef7..31fbc34 100644
+--- a/src/SIPSorcery/net/SCTP/SctpDataSender.cs
++++ b/src/SIPSorcery/net/SCTP/SctpDataSender.cs
+@@ -67,6 +67,24 @@ namespace SIPSorcery.Net
+         /// </summary>
+         internal Action<SctpDataChunk> _sendDataChunk;
+ 
++        /// <summary>
++        /// Callback that sends a control chunk (used for FORWARD TSN). Set by the association.
++        /// </summary>
++        internal Action<SctpChunk> _sendControlChunk;
++
++        // RFC3758 Partial Reliability state.
++        private readonly Dictionary<uint, SctpDataChunk> _abandoned = new Dictionary<uint, SctpDataChunk>();
++        private uint _advancedPeerAckPoint;
++        private bool _hasAdvancedPeerAckPoint;
++        private DateTime _lastForwardTsnSentAt = DateTime.MinValue;
++        private uint _lastForwardTsnSent;
++
++        /// <summary>Number of DATA chunks abandoned under a limited-retransmission policy.</summary>
++        public long AbandonedCount { get; private set; }
++
++        /// <summary>Number of FORWARD TSN chunks sent.</summary>
++        public long ForwardTsnSent { get; private set; }
++
+         private string _associationID;
+         private ushort _defaultMTU;
+         private uint _initialTSN;
+@@ -307,6 +325,18 @@ namespace SIPSorcery.Net
+         /// <param name="offset">The offset in <paramref name="data"/> at which to begin sending. Defaults to 0.</param>
+         /// <param name="count">The number of bytes to send. Defaults to -1, meaning all bytes from <paramref name="offset"/> to the end of the array.</param>
+         public void SendData(ushort streamID, uint ppid, byte[] data, int offset = 0, int count = -1)
++        {
++            SendData(streamID, ppid, data, offset, count, false, -1);
++        }
++
++        /// <summary>
++        /// Sends a DATA chunk to the remote peer with explicit ordering and reliability.
++        /// </summary>
++        /// <param name="unordered">If true the chunks are flagged U (RFC4960 6.6): the receiver delivers
++        /// them as soon as they arrive, never waiting behind an earlier missing message.</param>
++        /// <param name="maxRetransmits">RFC3758 limited retransmission policy. -1 = fully reliable,
++        /// 0 = never retransmit (a lost message is abandoned and skipped with FORWARD TSN).</param>
++        public void SendData(ushort streamID, uint ppid, byte[] data, int offset, int count, bool unordered, int maxRetransmits)
+         {
+             int dataCount = count < 0 ? data.Length - offset : count;
+ 
+@@ -314,7 +344,11 @@ namespace SIPSorcery.Net
+             {
+                 ushort seqnum = 0;
+ 
+-                if (_streamSeqnums.ContainsKey(streamID))
++                if (unordered)
++                {
++                    // The stream sequence number is ignored for unordered messages (RFC4960 3.3.1).
++                }
++                else if (_streamSeqnums.ContainsKey(streamID))
+                 {
+                     unchecked
+                     {
+@@ -340,7 +374,7 @@ namespace SIPSorcery.Net
+                     bool isEnd = ((chunkOffset + payloadLength) >= dataCount) ? true : false;
+ 
+                     SctpDataChunk dataChunk = new SctpDataChunk(
+-                        false,
++                        unordered,
+                         isBegining,
+                         isEnd,
+                         TSN,
+@@ -349,6 +383,7 @@ namespace SIPSorcery.Net
+                         ppid,
+                         payload);
+ 
++                    dataChunk.MaxRetransmits = maxRetransmits;
+                     _sendQueue.Enqueue(dataChunk);
+ 
+                     TSN = (TSN == UInt32.MaxValue) ? 0 : TSN + 1;
+@@ -553,6 +588,11 @@ namespace SIPSorcery.Net
+ 
+                 //logger.LogTrace($"SCTP sender burst size {burstSize}, in retransmit mode {_inRetransmitMode}, cwnd {_congestionWindow}, arwnd {_receiverWindow}.");
+ 
++                // RFC3758: abandon chunks whose limited-retransmission budget is spent, then tell the
++                // receiver to skip them so it never waits for (or holds a gap open for) them.
++                AbandonExpiredChunks(now);
++                SendForwardTsnIfNeeded(now);
++
+                 // Missing chunks from a SACK gap report take priority.
+                 if (_missingChunks.Count > 0)
+                 {
+@@ -648,7 +688,12 @@ namespace SIPSorcery.Net
+         /// </summary>
+         private int GetSendWaitMilliseconds()
+         {
+-            if (_sendQueue.Count > 0 || _missingChunks.Count > 0)
++            if (_hasAdvancedPeerAckPoint && SctpDataReceiver.IsNewer(_cumulativeAckTSN, _advancedPeerAckPoint))
++            {
++                // A FORWARD TSN is outstanding; check again soon in case it needs resending.
++                return Math.Min(_burstPeriodMilliseconds, FORWARD_TSN_RESEND_MILLISECONDS);
++            }
++            else if (_sendQueue.Count > 0 || _missingChunks.Count > 0)
+             {
+                 if (_receiverWindow > 0 && _congestionWindow > _outstandingBytes)
+                 {
+@@ -670,6 +715,120 @@ namespace SIPSorcery.Net
+         }
+ 
+ 
++        public const int FORWARD_TSN_RESEND_MILLISECONDS = 200;
++
++        /// <summary>
++        /// Abandons in-flight chunks under a limited retransmission policy (RFC3758 3.5 A1) once they are
++        /// reported missing or their retransmit timer expires and their retransmission budget is used up.
++        /// </summary>
++        private void AbandonExpiredChunks(DateTime now)
++        {
++            double rto = _hasRoundTripTime ? _rto : _rtoInitialMilliseconds;
++            foreach (var chunk in _unconfirmedChunks.Values)
++            {
++                if (chunk.MaxRetransmits < 0 || chunk.SendCount <= chunk.MaxRetransmits)
++                {
++                    continue;
++                }
++
++                bool reportedMissing = _missingChunks.ContainsKey(chunk.TSN);
++                bool timedOut = now.Subtract(chunk.LastSentAt).TotalMilliseconds > rto;
++
++                if (reportedMissing || timedOut)
++                {
++                    _unconfirmedChunks.TryRemove(chunk.TSN, out _);
++                    _missingChunks.TryRemove(chunk.TSN, out _);
++                    lock (_abandoned)
++                    {
++                        _abandoned[chunk.TSN] = chunk;
++                    }
++                    AbandonedCount++;
++                    logger.LogTrace("SCTP sender abandoned data chunk TSN {TSN} after {SendCount} send(s).", chunk.TSN, chunk.SendCount);
++                }
++            }
++        }
++
++        /// <summary>
++        /// Advances the Advanced.Peer.Ack.Point over abandoned TSNs and sends a FORWARD TSN
++        /// (RFC3758 3.5 C1-C5). Resent every <see cref="FORWARD_TSN_RESEND_MILLISECONDS"/> until the
++        /// peer's cumulative ACK catches up.
++        /// </summary>
++        internal void SendForwardTsnIfNeeded(DateTime now)
++        {
++            if (_sendControlChunk == null)
++            {
++                return;
++            }
++
++            SctpForwardTsnChunk fwd = null;
++
++            lock (_abandoned)
++            {
++                if (_abandoned.Count == 0 && !_hasAdvancedPeerAckPoint)
++                {
++                    return;
++                }
++
++                unchecked
++                {
++                    uint cumAck = _gotFirstSACK ? _cumulativeAckTSN : _initialTSN - 1;
++
++                    // Forget abandoned TSNs the peer has already moved past.
++                    foreach (var tsn in _abandoned.Keys.Where(t => !SctpDataReceiver.IsNewer(cumAck, t)).ToList())
++                    {
++                        _abandoned.Remove(tsn);
++                    }
++
++                    uint point = (_hasAdvancedPeerAckPoint && SctpDataReceiver.IsNewer(cumAck, _advancedPeerAckPoint)) ? _advancedPeerAckPoint : cumAck;
++                    while (_abandoned.ContainsKey(point + 1))
++                    {
++                        point++;
++                    }
++
++                    if (!SctpDataReceiver.IsNewer(cumAck, point))
++                    {
++                        _hasAdvancedPeerAckPoint = false;
++                        return;
++                    }
++
++                    bool advanced = !_hasAdvancedPeerAckPoint || point != _advancedPeerAckPoint;
++                    _advancedPeerAckPoint = point;
++                    _hasAdvancedPeerAckPoint = true;
++
++                    bool resendDue = now.Subtract(_lastForwardTsnSentAt).TotalMilliseconds >= FORWARD_TSN_RESEND_MILLISECONDS;
++                    if (!(advanced || resendDue) || (point == _lastForwardTsnSent && !resendDue))
++                    {
++                        return;
++                    }
++
++                    fwd = new SctpForwardTsnChunk(point);
++
++                    // For ordered streams, the highest skipped stream sequence number per stream (RFC3758 3.2).
++                    var ordered = new Dictionary<ushort, ushort>();
++                    foreach (var c in _abandoned.Values)
++                    {
++                        if (!c.Unordered && SctpDataReceiver.IsNewerOrEqual(c.TSN, point))
++                        {
++                            if (!ordered.TryGetValue(c.StreamID, out var ssn) || (short)(c.StreamSeqNum - ssn) > 0)
++                            {
++                                ordered[c.StreamID] = c.StreamSeqNum;
++                            }
++                        }
++                    }
++                    foreach (var kv in ordered)
++                    {
++                        fwd.Streams.Add((kv.Key, kv.Value));
++                    }
++                }
++
++                _lastForwardTsnSentAt = now;
++                _lastForwardTsnSent = fwd.NewCumulativeTSN;
++            }
++
++            ForwardTsnSent++;
++            _sendControlChunk(fwd);
++        }
++
+         /// <summary>
+         /// Updates the round trip time. 
+         /// See https://datatracker.ietf.org/doc/html/rfc4960#section-6.3.1
+diff --git a/src/SIPSorcery/net/WebRTC/RTCDataChannel.cs b/src/SIPSorcery/net/WebRTC/RTCDataChannel.cs
+index 261373d..50832f3 100644
+--- a/src/SIPSorcery/net/WebRTC/RTCDataChannel.cs
++++ b/src/SIPSorcery/net/WebRTC/RTCDataChannel.cs
+@@ -152,9 +152,10 @@ namespace SIPSorcery.Net
+                     }
+                     else
+                     {
++                        var bytes = Encoding.UTF8.GetBytes(message);
+                         _transport.RTCSctpAssociation.SendData(id.GetValueOrDefault(),
+                             (uint)DataChannelPayloadProtocols.WebRTC_String,
+-                            Encoding.UTF8.GetBytes(message));
++                            bytes, 0, bytes.Length, SendUnordered, SendMaxRetransmits);
+                     }
+                 }
+             }
+@@ -192,12 +193,24 @@ namespace SIPSorcery.Net
+                     {
+                         _transport.RTCSctpAssociation.SendData(id.GetValueOrDefault(),
+                             (uint)DataChannelPayloadProtocols.WebRTC_Binary,
+-                            data, offset, effectiveCount);
++                            data, offset, effectiveCount, SendUnordered, SendMaxRetransmits);
+                     }
+                 }
+             }
+         }
+ 
++        /// <summary>
++        /// Unordered delivery applies once the remote peer has acknowledged the channel: until then
++        /// messages must stay ordered so none can overtake the DCEP OPEN (RFC8832 6).
++        /// </summary>
++        private bool SendUnordered => !ordered && IsOpened;
++
++        /// <summary>
++        /// Limited retransmission policy for user messages (RFC3758). Timed reliability
++        /// (maxPacketLifeTime) is not implemented by the sender, so it is treated as reliable.
++        /// </summary>
++        private int SendMaxRetransmits => (IsOpened && maxRetransmits.HasValue && !maxPacketLifeTime.HasValue) ? maxRetransmits.Value : -1;
++
+         /// <summary>
+         /// Sends an OPEN Data Channel Establishment Protocol (DCEP) message
+         /// to open a data channel on the remote peer for send/receive.
+@@ -205,23 +218,28 @@ namespace SIPSorcery.Net
+         internal void SendDcepOpen()
+         {
+             byte type = (byte)DataChannelTypes.DATA_CHANNEL_RELIABLE;
++            uint reliability = 0;
+             if (!ordered)
+             {
+                 type += (byte)DataChannelTypes.DATA_CHANNEL_RELIABLE_UNORDERED;
+             }
+-            if (maxPacketLifeTime > 0)
++            if (maxPacketLifeTime.HasValue)
+             {
+                 type += (byte)DataChannelTypes.DATA_CHANNEL_PARTIAL_RELIABLE_TIMED;
++                reliability = maxPacketLifeTime.Value;
+             }
+-            else if(maxRetransmits > 0)
++            else if (maxRetransmits.HasValue)
+             {
++                // maxRetransmits = 0 is valid ("never retransmit") and must still be signalled (RFC8832 5.1).
+                 type += (byte)DataChannelTypes.DATA_CHANNEL_PARTIAL_RELIABLE_REXMIT;
++                reliability = maxRetransmits.Value;
+             }
+ 
+             var dcepOpen = new DataChannelOpenMessage()
+             {
+                 MessageType = (byte)DataChannelMessageTypes.OPEN,
+                 ChannelType = (byte)type,
++                Reliability = reliability,
+                 Label = label,
+                 Protocol = protocol,
+             };
+diff --git a/src/SIPSorcery/net/WebRTC/RTCPeerConnection.cs b/src/SIPSorcery/net/WebRTC/RTCPeerConnection.cs
+index fa05311..b56035c 100644
+--- a/src/SIPSorcery/net/WebRTC/RTCPeerConnection.cs
++++ b/src/SIPSorcery/net/WebRTC/RTCPeerConnection.cs
+@@ -2059,14 +2059,20 @@ namespace SIPSorcery.Net
+             logger.LogInformation("WebRTC new data channel opened by remote peer for stream ID {StreamID}, type {Type}, priority {Priority}, reliability {Reliability}, label {Label}, protocol {Protocol}.",
+                 streamID, type, priority, reliability, label, protocol);
+ 
+-            // TODO: Set reliability, priority etc. properties on the data channel.
++            // Mirror the remote peer's ordering and reliability so both directions behave the same.
++            byte t = (byte)type;
++            bool unordered = (t & 0x80) != 0;
++            int reliabilityType = t & 0x7F;
+             var dc = new RTCDataChannel(sctp)
+             {
+                 id = streamID,
+                 label = label,
+                 IsOpened = true,
+                 readyState = RTCDataChannelState.open,
+-                protocol = protocol
++                protocol = protocol,
++                ordered = !unordered,
++                maxRetransmits = reliabilityType == 0x01 ? (ushort?)Math.Min(reliability, ushort.MaxValue) : null,
++                maxPacketLifeTime = reliabilityType == 0x02 ? (ushort?)Math.Min(reliability, ushort.MaxValue) : null,
+             };
+ 
+             dc.SendDcepAck();

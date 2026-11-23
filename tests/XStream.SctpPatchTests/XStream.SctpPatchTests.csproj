@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    End-to-end tests of the PR-SCTP patch: two SCTP associations over an in-memory lossy link.
+    Compiles the patched SCTP sources straight from third_party/sipsorcery (run scripts/get-sipsorcery.sh first).
+    Run: dotnet run -c Release (project tests/XStream.SctpPatchTests)
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>$(NoWarn);CS0618;CS1998;CS0162;CS0414;CS0169;CS0649;CS8632</NoWarn>
+    <Sip>$(MSBuildThisFileDirectory)../../third_party/sipsorcery/src/SIPSorcery</Sip>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(Sip)/net/SCTP/**/*.cs" Exclude="$(Sip)/net/SCTP/SctpUdpTransport.cs" />
+    <Compile Include="$(Sip)/sys/Net/NetConvert.cs;$(Sip)/sys/TypeExtensions.cs;$(Sip)/sys/Crypto/Crypto.cs" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,155 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:XStream.App.ViewModels"
+             xmlns:v="using:XStream.App.Views"
+             xmlns:app="using:XStream.App"
+             xmlns:c="using:XStream.App.Controls"
+             x:Class="XStream.App.Views.ConsolesView"
+             x:DataType="vm:ConsolesViewModel">
+  <ScrollViewer>
+    <StackPanel Margin="36,32,36,36" Spacing="24" MaxWidth="1200">
+      <!-- Header -->
+      <Grid ColumnDefinitions="*,Auto">
+        <StackPanel Spacing="4">
+          <TextBlock Classes="h1" Text="Consoles" />
+          <TextBlock Classes="muted" Text="Pick a console to stream. It wakes up from Sleep automatically." />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+          <TextBlock Classes="caption faint" Text="{Binding LastRefreshed}" VerticalAlignment="Center" />
+          <Button Classes="ghost" Command="{Binding RefreshCommand}" IsEnabled="{Binding !IsLoading}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <PathIcon Data="{StaticResource Icon.Refresh}" />
+              <TextBlock Text="Refresh" />
+            </StackPanel>
+          </Button>
+        </StackPanel>
+      </Grid>
+
+      <!-- Live / last stream -->
+      <v:StreamPanel DataContext="{Binding Stream}" IsVisible="{Binding HasPanel}" />
+
+      <!-- Load error -->
+      <Border Classes="banner bad" IsVisible="{Binding HasError}">
+        <Grid ColumnDefinitions="Auto,*,Auto">
+          <PathIcon Data="{StaticResource Icon.Alert}" Foreground="{StaticResource Bad}" Width="16" Height="16" Margin="0,0,10,0" />
+          <TextBlock Grid.Column="1" Text="{Binding Error}" TextWrapping="Wrap" VerticalAlignment="Center" />
+          <Button Grid.Column="2" Classes="ghost" Content="Try again" Command="{Binding RefreshCommand}" Margin="12,0,0,0" />
+        </Grid>
+      </Border>
+
+      <!-- Loading -->
+      <StackPanel Spacing="12" IsVisible="{Binding IsLoading}">
+        <ProgressBar IsIndeterminate="True" HorizontalAlignment="Stretch" Height="3" MinHeight="3" />
+        <TextBlock Classes="caption" Text="Finding your consoles…" />
+      </StackPanel>
+
+      <!-- Empty -->
+      <Border Classes="card" IsVisible="{Binding IsEmpty}" Padding="36">
+        <StackPanel Spacing="12" HorizontalAlignment="Center" MaxWidth="460">
+          <Border Width="64" Height="64" CornerRadius="18" Background="{StaticResource Surface2}" HorizontalAlignment="Center">
+            <PathIcon Data="{StaticResource Icon.Console}" Width="28" Height="28" Foreground="{StaticResource Muted}" />
+          </Border>
+          <TextBlock Classes="h2" Text="No consoles on this account" HorizontalAlignment="Center" />
+          <TextBlock Classes="muted" TextWrapping="Wrap" TextAlignment="Center"
+                     Text="On your Xbox, go to Settings → Devices &amp; connections → Remote features and turn on Enable remote features. Then refresh." />
+        </StackPanel>
+      </Border>
+
+      <!-- Console cards -->
+      <ItemsControl ItemsSource="{Binding Consoles}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate><WrapPanel ItemSpacing="16" LineSpacing="16" /></ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:ConsoleItemViewModel">
+            <Border Classes="card console" Classes.streaming="{Binding IsStreaming}" Width="300" Padding="0" ClipToBounds="True">
+              <StackPanel>
+                <!-- Game art: what's running on it, else the last game played -->
+                <Panel Height="150">
+                  <Panel.Background>
+                    <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                      <GradientStop Color="#1F3DDC97" Offset="0" />
+                      <GradientStop Color="#0A1E9E8F" Offset="1" />
+                    </LinearGradientBrush>
+                  </Panel.Background>
+                  <Image Source="{Binding GameArt}" Stretch="UniformToFill" IsVisible="{Binding HasArt}" />
+                  <Border>
+                    <Border.Background>
+                      <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                        <GradientStop Color="#33000000" Offset="0" />
+                        <GradientStop Color="#00161A20" Offset="0.35" />
+                        <GradientStop Color="#F2161A20" Offset="1" />
+                      </LinearGradientBrush>
+                    </Border.Background>
+                  </Border>
+                  <PathIcon Data="{StaticResource Icon.Console}" Width="40" Height="40" Foreground="#40FFFFFF" IsVisible="{Binding !HasArt}" />
+                  <Border Classes="chip accent" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="12" IsVisible="{Binding IsLastUsed}"
+                          Background="#CC0C0E12">
+                    <TextBlock Text="Last used" />
+                  </Border>
+                  <StackPanel VerticalAlignment="Bottom" Margin="20,0,20,10" Spacing="1" IsVisible="{Binding HasGame}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <Ellipse Classes="dot good pulse" VerticalAlignment="Center" IsVisible="{Binding IsPlayingNow}" />
+                      <TextBlock Classes="label" Text="{Binding GameLabel}" Foreground="#CCFFFFFF" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding GameName}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                  </StackPanel>
+                </Panel>
+              <StackPanel Spacing="16" Margin="20,12,20,20">
+                <StackPanel Spacing="3">
+                  <TextBlock Classes="h2" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Classes="caption">
+                    <Run Text="{Binding TypeLabel}" /><Run Text="  ·  " /><Run Text="{Binding ShortId}" />
+                  </TextBlock>
+                </StackPanel>
+                <StackPanel Spacing="8">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Ellipse Classes="dot" VerticalAlignment="Center"
+                             Classes.on="{Binding PowerKind, Converter={x:Static app:Conv.Is}, ConverterParameter=on}"
+                             Classes.sleep="{Binding PowerKind, Converter={x:Static app:Conv.Is}, ConverterParameter=sleep}" />
+                    <TextBlock FontSize="13" Text="{Binding PowerLabel}" />
+                  </StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding WirelessWarning}">
+                    <PathIcon Data="{StaticResource Icon.Wifi}" Width="13" Height="13" Foreground="{StaticResource Warn}" />
+                    <TextBlock FontSize="12" Foreground="{StaticResource Warn}" Text="Console is on Wi-Fi: wire it for best results" TextWrapping="Wrap" Width="230" />
+                  </StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding !CanWake}">
+                    <PathIcon Data="{StaticResource Icon.Alert}" Width="13" Height="13" Foreground="{StaticResource Muted}" />
+                    <TextBlock FontSize="12" Classes="muted" TextWrapping="Wrap" Width="230"
+                               Text="Set power mode to Sleep so XStream can wake it" />
+                  </StackPanel>
+                </StackPanel>
+                <Button Classes="primary" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                        Command="{Binding StreamCommand}" CommandParameter="{Binding}" IsVisible="{Binding !IsStreaming}">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <PathIcon Data="{StaticResource Icon.Play}" />
+                    <TextBlock Text="Stream" />
+                  </StackPanel>
+                </Button>
+                <Border Classes="banner good" IsVisible="{Binding IsStreaming}" Padding="12,10">
+                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                    <Ellipse Classes="dot good pulse" VerticalAlignment="Center" />
+                    <TextBlock Text="Connected" Foreground="{StaticResource Accent}" FontWeight="SemiBold" />
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <!-- Tips -->
+      <Border Classes="card" Padding="20" IsVisible="{Binding Loaded}">
+        <Grid ColumnDefinitions="Auto,*">
+          <PathIcon Data="{StaticResource Icon.Bolt}" Width="16" Height="16" Foreground="{StaticResource Accent}" VerticalAlignment="Top" Margin="0,2,14,0" />
+          <StackPanel Grid.Column="1" Spacing="6">
+            <TextBlock Classes="h3" Text="For the smoothest stream" />
+            <c:HintText Classes="muted" FontSize="13" TextWrapping="Wrap" LineHeight="22"
+                        Hint="Connect the console with Ethernet, keep this device on 5 or 6 GHz Wi-Fi, and set the console's power mode to Sleep. If the picture freezes on a busy network, try the Smooth profile in Settings. During a stream, press Esc or hold {view} + {menu} for the stream menu (stats, clarity, sound, disconnect)." />
+          </StackPanel>
+        </Grid>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>
