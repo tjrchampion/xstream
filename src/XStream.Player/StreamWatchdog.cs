@@ -18,13 +18,13 @@ public sealed class StreamWatchdog
     public string? Heartbeat(DateTime now, double stuckSeconds)
     {
         _lastHeartbeat = now;
-        return stuckSeconds >= StuckLimitS ? Fire($"The stream window froze for {stuckSeconds:F0} s, so XStream closed it.") : null;
+        return stuckSeconds >= StuckLimitS ? Fire($"The stream window froze for {stuckSeconds:F0} s, so Vexel closed it.") : null;
     }
 
     /// <summary>Called every couple of seconds. Returns a reason if the stream should be closed.</summary>
     public string? Check(DateTime now) =>
         (now - _lastHeartbeat).TotalSeconds > SilentLimitS
-            ? Fire($"The stream stopped responding (no signal for {SilentLimitS:F0} s), so XStream closed it.")
+            ? Fire($"The stream stopped responding (no signal for {SilentLimitS:F0} s), so Vexel closed it.")
             : null;
 
     private string? Fire(string reason)

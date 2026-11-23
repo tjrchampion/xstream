@@ -42,7 +42,7 @@ public sealed class Updater(SettingsStore settings)
     /// <summary>True when this process is the installed single-file exe that can replace itself.</summary>
     public static bool CanSelfUpdate =>
         OperatingSystem.IsWindows() && Environment.ProcessPath is { } p
-        && Path.GetFileName(p).Equals("XStream.exe", StringComparison.OrdinalIgnoreCase)
+        && Path.GetFileName(p) is var n && (n.Equals("Vexel.exe", StringComparison.OrdinalIgnoreCase) || n.Equals("XStream.exe", StringComparison.OrdinalIgnoreCase))
         && string.IsNullOrEmpty(Assembly.GetEntryAssembly()?.Location); // single-file publish (not dotnet run)
 
     private static string UpdatesDir => Directory.CreateDirectory(Path.Combine(
@@ -74,15 +74,15 @@ public sealed class Updater(SettingsStore settings)
         {
             SetStatus("Checking for updates…");
             var manifest = UpdateManifest.Parse(await Http.GetStringAsync(Feed));
-            if (!manifest.SignatureValid()) { SetStatus("Ignored an update that wasn't signed by XStream."); return; }
-            if (!manifest.IsNewerThan(Current)) { SetStatus($"XStream {Current} is up to date."); return; }
+            if (!manifest.SignatureValid()) { SetStatus("Ignored an update that wasn't signed by Vexel."); return; }
+            if (!manifest.IsNewerThan(Current)) { SetStatus($"Vexel {Current} is up to date."); return; }
             if (!Uri.TryCreate(manifest.Url, UriKind.Absolute, out var url) || (url.Scheme != Uri.UriSchemeHttps && !url.IsLoopback))
             { SetStatus("Ignored an update with an insecure download link."); return; }
 
-            string file = Path.Combine(UpdatesDir, $"XStream-{manifest.Version}.exe");
+            string file = Path.Combine(UpdatesDir, $"Vexel-{manifest.Version}.exe");
             if (!manifest.Matches(file))
             {
-                SetStatus($"Downloading XStream {manifest.Version}…");
+                SetStatus($"Downloading Vexel {manifest.Version}…");
                 string part = file + ".part";
                 using (var res = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
                 {
@@ -96,7 +96,7 @@ public sealed class Updater(SettingsStore settings)
             }
             _readyFile = file;
             Ready = manifest;
-            SetStatus(CanSelfUpdate ? $"XStream {manifest.Version} is ready. Restart to update." : $"XStream {manifest.Version} is available.");
+            SetStatus(CanSelfUpdate ? $"Vexel {manifest.Version} is ready. Restart to update." : $"Vexel {manifest.Version} is available.");
         }
         catch (Exception ex) { SetStatus(userAsked ? "Couldn't check for updates: " + ex.Message : ""); }
         finally { _gate.Release(); }
@@ -122,7 +122,7 @@ public sealed class Updater(SettingsStore settings)
         }
         catch (Exception ex)
         {
-            SetStatus($"Couldn't install the update ({ex.Message}). If XStream is in Program Files, move it to a folder you own.");
+            SetStatus($"Couldn't install the update ({ex.Message}). If Vexel is in Program Files, move it to a folder you own.");
             return false;
         }
     }

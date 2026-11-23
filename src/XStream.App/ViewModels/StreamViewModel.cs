@@ -96,6 +96,7 @@ public sealed partial class StreamViewModel : ObservableObject
         PlayerStage.Starting => (0.00, 0.10, 1),
         PlayerStage.RequestingSession => (0.10, 0.20, 1.5),
         PlayerStage.WakingConsole => (0.20, 0.72, 10),
+        PlayerStage.InQueue => (0.25, 0.70, 60),
         PlayerStage.Connecting => (0.72, 0.90, 3),
         PlayerStage.StartingVideo => (0.90, 0.99, 1.5),
         _ => (0.96, 1.0, 1),
@@ -137,10 +138,35 @@ public sealed partial class StreamViewModel : ObservableObject
 
     public void Start(ConsoleItemViewModel console, StreamProfile profile)
     {
+        IsCloud = false;
+        Begin(console.ServerId, console.Name, profile);
+    }
+
+    /// <summary>Start an Xbox Cloud Gaming session for a game. <paramref name="heroArt"/>: its wide art for the connecting screen.</summary>
+    public void StartCloud(XStream.Core.Xbox.CloudGame game, string? heroArt)
+    {
+        if (IsRunning) return;
+        IsCloud = true;
+        if (heroArt is not null) Art = [new GameArt(game.Name, heroArt, game.TitleId, game.HeroUrl ?? ""), .. Art.Where(a => a.Path != heroArt)];
+        Begin(PlayerHost.CloudPrefix + game.TitleId, game.Name, ProfileProvider());
+    }
+
+    /// <summary>Set by the shell: the profile setting (cloud starts don't go through the Consoles page).</summary>
+    public Func<StreamProfile> ProfileProvider { get; set; } = () => StreamProfile.Balanced;
+
+    /// <summary>Streaming a cloud game (vs one of your consoles): changes the connecting screen's wording.</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(TargetLabel))] public partial bool IsCloud { get; set; }
+    public string TargetLabel => IsCloud ? "Starting" : "Connecting to";
+    /// <summary>First label under the connecting screen's progress bar.</summary>
+    public string FirstPhaseLabel => IsCloud ? "Get a server" : "Wake console";
+    partial void OnIsCloudChanged(bool value) => OnPropertyChanged(nameof(FirstPhaseLabel));
+
+    private void Begin(string serverId, string name, StreamProfile profile)
+    {
         if (IsRunning) return;
         Reset();
-        ConsoleName = console.Name;
-        ServerId = console.ServerId;
+        ConsoleName = name;
+        ServerId = serverId;
         ProfileText = profile.ToString();
         Tip = Tips[Random.Shared.Next(Tips.Length)];
         _startedAt = DateTime.UtcNow;
@@ -152,7 +178,7 @@ public sealed partial class StreamViewModel : ObservableObject
         _sinceStart.Restart();
         _marks.Clear();
         _progressTimer.Start();
-        try { _launcher.Start(console.ServerId, console.Name); }
+        try { _launcher.Start(serverId, name); }
         catch (Exception ex)
         {
             IsRunning = false;
@@ -236,13 +262,16 @@ public sealed partial class StreamViewModel : ObservableObject
     {
         if (stage != _stage || _marks.Count == 0) _marks.Add((stage.ToString(), _sinceStart.Elapsed.TotalSeconds));
         _stage = stage;
-        if (stage is PlayerStage.Starting or PlayerStage.RequestingSession or PlayerStage.WakingConsole or PlayerStage.Connecting or PlayerStage.StartingVideo)
+        if (stage is PlayerStage.Starting or PlayerStage.RequestingSession or PlayerStage.WakingConsole or PlayerStage.InQueue
+            or PlayerStage.Connecting or PlayerStage.StartingVideo)
         {
             _band = Band(stage);
             Phase = stage switch { PlayerStage.Connecting => 1, PlayerStage.StartingVideo => 2, _ => 0 };
             LoaderText = stage switch
             {
-                PlayerStage.WakingConsole => "Waking your console",
+                PlayerStage.WakingConsole => IsCloud ? "Starting the game in the cloud" : "Waking your console",
+                PlayerStage.InQueue => message.Replace("In the queue for a cloud server: ", "In the queue: "),
+                PlayerStage.RequestingSession when IsCloud => "Finding a cloud server",
                 PlayerStage.Connecting => "Connecting video and controller",
                 PlayerStage.StartingVideo => "Starting the picture",
                 _ => "Getting ready",
@@ -260,7 +289,7 @@ public sealed partial class StreamViewModel : ObservableObject
         {
             PlayerStage.Starting => 0,
             PlayerStage.RequestingSession => 1,
-            PlayerStage.WakingConsole => 2,
+            PlayerStage.WakingConsole or PlayerStage.InQueue => 2,
             PlayerStage.Connecting or PlayerStage.StartingVideo => 3,
             PlayerStage.Streaming or PlayerStage.Reconnecting => 4,
             _ => -1,

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Writes a signed update manifest (latest.json) for an XStream.exe.
-#   scripts/make-manifest.sh <XStream.exe> <version> <download url> <output.json>
+# Writes a signed update manifest (latest.json) for an Vexel.exe.
+#   scripts/make-manifest.sh <Vexel.exe> <version> <download url> <output.json>
 # Signs with the release key (ECDSA P-256), by default ~/.xstream-release/update-signing-private.pem
 # (override with XSTREAM_RELEASE_KEY). The app verifies this signature with the public key built into it
 # (src/XStream.Core/Update/UpdateManifest.cs) before installing anything. Never commit or upload the key.

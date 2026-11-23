@@ -12,7 +12,7 @@ public partial class SplashWindow : Window
     {
         Bar.Value = fraction * 100;
         Percent.Text = $"{fraction * 100:F0}%";
-        Detail.Text = fraction >= 1 ? "Starting XStream…" : "Unpacking " + what;
+        Detail.Text = fraction >= 1 ? "Starting Vexel…" : "Unpacking " + what;
     }
 
     public void ShowError(string message)

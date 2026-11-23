@@ -1,7 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="XStream.App.Views.SplashWindow"
-        Title="XStream"
+        Title="Vexel"
         Icon="avares://XStream/Assets/xstream.png"
         Width="480" Height="300" CanResize="False"
         WindowStartupLocation="CenterScreen"
@@ -12,7 +12,7 @@
       <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="14">
         <Image Source="avares://XStream/Assets/xstream.png" Width="52" Height="52" />
         <StackPanel VerticalAlignment="Center">
-          <TextBlock Text="XStream" FontSize="22" FontWeight="Bold" />
+          <TextBlock Text="Vexel" FontSize="22" FontWeight="Bold" />
           <TextBlock Text="Xbox remote play" Classes="caption" />
         </StackPanel>
       </StackPanel>
@@ -25,11 +25,11 @@
           <TextBlock Name="Detail" Classes="caption" Text="Preparing…" TextTrimming="CharacterEllipsis" />
           <TextBlock Grid.Column="1" Name="Percent" Classes="caption mono" Text="0%" />
         </Grid>
-        <TextBlock Classes="caption faint" TextWrapping="Wrap" Text="This only happens once per version. Next time XStream opens straight away." />
+        <TextBlock Classes="caption faint" TextWrapping="Wrap" Text="This only happens once per version. Next time Vexel opens straight away." />
       </StackPanel>
 
       <StackPanel DockPanel.Dock="Bottom" Spacing="12" Name="Failed" IsVisible="False">
-        <TextBlock Text="XStream couldn't finish setting up" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource Bad}" />
+        <TextBlock Text="Vexel couldn't finish setting up" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource Bad}" />
         <TextBlock Name="ErrorText" Classes="caption" TextWrapping="Wrap" />
         <Button Classes="ghost" Content="Close" HorizontalAlignment="Right" Click="OnClose" />
       </StackPanel>

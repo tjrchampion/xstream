@@ -21,13 +21,15 @@ public sealed partial class MainViewModel : ObservableObject
         Updates = new Updater(settings);
         Updates.Changed += () => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            UpdateText = Updates.Ready is { } r && Updater.CanSelfUpdate ? $"XStream {r.Version} is ready" : "";
+            UpdateText = Updates.Ready is { } r && Updater.CanSelfUpdate ? $"Vexel {r.Version} is ready" : "";
             SettingsPage.UpdateStatus = Updates.Status;
         });
         Settings = settings;
         Stream = new StreamViewModel(launcher);
         SignIn = new SignInViewModel(xbox);
         Consoles = new ConsolesViewModel(xbox, settings, Stream, _art);
+        Cloud = new CloudViewModel(xbox, settings, Stream);
+        Stream.ProfileProvider = () => settings.Current.Profile;
         Sessions = new SessionsViewModel();
         SettingsPage = new SettingsViewModel(settings) { Stream = Stream };
         SettingsPage.Updates = Updates;
@@ -35,6 +37,7 @@ public sealed partial class MainViewModel : ObservableObject
         Nav =
         [
             new("Consoles", "Icon.Console", Consoles),
+            new("Cloud", "Icon.Cloud", Cloud),
             new("Sessions", "Icon.History", Sessions),
             new("Settings", "Icon.Settings", SettingsPage),
         ];
@@ -53,7 +56,7 @@ public sealed partial class MainViewModel : ObservableObject
     public GameArtService Art => _art;
     public Updater Updates { get; }
 
-    // "XStream 1.2.0 is ready. Restart to update" banner.
+    // "Vexel 1.2.0 is ready. Restart to update" banner.
     [ObservableProperty, NotifyPropertyChangedFor(nameof(HasUpdate))] public partial string UpdateText { get; set; } = "";
     [ObservableProperty] public partial bool UpdateDismissed { get; set; }
     public bool HasUpdate => UpdateText.Length > 0 && !UpdateDismissed;
@@ -79,6 +82,7 @@ public sealed partial class MainViewModel : ObservableObject
     public StreamViewModel Stream { get; }
     public SignInViewModel SignIn { get; }
     public ConsolesViewModel Consoles { get; }
+    public CloudViewModel Cloud { get; }
     public SessionsViewModel Sessions { get; }
     public SettingsViewModel SettingsPage { get; }
     public ObservableCollection<NavItem> Nav { get; }
@@ -92,6 +96,8 @@ public sealed partial class MainViewModel : ObservableObject
         CurrentPage = value?.Page;
         if (value?.Page == Sessions) Sessions.Refresh();
         if (value?.Page == Consoles && !Consoles.Loaded && IsSignedIn) _ = Consoles.RefreshAsync();
+        // The cloud library: shown from the cache straight away, refreshed when the page is opened.
+        if (value?.Page == Cloud && IsSignedIn && !Cloud.IsLoading) _ = Cloud.RefreshAsync();
     }
 
     public async Task StartupAsync()
@@ -118,7 +124,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (SelectedNav != Nav[0]) SelectedNav = Nav[0];
     }
 
-    /// <summary>Close XStream (ends a running stream cleanly first).</summary>
+    /// <summary>Close Vexel (ends a running stream cleanly first).</summary>
     public event Action? ExitRequested;
 
     [RelayCommand]
@@ -130,6 +136,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (Stream.IsRunning) Stream.StopCommand.Execute(null);
         _xbox.SignOut();
         _art.Forget();
+        CloudLibrary.Forget();
         Consoles.Consoles.Clear();
         Consoles.Loaded = false;
         IsSignedIn = false;

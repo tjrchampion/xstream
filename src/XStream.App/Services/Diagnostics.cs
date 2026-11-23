@@ -23,7 +23,7 @@ public static class Diagnostics
             Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
             AppPaths.Root,
         }.First(d => !string.IsNullOrEmpty(d) && Directory.Exists(d));
-        string path = Path.Combine(folder, $"XStream-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
+        string path = Path.Combine(folder, $"Vexel-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
 
         using var zip = ZipFile.Open(path, ZipArchiveMode.Create);
         Add(zip, "system.txt", SystemReport(lastError));
@@ -47,7 +47,7 @@ public static class Diagnostics
     private static string SystemReport(string? lastError)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"XStream {typeof(Diagnostics).Assembly.GetName().Version}");
+        sb.AppendLine($"Vexel {typeof(Diagnostics).Assembly.GetName().Version}");
         sb.AppendLine($"Created {DateTime.Now:O}");
         sb.AppendLine($"OS: {RuntimeInformation.OSDescription} ({RuntimeInformation.OSArchitecture})");
         sb.AppendLine($".NET {Environment.Version}, {Environment.ProcessorCount} logical processors");

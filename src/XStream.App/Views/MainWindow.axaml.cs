@@ -14,6 +14,8 @@ public partial class MainWindow : Window
         AddHandler(KeyDownEvent, (_, e) =>
         {
             if (DataContext is not MainViewModel vm) return;
+            // Esc in a text box with text in it clears the text (e.g. Cloud search), rather than going back.
+            if (e.Key == Key.Escape && e.Source is TextBox { Text.Length: > 0 }) return;
             if (e.Key == Key.Escape) { vm.Back(); e.Handled = true; }
             else if (e.Key == Key.F11) { ToggleFullscreen?.Invoke(); e.Handled = true; }
             else if (e.KeyModifiers == KeyModifiers.Control && e.Key == Key.Tab) { vm.SwitchPage(+1); e.Handled = true; }

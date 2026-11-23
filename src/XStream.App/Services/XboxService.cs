@@ -53,6 +53,21 @@ public sealed class XboxService : IDisposable
         return await XboxLibrary.GetTitleAsync(_http, authz, xuid, titleId, settings.Locale, ct);
     }
 
+    /// <summary>
+    /// Xbox Cloud Gaming: the offering this account gets (xgpuweb = Game Pass, xgpuwebf2p = free-to-play only),
+    /// every title with names and art, and the recently played title ids.
+    /// </summary>
+    public async Task<(string Offering, IReadOnlyList<CloudGame> Games, IReadOnlyList<string> Recent)> GetCloudLibraryAsync(
+        AppSettings settings, CancellationToken ct = default)
+    {
+        var (client, tokens) = await _store.CreateCloudClientAsync(_http, settings, ct);
+        var all = await client.GetCloudTitlesAsync(recent: false, ct);
+        IReadOnlyList<CloudTitle> recent = [];
+        try { recent = await client.GetCloudTitlesAsync(recent: true, ct); } catch (XboxApiException) { }
+        var games = await XboxLibrary.ResolveCloudGamesAsync(_http, all, settings.Locale, ct);
+        return (tokens.CloudOffering ?? "xgpuweb", games, recent.Select(r => r.TitleId).ToList());
+    }
+
     /// <summary>Downloads a URL's bytes (game art).</summary>
     public Task<byte[]> DownloadAsync(string url, CancellationToken ct) => _http.GetByteArrayAsync(url, ct);
 

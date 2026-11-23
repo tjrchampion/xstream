@@ -622,6 +622,31 @@ var tests = new List<(string name, Action body)>
         // 16:9 stream on a 16:9 screen (ROG Ally X): no bars, no crop.
         Eq((0, 0, 1920, 1080), R(1920, 1080, 1920, 1080));
     }),
+    ("Cloud search: forgiving matching, every word must match, best matches first, genre filter and sort", () =>
+    {
+        CloudGame G(string name, string pub = "", string[]? genres = null, int year = 2020) =>
+            new(name.Replace(" ", "").ToUpperInvariant(), "p", name, pub, null, null, null, true, false, genres, new DateTimeOffset(year, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var lib = new[]
+        {
+            G("Assassin's Creed® IV Black Flag", "Ubisoft", ["Action & adventure"], 2013),
+            G("Halo Infinite", "Xbox Game Studios", ["Shooter"], 2021),
+            G("Halo Wars 2", "Xbox Game Studios", ["Strategy"], 2017),
+            G("Pokémon Something", "Nintendo-ish", ["Family"], 2022),
+            G("Mythical Halo Tale", "Indie", ["Action & adventure"], 2024),
+            G("Forza Horizon 5", "Xbox Game Studios", ["Racing & flying"], 2021),
+        };
+        Eq("Assassin's Creed® IV Black Flag", CloudSearch.Filter(lib, "assassins").Single().Name);   // apostrophe and ® ignored
+        Eq("Pokémon Something", CloudSearch.Filter(lib, "POKEMON").Single().Name);                    // accents and case ignored
+        var halo = CloudSearch.Filter(lib, "halo").Select(g => g.Name).ToList();
+        Eq("Halo Infinite", halo[0]); Eq("Halo Wars 2", halo[1]); Eq("Mythical Halo Tale", halo[2]);   // title-starts-with first
+        Eq(1, CloudSearch.Filter(lib, "halo wars").Count);                                            // every word must match
+        Eq(3, CloudSearch.Filter(lib, "xbox game studios").Count);                                    // publisher matches
+        Eq("Forza Horizon 5", CloudSearch.Filter(lib, "racing").Single().Name);                       // genre matches
+        Eq(2, CloudSearch.Filter(lib, "", genre: "Action & adventure").Count);                        // genre filter
+        Eq("Mythical Halo Tale", CloudSearch.Filter(lib, "", sort: CloudSort.Newest)[0].Name);        // newest first
+        Eq(0, CloudSearch.Filter(lib, "zzzz").Count);
+        Eq("Action & adventure", CloudSearch.Genres(lib)[0]);                                         // most common genre first
+    }),
     ("Updates: only a manifest signed by the release key, for a newer version, with a matching file", () =>
     {
         using var key = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);

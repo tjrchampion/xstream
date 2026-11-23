@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Finishes a release the GitHub workflow drafted: downloads the XStream.exe it built (signed by SignPath when
+# Finishes a release the GitHub workflow drafted: downloads the Vexel.exe it built (signed by SignPath when
 # that's set up), signs latest.json for it with your release key, uploads that, and publishes the release.
 # Only then does the auto-updater offer it.
 #   scripts/finish-release.sh v0.3.0
@@ -13,17 +13,17 @@ command -v gh >/dev/null || { echo "Install the GitHub CLI: brew install gh, the
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-echo "Downloading XStream.exe from the $TAG draft..."
-gh release download "$TAG" --repo "$REPO" --pattern XStream.exe --dir "$WORK"
+echo "Downloading Vexel.exe from the $TAG draft..."
+gh release download "$TAG" --repo "$REPO" --pattern Vexel.exe --dir "$WORK"
 
 # Check it's the version we think it is before signing a manifest for it (Windows exe version resource).
 if command -v osslsigncode >/dev/null; then
-  osslsigncode verify -in "$WORK/XStream.exe" 2>&1 | grep -qE "Signature verification: ok" \
-    && echo "Code signature: ok" || echo "Note: XStream.exe is not code-signed (SignPath not set up yet?)"
+  osslsigncode verify -in "$WORK/Vexel.exe" 2>&1 | grep -qE "Signature verification: ok" \
+    && echo "Code signature: ok" || echo "Note: Vexel.exe is not code-signed (SignPath not set up yet?)"
 fi
 
-URL="https://github.com/$REPO/releases/download/$TAG/XStream.exe"
-XSTREAM_RELEASE_NOTES="${XSTREAM_RELEASE_NOTES:-}" scripts/make-manifest.sh "$WORK/XStream.exe" "$VERSION" "$URL" "$WORK/latest.json"
+URL="https://github.com/$REPO/releases/download/$TAG/Vexel.exe"
+XSTREAM_RELEASE_NOTES="${XSTREAM_RELEASE_NOTES:-}" scripts/make-manifest.sh "$WORK/Vexel.exe" "$VERSION" "$URL" "$WORK/latest.json"
 
 echo "Uploading latest.json and publishing $TAG..."
 gh release upload "$TAG" "$WORK/latest.json" --repo "$REPO" --clobber

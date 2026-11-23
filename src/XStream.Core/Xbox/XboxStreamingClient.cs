@@ -13,6 +13,9 @@ public sealed record XboxConsole(string DeviceName, string ServerId, string Powe
 
 public sealed record IceCandidate(string Candidate, string? SdpMid, ushort SdpMLineIndex);
 
+/// <summary>A game playable on Xbox Cloud Gaming for this account (from /v2/titles).</summary>
+public sealed record CloudTitle(string TitleId, string ProductId, bool Entitled, bool FreeToPlay);
+
 /// <summary>
 /// xHome (console streaming) REST API, ported from xbox-xcloud-player's apiclient.ts / stream.ts.
 /// </summary>
@@ -46,12 +49,20 @@ public sealed class XboxStreamingClient
             r["outOfHomeWarning"]?.GetValue<bool>() ?? false, r["wirelessWarning"]?.GetValue<bool>() ?? false)).ToList();
     }
 
-    public async Task<StreamSession> StartHomeStreamAsync(string serverId, CancellationToken ct = default)
+    /// <summary>Start a session on one of your consoles (remote play).</summary>
+    public Task<StreamSession> StartHomeStreamAsync(string serverId, CancellationToken ct = default) =>
+        StartStreamAsync("home", serverId: serverId, titleId: "", ct);
+
+    /// <summary>Start an Xbox Cloud Gaming session for a game (client must use a cloud token).</summary>
+    public Task<StreamSession> StartCloudStreamAsync(string titleId, CancellationToken ct = default) =>
+        StartStreamAsync("cloud", serverId: "", titleId: titleId, ct);
+
+    private async Task<StreamSession> StartStreamAsync(string kind, string serverId, string titleId, CancellationToken ct)
     {
         var body = new JsonObject
         {
             ["clientSessionId"] = "",
-            ["titleId"] = "",
+            ["titleId"] = titleId,
             ["systemUpdateGroup"] = "",
             ["settings"] = new JsonObject
             {
@@ -68,8 +79,35 @@ public sealed class XboxStreamingClient
             ["serverId"] = serverId,
             ["fallbackRegionNames"] = new JsonArray(),
         };
-        var j = await SendAsync(HttpMethod.Post, "/v5/sessions/home/play", body, ct);
-        return new StreamSession(this, j["sessionId"]?.GetValue<string>() ?? "", "/" + j["sessionPath"]!.GetValue<string>().TrimStart('/'));
+        var j = await SendAsync(HttpMethod.Post, $"/v5/sessions/{kind}/play", body, ct);
+        return new StreamSession(this, j["sessionId"]?.GetValue<string>() ?? "", "/" + j["sessionPath"]!.GetValue<string>().TrimStart('/'), titleId);
+    }
+
+    /// <summary>Cloud games this account can see (all, or recently played with <paramref name="recent"/>).</summary>
+    public async Task<IReadOnlyList<CloudTitle>> GetCloudTitlesAsync(bool recent = false, CancellationToken ct = default)
+    {
+        var j = await SendAsync(HttpMethod.Get, recent ? "/v2/titles/mru?mr=25" : "/v2/titles", null, ct);
+        return ParseCloudTitles(j);
+    }
+
+    public static IReadOnlyList<CloudTitle> ParseCloudTitles(JsonNode j) =>
+        (j["results"]?.AsArray() ?? []).Where(r => r?["titleId"] is not null).Select(r =>
+        {
+            var d = r!["details"];
+            bool free = d?["isFreeInStore"]?.GetValue<bool>() ?? false;
+            bool entitled = (d?["hasEntitlement"]?.GetValue<bool>() ?? false) || free;
+            return new CloudTitle(r["titleId"]!.GetValue<string>(), d?["productId"]?.GetValue<string>() ?? "", entitled, free);
+        }).ToList();
+
+    /// <summary>Estimated queue time for a cloud game, in seconds (null if unknown).</summary>
+    public async Task<int?> GetCloudWaitSecondsAsync(string titleId, CancellationToken ct = default)
+    {
+        try
+        {
+            var j = await SendAsync(HttpMethod.Get, "/v1/waittime/" + titleId, null, ct);
+            return j["estimatedTotalWaitTimeInSeconds"]?.GetValue<int>();
+        }
+        catch (XboxApiException) { return null; }
     }
 
     internal async Task<(HttpStatusCode status, JsonNode body)> SendRawAsync(HttpMethod method, string path, JsonNode? body, CancellationToken ct)
@@ -133,15 +171,23 @@ public sealed class StreamSession
     public string Path { get; }
     public string State { get; private set; } = "New";
 
-    internal StreamSession(XboxStreamingClient api, string id, string path) { _api = api; SessionId = id; Path = path; }
+    /// <summary>The cloud game (empty for a console session).</summary>
+    public string TitleId { get; }
+    public bool IsCloud => TitleId.Length > 0;
+
+    internal StreamSession(XboxStreamingClient api, string id, string path, string titleId = "")
+    { _api = api; SessionId = id; Path = path; TitleId = titleId; }
 
     /// <summary>
     /// Polls until Provisioned. Calls <paramref name="onReadyToConnect"/> (send the transfer token) when asked.
     /// </summary>
-    public async Task WaitUntilProvisionedAsync(Func<Task<string>> getTransferToken, TimeSpan timeout, CancellationToken ct = default)
+    /// <param name="onQueue">Cloud only: called while waiting for a server, with the estimated wait in seconds (if known).</param>
+    public async Task WaitUntilProvisionedAsync(Func<Task<string>> getTransferToken, TimeSpan timeout, CancellationToken ct = default,
+        Action<int?>? onQueue = null)
     {
         var until = DateTime.UtcNow + timeout;
         bool sentAuth = false;
+        DateTime nextWaitCheck = DateTime.MinValue;
         while (DateTime.UtcNow < until)
         {
             var j = await _api.SendAsync(HttpMethod.Get, Path + "/state", null, ct);
@@ -149,6 +195,15 @@ public sealed class StreamSession
             switch (State)
             {
                 case "Provisioned": return;
+                case "WaitingForResources":
+                    // In the cloud queue. The queue can be long, so the timeout keeps moving while we're in it.
+                    until = DateTime.UtcNow + timeout;
+                    if (IsCloud && DateTime.UtcNow >= nextWaitCheck)
+                    {
+                        nextWaitCheck = DateTime.UtcNow.AddSeconds(15);
+                        onQueue?.Invoke(await _api.GetCloudWaitSecondsAsync(TitleId, ct));
+                    }
+                    break;
                 case "ReadyToConnect" when !sentAuth:
                     sentAuth = true;
                     await _api.SendAsync(HttpMethod.Post, Path + "/connect", new JsonObject { ["userToken"] = await getTransferToken() }, ct);

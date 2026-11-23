@@ -39,7 +39,7 @@ public partial class App : Application
             catch (Exception ex)
             {
                 splash.ShowError($"Couldn't unpack the video and controller libraries to {NativeBundle.Location}: {ex.Message} " +
-                                 "Check there's about 120 MB free, then open XStream again.");
+                                 "Check there's about 120 MB free, then open Vexel again.");
                 return;
             }
             var main = StartMain(desktop); // becomes the main window before the splash closes, so the app keeps running
@@ -106,7 +106,7 @@ public partial class App : Application
                 if (vm.Stream.IsAway)
                 {
                     settings.Reload();
-                    vm.SelectedNav = vm.Nav[2];
+                    vm.SelectedNav = vm.Nav.First(n => n.Page == vm.SettingsPage);
                     ShowLauncher();
                     _pad.FocusDefaultSoon();
                 }
@@ -189,7 +189,7 @@ public partial class App : Application
                 else vm.SettingsPage.UpdateStatus = vm.Updates.Status;
             };
 
-            // Discord: "Playing <game> via XStream" while the picture is up. What's running is looked up when the
+            // Discord: "Playing <game> via Vexel" while the picture is up. What's running is looked up when the
             // stream starts and every 3 minutes (the game can change mid-stream).
             var discord = new DiscordPresence();
             string? shown = null;

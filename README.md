@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="src/XStream.App/Assets/xstream-1024.png" width="112" alt="XStream icon" />
+  <img src="src/XStream.App/Assets/xstream-1024.png" width="112" alt="Vexel icon" />
 </p>
 
-<h1 align="center">XStream</h1>
+<h1 align="center">Vexel</h1>
 
 <p align="center">
   <b>Play your Xbox from anywhere in the house.</b><br />
@@ -10,15 +10,16 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/console-cards.png" width="860" alt="XStream's console list, showing each console's power state and the game running on it" />
+  <img src="docs/screenshots/console-cards.png" width="860" alt="Vexel's console list, showing each console's power state and the game running on it" />
 </p>
 
-XStream streams your Xbox console over your home network. It's built for playing with a controller: it opens full screen, every menu works with the D-pad, and an in-game menu is one button combo away. It keeps the picture smooth and the latency low with adaptive bitrate, hardware decoding and automatic reconnects, and it tells you plainly when the connection is struggling.
+Vexel streams your Xbox console over your home network. It's built for playing with a controller: it opens full screen, every menu works with the D-pad, and an in-game menu is one button combo away. It keeps the picture smooth and the latency low with adaptive bitrate, hardware decoding and automatic reconnects, and it tells you plainly when the connection is struggling.
 
-> XStream is an independent, open-source project. It is not affiliated with, endorsed by or supported by Microsoft or Xbox. It uses the same unofficial streaming service as the Xbox web player, which Microsoft can change at any time.
+> Vexel is an independent, open-source project. It is not affiliated with, endorsed by or supported by Microsoft or Xbox. It uses the same unofficial streaming service as the Xbox web player, which Microsoft can change at any time.
 
 ## Features
 
+- **Your console and the cloud:** stream your own Xbox, or play **Xbox Cloud Gaming** games with Game Pass Ultimate, no console needed. Both get the same player, menu and controls.
 - **Controller-first:** full screen on handhelds, D-pad navigation everywhere, and controller and connection status at a glance.
 - **Your games, front and centre:** each console card shows the game running on it (or your last played game), and the connecting screen fills the display with art from your library.
 - **In-game stream menu:** hold <kbd>View</kbd> + <kbd>Menu</kbd> (or tap the screen) to change bitrate, picture, clarity, volume, rumble and microphone without leaving the game.
@@ -33,15 +34,15 @@ XStream streams your Xbox console over your home network. It's built for playing
   - no frames queued for display
 - **Clear feedback:** short messages when the network, frame rate or battery needs attention, and when things are back to normal.
 - **Sharper picture:** an optional halo-free Clarity boost before the picture is scaled to your screen, plus Fit, Fill and Stretch for screens that aren't 16:9.
-- **Play from anywhere:** at home or away. XStream finds a direct path to your console over the internet, and shows which route it's using.
+- **Play from anywhere:** at home or away. Vexel finds a direct path to your console over the internet, and shows which route it's using.
 - **Game audio, party chat, rumble and screenshots.**
 - **Made for the ROG Ally:**
   - runs the 120 Hz panel at the stream's 60 Hz
   - keeps the device awake
   - turns off Wi-Fi background scans while streaming
   - warns when the battery is low
-- **Discord status:** "Playing *game* via XStream" while you stream.
-- **Safe updates:** new versions install themselves, and every update is checked against XStream's signature first.
+- **Discord status:** "Playing *game* via Vexel" while you stream.
+- **Safe updates:** new versions install themselves, and every update is checked against Vexel's signature first.
 
 ## Screenshots
 
@@ -66,38 +67,47 @@ XStream streams your Xbox console over your home network. It's built for playing
 - **An Xbox Series X|S or Xbox One** with remote play turned on:
   1. On the console, go to **Settings → Devices & connections → Remote features**.
   2. Turn on **Enable remote features**.
-  3. Under **Power mode**, choose **Sleep**, so XStream can wake the console.
-- **A Windows 10 or 11 PC or handheld** (x64). XStream also builds and runs on macOS (Apple Silicon); see [Building from source](#building-from-source).
+  3. Under **Power mode**, choose **Sleep**, so Vexel can wake the console.
+- **A Windows 10 or 11 PC or handheld** (x64). Vexel also builds and runs on macOS (Apple Silicon); see [Building from source](#building-from-source).
 - **A good home network.** The console on Ethernet and this device on 5 or 6 GHz Wi-Fi works best.
 
 ### Install (Windows)
 
-1. Download **XStream.exe** from the [latest release](../../releases/latest).
+1. Download **Vexel.exe** from the [latest release](../../releases/latest).
 2. Run it. It's a single file with nothing to install. The first launch unpacks its video libraries, which takes a few seconds, behind a progress window.
-3. Sign in with your Microsoft account. XStream shows a short code that you approve on your phone or computer, so your password never goes through XStream.
+3. Sign in with your Microsoft account. Vexel shows a short code that you approve on your phone or computer, so your password never goes through Vexel.
 4. Pick your console and press **Stream**.
 
-From then on, XStream updates itself: new versions download in the background and install when you restart.
+From then on, Vexel updates itself: new versions download in the background and install when you restart.
 
 > If Windows shows "Windows protected your PC", choose **More info → Run anyway**. This happens with new releases until they build reputation with Microsoft SmartScreen.
 
 **Code signing:** Windows releases are signed through the SignPath Foundation. Free code signing is provided by [SignPath.io](https://about.signpath.io), with the certificate from [SignPath Foundation](https://signpath.org). See the [code signing policy](docs/CODE_SIGNING.md).
 
+### Cloud gaming (no console needed)
+
+Open **Cloud** in the sidebar to play Xbox Cloud Gaming games from Microsoft's servers. You get the same player, stream menu, controls and connection messages as for your console.
+
+- **What you need:** **Xbox Game Pass Ultimate** for the full cloud library. Without it, free-to-play games (such as Fortnite) still work where cloud gaming is offered. Cloud gaming isn't available in every country.
+- **How it works:** recently played games come first, then your whole library, with search. Pick a game and Vexel finds a server.
+- **Queues:** at busy times there may be a queue, and the connecting screen shows the estimated wait.
+- **Picture:** cloud streams run at up to 1080p. A Series X at home can send 1440p.
+
 ### Playing away from home
 
-XStream works over the internet as well as on your home network. You don't need to set anything up in XStream, but your home network has to let the console be reached:
+Vexel works over the internet as well as on your home network. You don't need to set anything up in Vexel, but your home network has to let the console be reached:
 
 1. On the Xbox, open **Settings → General → Network settings** and check the **NAT type**:
    - **Open** or **Moderate** works.
    - **Strict** usually won't connect. Turn on **UPnP** in your home router's settings, then choose **Test NAT type** on the Xbox.
-2. Keep **remote features** on, with power mode on **Sleep**. XStream wakes the console from anywhere.
+2. Keep **remote features** on, with power mode on **Sleep**. Vexel wakes the console from anywhere.
 3. Away from home, you need a reasonable connection: about 15 Mbps or more, and ideally under about 60 ms ping to home. Choose the **Smooth** profile for patchy networks.
 
-**How it connects:** XStream asks public STUN servers (Google's and Cloudflare's) for its own internet address, then exchanges addresses with the console through Xbox's servers. The two connect directly, and the game stream never passes through anyone else's servers. The stream menu shows the route (*Home network* or *Internet*), and the full details are in the session log.
+**How it connects:** Vexel asks public STUN servers (Google's and Cloudflare's) for its own internet address, then exchanges addresses with the console through Xbox's servers. The two connect directly, and the game stream never passes through anyone else's servers. The stream menu shows the route (*Home network* or *Internet*), and the full details are in the session log.
 
-**If it can't connect away from home**, XStream says so instead of hanging. Some networks block direct connections, notably workplaces, hotels and some mobile carriers. Two ways round that:
+**If it can't connect away from home**, Vexel says so instead of hanging. Some networks block direct connections, notably workplaces, hotels and some mobile carriers. Two ways round that:
 
-- **A VPN back to your home network.** For example, [Tailscale](https://tailscale.com/kb/1019/subnets) or WireGuard with a "subnet router" at home. XStream then sees the console as if you were home.
+- **A VPN back to your home network.** For example, [Tailscale](https://tailscale.com/kb/1019/subnets) or WireGuard with a "subnet router" at home. Vexel then sees the console as if you were home.
 - **Your own TURN relay server.** For example [coturn](https://github.com/coturn/coturn). Add it to `settings.json` in `%USERPROFILE%\.xstream` (`~/.xstream` on macOS):
   ```json
   "IceServers": [
@@ -133,13 +143,13 @@ While the stream menu is open, the console gets no controller input, so you can 
 ## Privacy
 
 - **Sign-in:** your sign-in is stored only on your device, in `~/.xstream` (`%USERPROFILE%\.xstream` on Windows), along with your settings, session logs and cached game art. Signing out deletes the sign-in and the cached art.
-- **Services XStream talks to:**
+- **Services Vexel talks to:**
   - Microsoft's sign-in and Xbox services: the console list, streaming, your recently played games and what's playing now
-  - public STUN servers (Google, Cloudflare), which only see your internet address. They tell XStream that address so it can connect to the console from away from home. The game stream doesn't pass through them.
-  - the Microsoft Store image service, for game art
+  - public STUN servers (Google, Cloudflare), which only see your internet address. They tell Vexel that address so it can connect to the console from away from home. The game stream doesn't pass through them.
+  - the Microsoft Store image service and the Game Pass catalogue, for game names and art
   - the update feed
   - the Discord app on your own device, if it's running and the Discord setting is on
-- **No telemetry:** XStream sends no analytics and no crash reports. Diagnostics only leave your device if you send the zip yourself.
+- **No telemetry:** Vexel sends no analytics and no crash reports. Diagnostics only leave your device if you send the zip yourself.
 
 ## Building from source
 
@@ -157,7 +167,7 @@ dotnet run --project src/XStream.App   # the launcher
 dotnet run --project tests/XStream.Tests
 ```
 
-**Windows release build:** `./scripts/publish-windows.sh` makes `dist/XStream.exe`, a single self-contained file. It runs on macOS, Linux or Git Bash. Run `./scripts/build-ffmpeg-windows.sh` first (it needs MinGW-w64 and nasm) for a minimal LGPL FFmpeg; that brings the exe down to about 30 MB. The full release process (GitHub build, code signing and signed update manifests) is in [docs/RELEASING.md](docs/RELEASING.md). The code-signing policy is in [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
+**Windows release build:** `./scripts/publish-windows.sh` makes `dist/Vexel.exe`, a single self-contained file. It runs on macOS, Linux or Git Bash. Run `./scripts/build-ffmpeg-windows.sh` first (it needs MinGW-w64 and nasm) for a minimal LGPL FFmpeg; that brings the exe down to about 30 MB. The full release process (GitHub build, code signing and signed update manifests) is in [docs/RELEASING.md](docs/RELEASING.md). The code-signing policy is in [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
 
 **Command-line client:** useful for testing without the UI:
 
@@ -165,6 +175,8 @@ dotnet run --project tests/XStream.Tests
 dotnet run --project src/XStream.Cli -- login            # sign in with a code
 dotnet run --project src/XStream.Cli -- consoles         # list consoles and their IDs
 dotnet run --project src/XStream.Cli -- play <serverId>  # stream with live stats
+dotnet run --project src/XStream.Cli -- cloud            # Xbox Cloud Gaming access and games (read-only)
+dotnet run --project src/XStream.Cli -- play cloud:<titleId> --headless   # a cloud session, no window
 dotnet run --project src/XStream.Cli -- video-test       # decode + window test, no console needed
 dotnet run --project src/XStream.Cli -- pad              # controller test, no console needed
 ```
@@ -176,6 +188,8 @@ dotnet run --project src/XStream.Cli -- pad              # controller test, no c
 
 ### Project layout
 
+The code still uses its original working name, XStream, for projects and namespaces. The app itself is Vexel.
+
 ```
 src/XStream.Core     Stability engine, Xbox sign-in and streaming API, video (FFmpeg decode, SDL2 window,
                      Direct3D 11 renderer), audio (Opus out, microphone in), controller input, update checks
@@ -183,7 +197,7 @@ src/XStream.WebRtc   WebRTC connection to the console (SIPSorcery), with the sta
 src/XStream.Player   One stream end to end: session, video, input, audio, the in-game menu, reconnects
 src/XStream.App      The launcher (Avalonia): sign-in, consoles, connecting screen, settings, controller navigation
 src/XStream.Cli      Command-line client
-src/XStream.Sim      Network simulator comparing XStream's strategies against a standard receiver
+src/XStream.Sim      Network simulator comparing Vexel's strategies against a standard receiver
 tests/               Unit tests, WebRTC patch tests, the Windows smoke test and its Wine runner
 scripts/, patches/   Release build, minimal FFmpeg build, and the SIPSorcery patch
 ```
@@ -192,7 +206,7 @@ The stream runs in its own process, a second copy of the app. That gives the vid
 
 ### Stability engine
 
-XStream measures the incoming video every 100 ms and reacts before you see a problem:
+Vexel measures the incoming video every 100 ms and reacts before you see a problem:
 
 | What it does | How |
 |---|---|
@@ -205,7 +219,7 @@ XStream measures the incoming video every 100 ms and reacts before you see a pro
 
 ### Latency
 
-| Stage | XStream |
+| Stage | Vexel |
 |---|---|
 | Reading and sending input | 1 kHz controller reads, sent on change, over an unordered, never-retransmit data channel (patched SIPSorcery) so a lost packet never holds up the next |
 | Decode and display | Hardware decode on the renderer's own GPU device (zero-copy on Windows), newest frame only, no queued frames, flip-model swap chain |
@@ -218,9 +232,9 @@ The patch tests and the network simulator are in `tests/` and `src/XStream.Sim`.
 
 ## Status
 
-XStream streams real Xbox consoles today: sign-in, console list, 1440p60 video with audio and controller, the in-game menu, and connection messages. It's developed on macOS and Windows, and tested on the ROG Ally.
+Vexel streams real Xbox consoles today: sign-in, console list, 1440p60 video with audio and controller, the in-game menu, and connection messages. It's developed on macOS and Windows, and tested on the ROG Ally.
 
-- **Unofficial protocol:** XStream uses the same unofficial service as the Xbox web player. If Microsoft changes it, XStream may need an update.
+- **Unofficial protocol:** Vexel uses the same unofficial service as the Xbox web player. If Microsoft changes it, Vexel may need an update.
 - **Party chat** is new and may not work with every console or party yet.
 
 Bug reports and pull requests are welcome. Please attach the diagnostics zip (**Settings → Export diagnostics**) to bug reports.
@@ -241,4 +255,4 @@ Bug reports and pull requests are welcome. Please attach the diagnostics zip (**
 
 ## License
 
-XStream is released under the [MIT License](LICENSE). The libraries it uses keep their own licenses (see [Credits](#credits)). FFmpeg is LGPL 2.1, dynamically linked, and can be rebuilt from source with `scripts/build-ffmpeg-windows.sh`.
+Vexel is released under the [MIT License](LICENSE). The libraries it uses keep their own licenses (see [Credits](#credits)). FFmpeg is LGPL 2.1, dynamically linked, and can be rebuilt from source with `scripts/build-ffmpeg-windows.sh`.

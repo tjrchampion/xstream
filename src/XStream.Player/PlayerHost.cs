@@ -19,6 +19,8 @@ namespace XStream.Player;
 public static class PlayerHost
 {
     public const string StandbyArg = "--standby";
+    /// <summary>Server-id prefix that means "Xbox Cloud Gaming, this title" (e.g. cloud:FORTNITE).</summary>
+    public const string CloudPrefix = "cloud:";
 
     public static int RunChild(string serverId, string? consoleName = null)
     {
@@ -87,12 +89,16 @@ public static class PlayerHost
             session.Stop();
         }) { IsBackground = true, Name = "xstream-stdin" }.Start();
 
+        // "cloud:<titleId>" = Xbox Cloud Gaming for that game; anything else is a console's server id.
+        string? cloudTitle = serverId.StartsWith(CloudPrefix, StringComparison.Ordinal) ? serverId[CloudPrefix.Length..] : null;
         XboxStreamingClient client;
         XboxTokens tokens;
         try
         {
             Emit(new PlayerEvent { Type = "stage", Stage = PlayerStage.Starting, Message = "Checking sign-in" });
-            (client, tokens) = store.CreateClientAsync(http, settings).GetAwaiter().GetResult();
+            (client, tokens) = cloudTitle is null
+                ? store.CreateClientAsync(http, settings).GetAwaiter().GetResult()
+                : store.CreateCloudClientAsync(http, settings).GetAwaiter().GetResult();
             Emit(new PlayerEvent { Type = "log", Message = $"Sign-in ready in {startup.Elapsed.TotalSeconds:F2} s" });
         }
         catch (Exception ex)
@@ -101,8 +107,10 @@ public static class PlayerHost
             return 1;
         }
         // Reconnects (after a dropped connection) sign in afresh: the first token may have expired by then.
-        async Task<XboxStreamingClient> Refresh() => (await store.CreateClientAsync(http, AppSettings.Load())).client;
-        return session.Run(PlayerOptions.From(settings, serverId) with { ConsoleName = consoleName ?? "Xbox" }, client,
+        async Task<XboxStreamingClient> Refresh() => cloudTitle is null
+            ? (await store.CreateClientAsync(http, AppSettings.Load())).client
+            : (await store.CreateCloudClientAsync(http, AppSettings.Load())).client;
+        return session.Run(PlayerOptions.From(settings, serverId) with { ConsoleName = consoleName ?? "Xbox", CloudTitleId = cloudTitle }, client,
             async () => await auth.GetTransferTokenAsync(store.Load() ?? tokens), Refresh);
     }
 

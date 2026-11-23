@@ -10,13 +10,16 @@ namespace XStream.Player;
 public sealed record PlayerOptions
 {
     public required string ServerId { get; init; }
+    /// <summary>Set for Xbox Cloud Gaming: the game to start (ServerId is then unused). The client must hold a cloud token.</summary>
+    public string? CloudTitleId { get; init; }
+    public bool IsCloud => !string.IsNullOrEmpty(CloudTitleId);
     public StabilityOptions Stability { get; init; } = new();
     public bool Fullscreen { get; init; } = true;
     public bool VSync { get; init; }
     public bool HardwareDecode { get; init; } = true;
     /// <summary>No video window: still connects, measures, and logs.</summary>
     public bool Headless { get; init; }
-    public string WindowTitle { get; init; } = "XStream";
+    public string WindowTitle { get; init; } = "Vexel";
     /// <summary>Controller rumble strength, 0-100%.</summary>
     public int RumbleStrength { get; init; } = 100;
     /// <summary>Pass impulse-trigger rumble through (off: main motors only, like the xbox.com client).</summary>
@@ -120,10 +123,21 @@ public sealed class PlayerSession
 
             StreamSession OpenSession(XboxStreamingClient c, bool quiet)
             {
-                if (!quiet) SetStage(PlayerStage.RequestingSession, $"Requesting a session ({profile}, up to {o.Stability.MaxKbps / 1000:F0} Mbps)");
-                var s = c.StartHomeStreamAsync(o.ServerId, _cts.Token).GetAwaiter().GetResult();
-                if (!quiet) SetStage(PlayerStage.WakingConsole, "Waiting for the console to get ready");
-                s.WaitUntilProvisionedAsync(getTransferToken, quiet ? TimeSpan.FromSeconds(60) : TimeSpan.FromMinutes(2), _cts.Token).GetAwaiter().GetResult();
+                if (!quiet) SetStage(PlayerStage.RequestingSession, o.IsCloud
+                    ? $"Finding a cloud server ({profile})"
+                    : $"Requesting a session ({profile}, up to {o.Stability.MaxKbps / 1000:F0} Mbps)");
+                var s = o.IsCloud
+                    ? c.StartCloudStreamAsync(o.CloudTitleId!, _cts.Token).GetAwaiter().GetResult()
+                    : c.StartHomeStreamAsync(o.ServerId, _cts.Token).GetAwaiter().GetResult();
+                if (!quiet) SetStage(PlayerStage.WakingConsole, o.IsCloud ? "Starting the game in the cloud" : "Waiting for the console to get ready");
+                // Cloud: the queue (WaitingForResources) can take minutes; the wait keeps extending while in it.
+                void OnQueue(int? seconds)
+                {
+                    string eta = seconds is > 0 ? (seconds >= 90 ? $"about {Math.Round(seconds.Value / 60.0)} min" : $"about {seconds} s") : "a short wait";
+                    SetStage(PlayerStage.InQueue, $"In the queue for a cloud server: {eta}");
+                }
+                s.WaitUntilProvisionedAsync(getTransferToken, quiet ? TimeSpan.FromSeconds(60) : TimeSpan.FromMinutes(2), _cts.Token,
+                    quiet ? null : OnQueue).GetAwaiter().GetResult();
                 return s;
             }
             session = OpenSession(client, quiet: false);
@@ -185,7 +199,7 @@ public sealed class PlayerSession
                         try
                         {
                             var path = Screenshots.Save(px, w, h, o.ConsoleName);
-                            ov0.ShowToast("Screenshot saved to Pictures › XStream");
+                            ov0.ShowToast("Screenshot saved to Pictures › Vexel");
                             Log?.Invoke("Screenshot: " + path);
                         }
                         catch (Exception ex) { ov0.ShowToast("Couldn't save the screenshot"); Log?.Invoke("Screenshot failed: " + ex.Message); }

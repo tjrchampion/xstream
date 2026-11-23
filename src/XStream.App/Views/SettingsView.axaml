@@ -23,7 +23,7 @@
         <StackPanel Spacing="16">
           <StackPanel Spacing="3">
             <TextBlock Classes="h2" Text="Stream profile" />
-            <TextBlock Classes="caption" Text="How XStream trades latency for a steady picture when the network gets rough." />
+            <TextBlock Classes="caption" Text="How Vexel trades latency for a steady picture when the network gets rough." />
           </StackPanel>
           <ItemsControl ItemsSource="{Binding Profiles}">
             <ItemsControl.ItemsPanel>
@@ -208,7 +208,7 @@
           <Grid Classes="row" ColumnDefinitions="*,Auto">
             <StackPanel>
               <TextBlock FontWeight="SemiBold" Text="Connect on launch" />
-              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Go straight into your last console when XStream opens. Press B on the connecting screen to stay in the launcher." />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Go straight into your last console when Vexel opens. Press B on the connecting screen to stay in the launcher." />
             </StackPanel>
             <ToggleSwitch Grid.Column="1" IsChecked="{Binding AutoConnect}" />
           </Grid>
@@ -224,7 +224,7 @@
           <Grid Classes="row" ColumnDefinitions="*,Auto">
             <StackPanel>
               <TextBlock FontWeight="SemiBold" Text="Show on Discord" />
-              <TextBlock Classes="caption" TextWrapping="Wrap" Text="&quot;Playing Forza Horizon 5 via XStream&quot; on your Discord profile while you stream (when Discord is running)." />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="&quot;Playing Forza Horizon 5 via Vexel&quot; on your Discord profile while you stream (when Discord is running)." />
             </StackPanel>
             <ToggleSwitch Grid.Column="1" IsChecked="{Binding DiscordStatus}" />
           </Grid>
@@ -297,7 +297,7 @@
           <Grid Classes="row" ColumnDefinitions="*,Auto">
             <StackPanel>
               <TextBlock FontWeight="SemiBold" Text="{Binding VersionText}" />
-              <TextBlock Classes="caption" TextWrapping="Wrap" Text="New versions download in the background and install when you restart XStream. Every update is checked against XStream's signature first." />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="New versions download in the background and install when you restart Vexel. Every update is checked against Vexel's signature first." />
               <TextBlock Classes="caption" Foreground="{StaticResource Accent}" Text="{Binding UpdateStatus}" TextWrapping="Wrap" Margin="0,4,0,0"
                          IsVisible="{Binding UpdateStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             </StackPanel>
@@ -312,7 +312,7 @@
           <Grid Classes="row" ColumnDefinitions="*,Auto">
             <StackPanel>
               <TextBlock FontWeight="SemiBold" Text="Update automatically" />
-              <TextBlock Classes="caption" Text="Check when XStream opens and every few hours." />
+              <TextBlock Classes="caption" Text="Check when Vexel opens and every few hours." />
             </StackPanel>
             <ToggleSwitch Grid.Column="1" IsChecked="{Binding AutoUpdate}" />
           </Grid>

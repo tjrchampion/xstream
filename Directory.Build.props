@@ -9,9 +9,9 @@
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <InvariantGlobalization>true</InvariantGlobalization>
     <!-- Shown in the exe's Properties → Details on Windows. -->
-    <Product>XStream</Product>
-    <Company>XStream contributors</Company>
-    <Copyright>Copyright (c) 2026 XStream contributors. MIT License.</Copyright>
+    <Product>Vexel</Product>
+    <Company>Vexel contributors</Company>
+    <Copyright>Copyright (c) 2026 Vexel contributors. MIT License.</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 </Project>

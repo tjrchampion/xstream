@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds dist/XStream.exe: one self-contained file for Windows x64 (ROG Ally X, any Windows 10/11 PC).
+# Builds dist/Vexel.exe: one self-contained file for Windows x64 (ROG Ally X, any Windows 10/11 PC).
 # No .NET install needed; SDL2 and FFmpeg's LGPL shared DLLs are packed inside and unpacked on first launch
 # to %LOCALAPPDATA%\XStream\native (with a progress window).
 # Runs on macOS, Linux or Windows (Git Bash). Downloads are cached in .cache/.
@@ -39,8 +39,8 @@ NATIVES="$PWD/$CACHE/x/natives.zip"
 
 # Version: from XS_VERSION (the release workflow sets it from the git tag), else the csproj.
 VERSION="${XS_VERSION:-$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' src/XStream.App/XStream.App.csproj | head -1)}"
-echo "Publishing single-file XStream.exe $VERSION (self-contained win-x64)..."
-rm -rf "$OUT" dist/XStream.exe
+echo "Publishing single-file Vexel.exe $VERSION (self-contained win-x64)..."
+rm -rf "$OUT" dist/XStream.exe dist/Vexel.exe
 # Single file: runtime, app and UI libraries inside the exe; SDL2/FFmpeg ride along as natives.zip and are
 # unpacked on first launch with a progress window (src/XStream.App/Services/NativeBundle.cs).
 dotnet publish src/XStream.App/XStream.App.csproj -c Release -r win-x64 --self-contained true \
@@ -49,7 +49,8 @@ dotnet publish src/XStream.App/XStream.App.csproj -c Release -r win-x64 --self-c
 [ -f "$OUT/XStream.exe" ] || { echo "Publish failed: no XStream.exe"; exit 1; }
 EXTRA=$(ls "$OUT" | grep -v '^XStream.exe$' || true)
 [ -z "$EXTRA" ] || echo "Note: extra files next to the exe: $EXTRA"
-cp "$OUT/XStream.exe" dist/XStream.exe
+# The projects keep their XStream code names; the app is published as Vexel.exe.
+cp "$OUT/XStream.exe" dist/Vexel.exe
 
 # ---- Code signing (optional; removes the "Windows protected your PC" SmartScreen warning) --------------------
 # Either a certificate file:            SIGN_PFX=cert.pfx SIGN_PFX_PASSWORD=...         (needs osslsigncode, or signtool on Windows)
@@ -58,16 +59,16 @@ cp "$OUT/XStream.exe" dist/XStream.exe
 TSA="http://timestamp.digicert.com"
 if [ -n "${SIGN_PFX:-}" ]; then
   echo "Signing with $SIGN_PFX..."
-  osslsigncode sign -pkcs12 "$SIGN_PFX" -pass "${SIGN_PFX_PASSWORD:-}" -n "XStream" -h sha256 -t "$TSA" \
-    -in dist/XStream.exe -out dist/XStream.signed.exe >/dev/null
-  mv dist/XStream.signed.exe dist/XStream.exe
-  osslsigncode verify -in dist/XStream.exe 2>&1 | grep -E "Signature verification|Subject:" | head -3 || true
+  osslsigncode sign -pkcs12 "$SIGN_PFX" -pass "${SIGN_PFX_PASSWORD:-}" -n "Vexel" -h sha256 -t "$TSA" \
+    -in dist/Vexel.exe -out dist/Vexel.signed.exe >/dev/null
+  mv dist/Vexel.signed.exe dist/Vexel.exe
+  osslsigncode verify -in dist/Vexel.exe 2>&1 | grep -E "Signature verification|Subject:" | head -3 || true
 elif [ -n "${AZURE_SIGNING_ENDPOINT:-}" ]; then
   echo "Signing with Azure Trusted Signing ($AZURE_SIGNING_ACCOUNT/$AZURE_SIGNING_PROFILE)..."
   TOKEN=$(az account get-access-token --resource https://codesigning.azure.net --query accessToken -o tsv)
   jsign --storetype TRUSTEDSIGNING --keystore "$AZURE_SIGNING_ENDPOINT" --storepass "$TOKEN" \
     --alias "$AZURE_SIGNING_ACCOUNT/$AZURE_SIGNING_PROFILE" --tsaurl http://timestamp.acs.microsoft.com --tsmode RFC3161 \
-    --name XStream dist/XStream.exe
+    --name Vexel dist/Vexel.exe
 else
   echo "Not code-signed (set SIGN_PFX or AZURE_SIGNING_* to sign; see README)."
 fi
@@ -76,9 +77,9 @@ fi
 # The GitHub release workflow skips this (the key never leaves your machine): scripts/finish-release.sh
 # signs the manifest for the exe the workflow built. For a fully local release, set XSTREAM_UPDATE_BASE_URL.
 if [ -n "${XSTREAM_UPDATE_BASE_URL:-}" ]; then
-  scripts/make-manifest.sh dist/XStream.exe "$VERSION" "${XSTREAM_UPDATE_BASE_URL%/}/XStream.exe" dist/latest.json
+  scripts/make-manifest.sh dist/Vexel.exe "$VERSION" "${XSTREAM_UPDATE_BASE_URL%/}/Vexel.exe" dist/latest.json
 fi
 
 echo
-echo "Done: dist/XStream.exe  ($(du -h dist/XStream.exe | cut -f1))"
+echo "Done: dist/Vexel.exe  ($(du -h dist/Vexel.exe | cut -f1))"
 echo "      Copy it anywhere and run it. First launch unpacks SDL2/FFmpeg (progress window), later launches start straight away."

@@ -63,7 +63,7 @@ public interface IVideoOverlay
 
 public sealed record VideoWindowOptions
 {
-    public string Title { get; init; } = "XStream";
+    public string Title { get; init; } = "Vexel";
     /// <summary>Borderless full screen at desktop resolution. This is also what AMD Fluid Motion Frames needs.</summary>
     public bool Fullscreen { get; init; } = true;
     public int Width { get; init; } = 1280;
@@ -71,7 +71,7 @@ public sealed record VideoWindowOptions
     /// <summary>Off by default: present the instant a frame is ready. With VRR (the Ally X's FreeSync) this stays tear-free.</summary>
     public bool VSync { get; init; }
     /// <summary>
-    /// Renderer: null = best for the platform: XStream's own Direct3D 11 renderer on Windows (zero-copy, clarity
+    /// Renderer: null = best for the platform: Vexel's own Direct3D 11 renderer on Windows (zero-copy, clarity
     /// on the GPU), Metal on macOS. "sdl" (or an SDL driver name like "direct3d11") forces SDL's renderer.
     /// </summary>
     public string? Renderer { get; init; }
@@ -250,7 +250,7 @@ public sealed unsafe class VideoWindow : IDisposable
             if (_ren == IntPtr.Zero) _ren = SDL_CreateRenderer(_win, -1, 0); // software fallback
             if (_ren == IntPtr.Zero) throw new InvalidOperationException("Could not create renderer: " + Err());
             SDL_GetRendererInfo(_ren, out var info);
-            RendererName = (Marshal.PtrToStringUTF8(info.Name) ?? "unknown") + (d3dError is null ? "" : $" (XStream renderer unavailable: {d3dError})");
+            RendererName = (Marshal.PtrToStringUTF8(info.Name) ?? "unknown") + (d3dError is null ? "" : $" (Vexel renderer unavailable: {d3dError})");
             SDL_SetRenderDrawColor(_ren, 0, 0, 0, 255);
             SDL_RenderClear(_ren);
             SDL_RenderPresent(_ren);

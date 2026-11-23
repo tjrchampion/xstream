@@ -17,7 +17,7 @@
         <StackPanel Orientation="Horizontal" Spacing="12">
           <Image Source="avares://XStream/Assets/xstream.png" Width="42" Height="42" RenderOptions.BitmapInterpolationMode="HighQuality" />
           <StackPanel VerticalAlignment="Center">
-            <TextBlock Text="XStream" FontSize="20" FontWeight="Bold" />
+            <TextBlock Text="Vexel" FontSize="20" FontWeight="Bold" />
             <TextBlock Text="Play your console from anywhere in the house" Classes="caption" />
           </StackPanel>
         </StackPanel>
@@ -27,7 +27,7 @@
           <StackPanel Spacing="6">
             <TextBlock Classes="h2" Text="Sign in with your Microsoft account" />
             <TextBlock Classes="muted" TextWrapping="Wrap"
-                       Text="You'll get a short code. Enter it on your phone or computer to approve this device. Your password never goes through XStream." />
+                       Text="You'll get a short code. Enter it on your phone or computer to approve this device. Your password never goes through Vexel." />
           </StackPanel>
           <Button Classes="primary" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
                   Command="{Binding StartCommand}" Content="Get a sign-in code" />
@@ -95,7 +95,7 @@
                 Command="{Binding $parent[Window].((vm:MainViewModel)DataContext).ExitCommand}">
           <StackPanel Orientation="Horizontal" Spacing="8">
             <PathIcon Data="{StaticResource Icon.Power}" Width="14" Height="14" Foreground="{StaticResource Bad}" />
-            <TextBlock Text="Exit XStream" />
+            <TextBlock Text="Exit Vexel" />
           </StackPanel>
         </Button>
       </StackPanel>

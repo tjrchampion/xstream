@@ -13,10 +13,11 @@ using XStream.WebRtc;
 //
 //   xstream login                      sign in with a code (approve on your phone)
 //   xstream consoles                   list consoles on your account
-//   xstream play <serverId> [profile] [maxMbps]
+//   xstream play <serverId> [profile] [maxMbps]   (or cloud:<titleId> for Xbox Cloud Gaming)
 //        profile: competitive | balanced | smooth (default: from settings, balanced)
 //        Every session is logged to ~/.xstream/logs/<date>-<profile>.csv (+ .summary.json)
 //   xstream library [--raw]           recently played games + art (what the connecting screen shows)
+//   xstream cloud [n]                  Xbox Cloud Gaming access and games (read-only)
 //   xstream report [file.csv]          summary of a session (latest if no file given)
 //   xstream pad                        controller test: live state, poll rate, input pipeline latency
 //   xstream video-test [file.h264]     decode + window test (built-in test pattern if no file)
@@ -58,6 +59,21 @@ try
                 Console.WriteLine($"{g.LastPlayed:yyyy-MM-dd}  {g.Name,-40} {g.HeroUrl}");
             break;
         }
+        case "cloud":
+        {
+            // Xbox Cloud Gaming: which offering this account gets, and its games (read-only; starts nothing).
+            var settings = AppSettings.Load();
+            var (cc, ct2) = await store.CreateCloudClientAsync(http, settings);
+            Console.WriteLine($"Cloud gaming: {ct2.CloudOffering} via {ct2.CloudHost}");
+            var all = await cc.GetCloudTitlesAsync();
+            var recent = await cc.GetCloudTitlesAsync(recent: true);
+            if (args.Contains("--ids")) { foreach (var t in all.Take(5)) Console.WriteLine($"  {t.TitleId} {t.ProductId} entitled={t.Entitled}"); Console.WriteLine($"{all.Count} titles"); break; }
+            var games = await XboxLibrary.ResolveCloudGamesAsync(http, all, settings.Locale);
+            Console.WriteLine($"{all.Count} titles, {all.Count(t => t.Entitled)} playable, {recent.Count} recently played");
+            foreach (var g in games.Where(g => g.Entitled).Take(int.TryParse(args.Skip(1).FirstOrDefault(), out var n) ? n : 12))
+                Console.WriteLine($"  {g.TitleId,-28} {g.Name,-42} {(g.FreeToPlay ? "free" : "")} {(g.PosterUrl is null ? "(no art)" : "")}");
+            break;
+        }
         case "consoles":
         {
             if (!store.SignedIn) throw new XboxApiException("Not signed in. Run: xstream login", 401);
@@ -74,9 +90,14 @@ try
             var profile = pos.Length > 2 ? Enum.Parse<StreamProfile>(pos[2], ignoreCase: true) : settings.Profile;
             double maxMbps = pos.Length > 3 ? double.Parse(pos[3]) : settings.MaxMbps;
             settings = settings with { Profile = profile, MaxMbps = maxMbps };
-            var (client, tokens) = store.CreateClientAsync(http, settings).GetAwaiter().GetResult();
+            // "cloud:<titleId>" streams that game from Xbox Cloud Gaming (see `xstream cloud` for title ids).
+            string? cloudTitle = pos[1].StartsWith(PlayerHost.CloudPrefix) ? pos[1][PlayerHost.CloudPrefix.Length..] : null;
+            var (client, tokens) = cloudTitle is null
+                ? store.CreateClientAsync(http, settings).GetAwaiter().GetResult()
+                : store.CreateCloudClientAsync(http, settings).GetAwaiter().GetResult();
             var options = PlayerOptions.From(settings, pos[1]) with
             {
+                CloudTitleId = cloudTitle,
                 Fullscreen = args.Contains("--windowed") ? false : settings.Fullscreen,
                 VSync = args.Contains("--vsync") || settings.VSync,
                 HardwareDecode = !args.Contains("--software") && settings.HardwareDecode,

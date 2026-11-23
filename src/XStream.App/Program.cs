@@ -50,7 +50,7 @@ internal static class CrashLog
         try
         {
             var path = Path.Combine(XStream.Core.Config.AppPaths.Logs, $"crash-{who}-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
-            File.WriteAllText(path, $"XStream {who} crash at {DateTime.Now:O}\n{Environment.OSVersion}, .NET {Environment.Version}\n\n{e.ExceptionObject}");
+            File.WriteAllText(path, $"Vexel {who} crash at {DateTime.Now:O}\n{Environment.OSVersion}, .NET {Environment.Version}\n\n{e.ExceptionObject}");
             Console.Error.WriteLine($"Crash details saved to {path}");
         }
         catch { /* nothing more we can do */ }

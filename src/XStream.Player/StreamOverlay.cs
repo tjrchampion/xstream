@@ -553,7 +553,7 @@ public sealed class StreamOverlay : IVideoOverlay
         using var t = Font(Bold, 34, Text);
         using var sub = Font(Regular, 24, Muted);
         using var cta = Font(Bold, 26, Accent);
-        Center(c, "Settings are open in XStream", y + 78, t);
+        Center(c, "Settings are open in Vexel", y + 78, t);
         Center(c, "Your controller works the launcher until you come back.", y + 124, sub);
         Center(c, "Press B in Settings, or tap here, to return", y + 180, cta);
     }

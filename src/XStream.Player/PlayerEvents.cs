@@ -4,7 +4,7 @@ using XStream.Core.Stability;
 
 namespace XStream.Player;
 
-public enum PlayerStage { Starting, RequestingSession, WakingConsole, Connecting, StartingVideo, Streaming, Reconnecting, Stopping, Ended, Failed }
+public enum PlayerStage { Starting, RequestingSession, WakingConsole, InQueue, Connecting, StartingVideo, Streaming, Reconnecting, Stopping, Ended, Failed }
 
 /// <summary>Once-a-second numbers for the launcher's live panel and the CLI's stats line.</summary>
 public sealed record LiveStats

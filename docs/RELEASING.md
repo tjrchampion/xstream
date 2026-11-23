@@ -1,12 +1,12 @@
-# Releasing XStream (Windows)
+# Releasing Vexel (Windows)
 
-This is for maintainers. Players just download `XStream.exe` from the [releases page](../../../releases/latest).
+This is for maintainers. Players just download `Vexel.exe` from the [releases page](../../../releases/latest).
 
 ## How a release works
 
 1. **GitHub builds it.** Pushing a version tag runs [.github/workflows/release.yml](../.github/workflows/release.yml) on a free
    GitHub-hosted runner:
-   - it builds the minimal FFmpeg and the patched WebRTC library, runs the tests and builds `XStream.exe`
+   - it builds the minimal FFmpeg and the patched WebRTC library, runs the tests and builds `Vexel.exe`
    - it code-signs the exe through SignPath (once set up)
    - it attaches the exe to a **draft** release
 2. **You finish it.** `scripts/finish-release.sh <tag>` downloads that exact exe, signs `latest.json` for it with your
@@ -41,7 +41,7 @@ XSTREAM_RELEASE_NOTES="What changed" scripts/finish-release.sh v0.3.0
 
 ## How updates are verified
 
-- **What `latest.json` holds:** the version, download URL, SHA-256 and size of `XStream.exe`, plus an ECDSA P-256 signature over those fields.
+- **What `latest.json` holds:** the version, download URL, SHA-256 and size of `Vexel.exe`, plus an ECDSA P-256 signature over those fields.
 - **What the app checks:** it installs an update only if all of these hold:
   - the signature verifies against the public key built into it
   - the download is over HTTPS
@@ -50,7 +50,7 @@ XSTREAM_RELEASE_NOTES="What changed" scripts/finish-release.sh v0.3.0
 
 ## Building a release locally (no GitHub)
 
-`./scripts/publish-windows.sh` builds `dist/XStream.exe` on macOS, Linux or Git Bash. Optional environment variables:
+`./scripts/publish-windows.sh` builds `dist/Vexel.exe` on macOS, Linux or Git Bash. Optional environment variables:
 
 - `XSTREAM_UPDATE_BASE_URL=https://…`: also writes a signed `dist/latest.json` for that download location.
 - `SIGN_PFX=cert.pfx SIGN_PFX_PASSWORD=…`: Authenticode-signs with a certificate file (needs `osslsigncode`).

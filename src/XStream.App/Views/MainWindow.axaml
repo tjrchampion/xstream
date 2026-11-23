@@ -5,13 +5,14 @@
         xmlns:app="using:XStream.App"
         x:Class="XStream.App.Views.MainWindow"
         x:DataType="vm:MainViewModel"
-        Title="XStream"
+        Title="Vexel"
         Icon="avares://XStream/Assets/xstream.png"
         Width="1180" Height="760" MinWidth="880" MinHeight="600"
         WindowStartupLocation="CenterScreen">
 
   <Window.DataTemplates>
     <DataTemplate DataType="vm:ConsolesViewModel"><v:ConsolesView /></DataTemplate>
+    <DataTemplate DataType="vm:CloudViewModel"><v:CloudView /></DataTemplate>
     <DataTemplate DataType="vm:SessionsViewModel"><v:SessionsView /></DataTemplate>
     <DataTemplate DataType="vm:SettingsViewModel"><v:SettingsView /></DataTemplate>
   </Window.DataTemplates>
@@ -25,7 +26,7 @@
           <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="11" Margin="6,0,0,26">
             <Image Source="avares://XStream/Assets/xstream.png" Width="34" Height="34" RenderOptions.BitmapInterpolationMode="HighQuality" />
             <StackPanel VerticalAlignment="Center">
-              <TextBlock Text="XStream" FontSize="17" FontWeight="Bold" />
+              <TextBlock Text="Vexel" FontSize="17" FontWeight="Bold" />
               <TextBlock Text="Remote play" Classes="caption" Margin="0,-1,0,0" />
             </StackPanel>
           </StackPanel>
@@ -35,7 +36,7 @@
                   Margin="0,10,0,0" Padding="12,10" Command="{Binding ExitCommand}">
             <StackPanel Orientation="Horizontal" Spacing="12">
               <PathIcon Data="{StaticResource Icon.Power}" Width="16" Height="16" Foreground="{StaticResource Bad}" />
-              <TextBlock Text="Exit XStream" FontSize="14" />
+              <TextBlock Text="Exit Vexel" FontSize="14" />
             </StackPanel>
           </Button>
 
@@ -104,7 +105,7 @@
           <PathIcon Data="{StaticResource Icon.Refresh}" Width="16" Height="16" Foreground="{StaticResource Accent}" Margin="0,0,12,0" />
           <StackPanel Grid.Column="1" VerticalAlignment="Center">
             <TextBlock FontWeight="SemiBold" Text="{Binding UpdateText}" />
-            <TextBlock Classes="caption" Text="Restart XStream to start using it. Takes a few seconds." />
+            <TextBlock Classes="caption" Text="Restart Vexel to start using it. Takes a few seconds." />
           </StackPanel>
           <Button Grid.Column="2" Classes="ghost" Content="Later" Command="{Binding DismissUpdateCommand}" Margin="0,0,10,0" />
           <Button Grid.Column="3" Classes="primary" Content="Restart now" Command="{Binding RestartToUpdateCommand}" IsEnabled="{Binding !Stream.IsRunning}" />
@@ -116,7 +117,7 @@
           <Ellipse Classes="dot good pulse" VerticalAlignment="Center" Margin="0,0,12,0" />
           <StackPanel Grid.Column="1" VerticalAlignment="Center">
             <TextBlock FontWeight="SemiBold"><Run Text="Streaming " /><Run Text="{Binding Stream.ConsoleName}" /></TextBlock>
-            <TextBlock Classes="caption" Text="Your controller works XStream until you go back. Changes apply to the stream straight away." />
+            <TextBlock Classes="caption" Text="Your controller works Vexel until you go back. Changes apply to the stream straight away." />
           </StackPanel>
           <Button Grid.Column="2" Classes="primary" Command="{Binding Stream.ReturnToGameCommand}">
             <StackPanel Orientation="Horizontal" Spacing="8">

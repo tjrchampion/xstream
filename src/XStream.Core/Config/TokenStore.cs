@@ -41,6 +41,40 @@ public sealed class TokenStore(XboxAuth auth, string? path = null)
         finally { _lock.Release(); }
     }
 
+    /// <summary>
+    /// Tokens with an Xbox Cloud Gaming token valid for 5+ more minutes: Game Pass (xgpuweb) if the account has it,
+    /// else free-to-play only (xgpuwebf2p). Throws if cloud gaming isn't available to the account or region.
+    /// </summary>
+    public async Task<XboxTokens> GetFreshCloudAsync(CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct);
+        try
+        {
+            var t = Load() ?? throw new XboxApiException("Not signed in.", 401);
+            if (t.CloudToken is null || t.CloudHost is null || t.CloudExpires < DateTimeOffset.UtcNow.AddMinutes(5))
+            {
+                XboxTokens? got = null;
+                Exception? last = null;
+                foreach (var offering in new[] { "xgpuweb", "xgpuwebf2p" })
+                {
+                    try { got = await auth.GetStreamingTokenAsync(t, offering, ct); t = got with { GsToken = t.GsToken, StreamHost = t.StreamHost, GsExpires = t.GsExpires, CloudToken = got.GsToken, CloudHost = got.StreamHost, CloudExpires = got.GsExpires, CloudOffering = offering }; break; }
+                    catch (Exception ex) when (ex is XboxApiException or HttpRequestException) { last = ex; }
+                }
+                if (got is null) throw new XboxApiException("Xbox Cloud Gaming isn't available for this account or region" + (last is null ? "" : $" ({last.Message})"), 403);
+                Save(t);
+            }
+            return t;
+        }
+        finally { _lock.Release(); }
+    }
+
+    /// <summary>A streaming client for Xbox Cloud Gaming (see <see cref="GetFreshCloudAsync"/>).</summary>
+    public async Task<(XboxStreamingClient client, XboxTokens tokens)> CreateCloudClientAsync(HttpClient http, AppSettings settings, CancellationToken ct = default)
+    {
+        var t = await GetFreshCloudAsync(ct);
+        return (new XboxStreamingClient(http, t.CloudHost!, t.CloudToken!) { Locale = settings.Locale, Resolution = StreamResolution.R1080 }, t);
+    }
+
     /// <summary>Xbox Live web-services authorization + xuid (for title history / game art).</summary>
     public async Task<(string Authorization, string Xuid)> GetWebTokenAsync(CancellationToken ct = default)
     {

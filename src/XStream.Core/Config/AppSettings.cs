@@ -47,7 +47,7 @@ public sealed record AppSettings
     public bool MatchRefreshRate { get; init; } = OperatingSystem.IsWindows();
     /// <summary>Send the microphone to the console for party and game chat.</summary>
     public bool Microphone { get; init; }
-    /// <summary>Show "Playing … via XStream" on Discord while streaming.</summary>
+    /// <summary>Show "Playing … via Vexel" on Discord while streaming.</summary>
     public bool DiscordStatus { get; init; } = true;
     /// <summary>Discord application id for the status (overrides the built-in one).</summary>
     public string? DiscordAppId { get; init; }
@@ -62,7 +62,9 @@ public sealed record AppSettings
     /// Empty uses the built-in public STUN servers. Add a TURN server for networks where a direct path is impossible.
     /// </summary>
     public string[]? IceServers { get; init; }
-    /// <summary>Connect to the last console as soon as XStream opens.</summary>
+    /// <summary>Cloud page: show all games as a list instead of a grid of covers.</summary>
+    public bool CloudListView { get; init; }
+    /// <summary>Connect to the last console as soon as Vexel opens.</summary>
     public bool AutoConnect { get; init; }
 
     private static readonly JsonSerializerOptions Json = new()

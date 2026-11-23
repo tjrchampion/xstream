@@ -77,7 +77,7 @@
       <Grid ColumnDefinitions="Auto,*,Auto">
         <StackPanel Orientation="Horizontal" Spacing="11">
           <Image Source="avares://XStream/Assets/xstream.png" Width="34" Height="34" RenderOptions.BitmapInterpolationMode="HighQuality" />
-          <TextBlock Text="XStream" FontSize="17" FontWeight="Bold" VerticalAlignment="Center" />
+          <TextBlock Text="Vexel" FontSize="17" FontWeight="Bold" VerticalAlignment="Center" />
         </StackPanel>
         <Border Grid.Column="2" Classes="chip" Background="#40000000" VerticalAlignment="Center">
           <TextBlock Text="{Binding ProfileText}" />
@@ -93,7 +93,7 @@
           <TextBlock Text="{Binding #Slides.CurrentName}" FontSize="14" Foreground="#E6FFFFFF" VerticalAlignment="Center" />
         </StackPanel>
 
-        <TextBlock Text="Connecting to" FontSize="18" Foreground="#CCFFFFFF" />
+        <TextBlock Text="{Binding TargetLabel}" FontSize="18" Foreground="#CCFFFFFF" />
         <TextBlock Text="{Binding ConsoleName}" FontSize="52" FontWeight="Bold" LetterSpacing="-1" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
         <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,10,0,0">
           <Ellipse Classes="dot good pulse" VerticalAlignment="Center" />
@@ -104,7 +104,7 @@
         <StackPanel Margin="0,30,0,0" Spacing="12">
           <ProgressBar Classes="loader" Minimum="0" Maximum="1" Value="{Binding Progress}" />
           <Grid ColumnDefinitions="*,*,*">
-            <TextBlock Classes="phase on" Text="Wake console" />
+            <TextBlock Classes="phase on" Text="{Binding FirstPhaseLabel}" />
             <TextBlock Grid.Column="1" Classes="phase" Classes.on="{Binding PhaseConnect}" Text="Connect" HorizontalAlignment="Center" />
             <TextBlock Grid.Column="2" Classes="phase" Classes.on="{Binding PhaseStream}" Text="Stream" HorizontalAlignment="Right" />
           </Grid>

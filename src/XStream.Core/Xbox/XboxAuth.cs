@@ -8,7 +8,9 @@ public sealed record DeviceCodePrompt(string UserCode, string VerificationUri, s
 
 public sealed record XboxTokens(
     string MsaAccessToken, string MsaRefreshToken, DateTimeOffset MsaExpires,
-    string? GsToken = null, string? StreamHost = null, DateTimeOffset GsExpires = default);
+    string? GsToken = null, string? StreamHost = null, DateTimeOffset GsExpires = default,
+    // Xbox Cloud Gaming: the same login with offering xgpuweb (Game Pass) or xgpuwebf2p (free-to-play only).
+    string? CloudToken = null, string? CloudHost = null, DateTimeOffset CloudExpires = default, string? CloudOffering = null);
 
 /// <summary>
 /// Microsoft account -> Xbox Live -> streaming token chain, the same public flow Greenlight
@@ -76,7 +78,9 @@ public sealed class XboxAuth(HttpClient http)
 
         using var req = new HttpRequestMessage(HttpMethod.Post, $"https://{offering}.gssv-play-prod.xboxlive.com/v2/login/user")
         {
-            Content = JsonContent.Create(new { token = xsts["Token"]!.GetValue<string>(), offeringId = offering }),
+            // A plain string body (with Content-Length): the cloud login servers reject a streamed (chunked) body as empty.
+            Content = new StringContent(JsonSerializer.Serialize(new { token = xsts["Token"]!.GetValue<string>(), offeringId = offering }),
+                System.Text.Encoding.UTF8, "application/json"),
         };
         req.Headers.Add("x-gssv-client", "XboxComBrowser");
         var gs = await ReadJson(await http.SendAsync(req, ct), ct);

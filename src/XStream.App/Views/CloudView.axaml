@@ -1,0 +1,328 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:XStream.App.ViewModels"
+             xmlns:app="using:XStream.App"
+             xmlns:c="using:XStream.App.Controls"
+             x:Class="XStream.App.Views.CloudView"
+             x:DataType="vm:CloudViewModel">
+  <UserControl.Styles>
+    <!-- A game tile: cover art (2:3) with the name underneath; the whole tile is the Play button. When selected,
+         only the cover gets the green outline (not the text) and the name turns green. -->
+    <Style Selector="Button.tile-game">
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="CornerRadius" Value="14" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="FocusAdorner" Value="{x:Null}" />
+    </Style>
+    <Style Selector="Button.tile-game /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.tile-game:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.tile-game:pressed /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.tile-game:focus /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+    <!-- Recently played row: fixed-size tiles that scroll sideways (the grid below stretches them to fill the width) -->
+    <Style Selector="ItemsControl#RecentRow Button.tile-game">
+      <Setter Property="Width" Value="150" />
+    </Style>
+    <!-- The cover clips the art to rounded corners; the selection ring is drawn ON TOP of the art so it's never covered -->
+    <Style Selector="Border.cover">
+      <Setter Property="CornerRadius" Value="12" /><Setter Property="ClipToBounds" Value="True" />
+      <Setter Property="Background" Value="{StaticResource Surface2}" />
+    </Style>
+    <Style Selector="Border.ring">
+      <Setter Property="CornerRadius" Value="12" /><Setter Property="BorderThickness" Value="3" />
+      <Setter Property="BorderBrush" Value="Transparent" /><Setter Property="IsHitTestVisible" Value="False" />
+      <Setter Property="Transitions"><Transitions><BrushTransition Property="BorderBrush" Duration="0:0:0.12" /></Transitions></Setter>
+    </Style>
+    <Style Selector="Button.tile-game:pointerover Border.ring, Button.tile-game:focus Border.ring">
+      <Setter Property="BorderBrush" Value="{StaticResource Accent}" />
+    </Style>
+    <Style Selector="TextBlock.tile-name">
+      <Setter Property="Foreground" Value="{StaticResource Text}" />
+      <Setter Property="Transitions"><Transitions><BrushTransition Property="Foreground" Duration="0:0:0.12" /></Transitions></Setter>
+    </Style>
+    <Style Selector="Button.tile-game:pointerover TextBlock.tile-name, Button.tile-game:focus TextBlock.tile-name">
+      <Setter Property="Foreground" Value="{StaticResource Accent}" />
+    </Style>
+
+    <!-- Hero carousel controls -->
+    <Style Selector="Button.round">
+      <Setter Property="Width" Value="44" /><Setter Property="Height" Value="44" /><Setter Property="CornerRadius" Value="22" />
+      <Setter Property="Padding" Value="0" /><Setter Property="Background" Value="#990C0E12" />
+      <Setter Property="BorderBrush" Value="#40FFFFFF" /><Setter Property="BorderThickness" Value="1" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.dot">
+      <Setter Property="Width" Value="10" /><Setter Property="Height" Value="10" /><Setter Property="MinHeight" Value="10" />
+      <Setter Property="Padding" Value="0" /><Setter Property="CornerRadius" Value="5" /><Setter Property="Background" Value="#66FFFFFF" />
+      <Setter Property="Transitions"><Transitions><DoubleTransition Property="Width" Duration="0:0:0.2" /></Transitions></Setter>
+    </Style>
+    <Style Selector="Button.dot.on"><Setter Property="Width" Value="26" /><Setter Property="Background" Value="{StaticResource Accent}" /></Style>
+    <Style Selector="Button.dot.on /template/ ContentPresenter#PART_ContentPresenter"><Setter Property="Background" Value="{StaticResource Accent}" /></Style>
+
+    <!-- Filter chips (genre, sort) and the grid/list switch -->
+    <Style Selector="ListBox.chips"><Setter Property="Background" Value="Transparent" /></Style>
+    <Style Selector="ListBox.chips ListBoxItem">
+      <Setter Property="Padding" Value="14,7" /><Setter Property="Margin" Value="0,0,8,0" /><Setter Property="CornerRadius" Value="16" />
+      <Setter Property="Background" Value="{StaticResource Surface2}" /><Setter Property="FontSize" Value="13" />
+    </Style>
+    <Style Selector="ListBox.chips ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource AccentSoft}" />
+    </Style>
+    <Style Selector="ListBox.chips ListBoxItem:selected"><Setter Property="Foreground" Value="{StaticResource Accent}" /></Style>
+    <Style Selector="Button.seg">
+      <Setter Property="Padding" Value="12,7" /><Setter Property="Background" Value="Transparent" /><Setter Property="CornerRadius" Value="8" />
+      <Setter Property="Foreground" Value="{StaticResource Muted}" /><Setter Property="FontSize" Value="13" />
+    </Style>
+    <Style Selector="Button.seg.on"><Setter Property="Foreground" Value="{StaticResource Accent}" /></Style>
+    <Style Selector="Button.seg.on /template/ ContentPresenter#PART_ContentPresenter"><Setter Property="Background" Value="{StaticResource AccentSoft}" /></Style>
+
+    <!-- List view rows -->
+    <Style Selector="Button.row-game">
+      <Setter Property="HorizontalAlignment" Value="Stretch" /><Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Padding" Value="10" /><Setter Property="CornerRadius" Value="12" /><Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="2" /><Setter Property="BorderBrush" Value="Transparent" /><Setter Property="FocusAdorner" Value="{x:Null}" />
+    </Style>
+    <Style Selector="Button.row-game:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.row-game:focus /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource Surface}" /><Setter Property="BorderBrush" Value="{StaticResource Accent}" />
+    </Style>
+    <Style Selector="Button.row-game:pointerover TextBlock.tile-name, Button.row-game:focus TextBlock.tile-name">
+      <Setter Property="Foreground" Value="{StaticResource Accent}" />
+    </Style>
+
+    <!-- Hero banner -->
+    <Style Selector="Image.hero-art">
+      <Setter Property="Transitions"><Transitions><DoubleTransition Property="Opacity" Duration="0:0:0.35" /></Transitions></Setter>
+    </Style>
+  </UserControl.Styles>
+
+  <UserControl.DataTemplates>
+    <DataTemplate DataType="vm:CloudGameViewModel">
+      <Button Classes="tile-game" Command="{Binding StreamCommand}" CommandParameter="{Binding}" ToolTip.Tip="{Binding Name}">
+        <StackPanel Spacing="8">
+          <c:AspectBox Ratio="1.5">
+          <Panel Classes="cover-wrap">
+          <Border Classes="cover">
+            <Panel>
+              <PathIcon Data="{StaticResource Icon.Cloud}" Width="28" Height="28" Foreground="{StaticResource Faint}" IsVisible="{Binding !HasPoster}" />
+              <Image Source="{Binding Poster}" Stretch="UniformToFill" IsVisible="{Binding HasPoster}" />
+              <Border Classes="chip accent" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8" IsVisible="{Binding FreeToPlay}" Background="#CC0C0E12">
+                <TextBlock Text="Free" />
+              </Border>
+            </Panel>
+          </Border>
+          <Border Classes="ring" />
+          </Panel>
+          </c:AspectBox>
+          <TextBlock Classes="tile-name" Text="{Binding Name}" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Margin="2,0" />
+        </StackPanel>
+      </Button>
+    </DataTemplate>
+  </UserControl.DataTemplates>
+
+  <ScrollViewer>
+    <StackPanel Spacing="0">
+      <!-- Top: a full-width hero for the featured game (most recently played; follows the selection in the row below),
+           with the page title, search and refresh floating over it. Without a featured game (loading, searching) the
+           header simply sits at the top. -->
+      <Panel>
+        <Panel Height="500" IsVisible="{Binding HasFeatured}">
+          <Panel.Background>
+            <SolidColorBrush Color="#0C0E12" />
+          </Panel.Background>
+          <Image Classes="hero-art" Source="{Binding FeaturedArt}" Stretch="UniformToFill"
+                 Opacity="{Binding HasFeaturedArt, Converter={x:Static app:Conv.BoolToOpacity}}" />
+          <!-- Shading: left for the game info, top for the floating header, bottom to blend into the page -->
+          <Border IsHitTestVisible="False">
+            <Border.Background>
+              <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,0%">
+                <GradientStop Color="#E60C0E12" Offset="0" />
+                <GradientStop Color="#990C0E12" Offset="0.35" />
+                <GradientStop Color="#000C0E12" Offset="0.7" />
+              </LinearGradientBrush>
+            </Border.Background>
+          </Border>
+          <Border IsHitTestVisible="False">
+            <Border.Background>
+              <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                <GradientStop Color="#B30C0E12" Offset="0" />
+                <GradientStop Color="#000C0E12" Offset="0.28" />
+                <GradientStop Color="#000C0E12" Offset="0.6" />
+                <GradientStop Color="#FF0C0E12" Offset="1" />
+              </LinearGradientBrush>
+            </Border.Background>
+          </Border>
+          <StackPanel VerticalAlignment="Bottom" Margin="36,0,36,40" Spacing="6" MaxWidth="640" HorizontalAlignment="Left">
+            <TextBlock Classes="label" Foreground="{StaticResource Accent}" Text="CONTINUE PLAYING" />
+            <TextBlock Text="{Binding Featured.Name, FallbackValue=''}" FontSize="44" FontWeight="Bold" LetterSpacing="-0.8" TextWrapping="Wrap" MaxLines="2" />
+            <TextBlock Text="{Binding Featured.Publisher, FallbackValue=''}" FontSize="15" Foreground="#CCFFFFFF" />
+            <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,14,0,0">
+              <Button Classes="primary" Padding="28,12" Command="{Binding PlayFeaturedCommand}">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <PathIcon Data="{StaticResource Icon.Play}" Width="16" Height="16" />
+                  <TextBlock Text="Play" FontSize="16" FontWeight="SemiBold" />
+                </StackPanel>
+              </Button>
+              <Border Classes="chip accent" VerticalAlignment="Center" Background="#B30C0E12" IsVisible="{Binding Featured.FreeToPlay, FallbackValue=False}">
+                <TextBlock Text="Free to play" />
+              </Border>
+            </StackPanel>
+          </StackPanel>
+
+          <!-- Carousel: previous / dots / next -->
+          <StackPanel Orientation="Horizontal" Spacing="14" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,36,44">
+            <Button Classes="round" Command="{Binding PrevHeroCommand}" ToolTip.Tip="Previous">
+              <PathIcon Data="{StaticResource Icon.ChevronLeft}" Width="18" Height="18" />
+            </Button>
+            <ItemsControl ItemsSource="{Binding HeroItems}" VerticalAlignment="Center">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="6" /></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:CloudGameViewModel">
+                  <Button Classes="dot" Classes.on="{Binding IsFeatured}" Focusable="False" ToolTip.Tip="{Binding Name}"
+                          Command="{Binding $parent[UserControl].((vm:CloudViewModel)DataContext).ShowHeroCommand}" CommandParameter="{Binding}" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Button Classes="round" Command="{Binding NextHeroCommand}" ToolTip.Tip="Next">
+              <PathIcon Data="{StaticResource Icon.Chevron}" Width="18" Height="18" />
+            </Button>
+          </StackPanel>
+        </Panel>
+
+        <!-- Header (floats over the hero) -->
+        <Grid ColumnDefinitions="*,Auto" VerticalAlignment="Top" Margin="36,30,36,0">
+          <StackPanel Spacing="4">
+            <TextBlock Classes="h1" Text="Cloud" />
+            <TextBlock Foreground="#D9FFFFFF" Text="Play Xbox Cloud Gaming games without your console." />
+            <TextBlock Classes="caption" Foreground="{StaticResource Accent}" Text="{Binding AccessText}" IsVisible="{Binding Loaded}" />
+          </StackPanel>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Top">
+            <TextBox x:Name="SearchBox" Text="{Binding Search}" Watermark="Search games, publishers, genres" Width="300" IsVisible="{Binding Loaded}" Background="#CC0C0E12"
+                     Height="40" MinHeight="40" Padding="8,0" VerticalContentAlignment="Center" CornerRadius="10">
+              <TextBox.InnerLeftContent>
+                <PathIcon Data="{StaticResource Icon.Search}" Width="14" Height="14" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="{StaticResource Muted}" />
+              </TextBox.InnerLeftContent>
+              <TextBox.InnerRightContent>
+                <Button Classes="icon" Command="{Binding ClearSearchCommand}" IsVisible="{Binding IsFiltering}" ToolTip.Tip="Clear (Esc)" Margin="0,0,4,0" VerticalAlignment="Center">
+                  <PathIcon Data="{StaticResource Icon.Close}" Width="12" Height="12" />
+                </Button>
+              </TextBox.InnerRightContent>
+            </TextBox>
+            <Button Classes="ghost" Command="{Binding RefreshCommand}" IsEnabled="{Binding !IsLoading}" Background="#CC0C0E12"
+                    Width="40" Height="40" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                    ToolTip.Tip="Refresh library" AutomationProperties.Name="Refresh library">
+              <PathIcon Data="{StaticResource Icon.Refresh}" Width="16" Height="16" />
+            </Button>
+          </StackPanel>
+        </Grid>
+      </Panel>
+
+    <StackPanel Margin="36,28,36,36" Spacing="24" MaxWidth="1600">
+      <!-- Problem (no Game Pass / region) -->
+      <Border Classes="banner bad" IsVisible="{Binding HasError}">
+        <Grid ColumnDefinitions="Auto,*">
+          <PathIcon Data="{StaticResource Icon.Alert}" Foreground="{StaticResource Bad}" Width="16" Height="16" Margin="0,0,10,0" />
+          <TextBlock Grid.Column="1" Text="{Binding Error}" TextWrapping="Wrap" VerticalAlignment="Center" />
+        </Grid>
+      </Border>
+
+      <StackPanel Spacing="12" IsVisible="{Binding IsLoading}">
+        <ProgressBar IsIndeterminate="True" HorizontalAlignment="Stretch" Height="3" MinHeight="3" />
+        <TextBlock Classes="caption" Text="Loading your cloud library…" />
+      </StackPanel>
+
+      <!-- Recently played -->
+      <StackPanel Spacing="12" IsVisible="{Binding HasRecent}">
+        <TextBlock Classes="h2" Text="Recently played" />
+        <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
+          <ItemsControl x:Name="RecentRow" ItemsSource="{Binding Recent}" Margin="2,4,2,10">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="16" /></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+          </ItemsControl>
+        </ScrollViewer>
+      </StackPanel>
+
+      <!-- All games: filters, then a grid of covers or a list -->
+      <StackPanel Spacing="14" IsVisible="{Binding Loaded}">
+        <Grid ColumnDefinitions="*,Auto,Auto">
+          <TextBlock Classes="h2" VerticalAlignment="Center">
+            <Run Text="All games" /><Run Text="  " /><Run Text="{Binding MatchCount}" Foreground="{StaticResource Muted}" FontWeight="Normal" FontSize="14" />
+          </TextBlock>
+          <!-- Sort -->
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2" Margin="0,0,16,0" VerticalAlignment="Center">
+            <TextBlock Classes="caption" Text="Sort" VerticalAlignment="Center" Margin="0,0,6,0" />
+            <Button Classes="seg" Classes.on="{Binding SortRelevance}" Content="Best match" Command="{Binding SetSortCommand}" CommandParameter="Relevance" />
+            <Button Classes="seg" Classes.on="{Binding SortName}" Content="A–Z" Command="{Binding SetSortCommand}" CommandParameter="Name" />
+            <Button Classes="seg" Classes.on="{Binding SortNewest}" Content="Newest" Command="{Binding SetSortCommand}" CommandParameter="Newest" />
+          </StackPanel>
+          <!-- Grid / list -->
+          <Border Grid.Column="2" Background="{StaticResource Surface2}" CornerRadius="10" Padding="3" VerticalAlignment="Center">
+            <StackPanel Orientation="Horizontal" Spacing="2">
+              <Button Classes="seg" Classes.on="{Binding !IsListView}" Command="{Binding ShowGridCommand}" ToolTip.Tip="Grid">
+                <PathIcon Data="{StaticResource Icon.Grid}" Width="15" Height="15" />
+              </Button>
+              <Button Classes="seg" Classes.on="{Binding IsListView}" Command="{Binding ShowListCommand}" ToolTip.Tip="List">
+                <PathIcon Data="{StaticResource Icon.List}" Width="15" Height="15" />
+              </Button>
+            </StackPanel>
+          </Border>
+        </Grid>
+
+        <!-- Genre chips -->
+        <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
+          <ListBox Classes="chips" ItemsSource="{Binding Genres}" SelectedItem="{Binding SelectedGenre}" Margin="0,0,0,6" AutoScrollToSelectedItem="False">
+            <ListBox.ItemsPanel>
+              <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+            </ListBox.ItemsPanel>
+          </ListBox>
+        </ScrollViewer>
+
+        <TextBlock Classes="muted" Text="{Binding ResultText}" IsVisible="{Binding IsFiltering}" TextWrapping="Wrap" />
+
+        <!-- Grid of covers -->
+        <ItemsControl ItemsSource="{Binding Games}" IsVisible="{Binding !IsListView}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate><c:AdaptiveGrid MinItemWidth="150" ColumnSpacing="16" RowSpacing="22" /></ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+        </ItemsControl>
+
+        <!-- List -->
+        <ItemsControl ItemsSource="{Binding Games}" IsVisible="{Binding IsListView}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:CloudGameViewModel">
+              <Button Classes="row-game" Command="{Binding StreamCommand}" CommandParameter="{Binding}">
+                <Grid ColumnDefinitions="Auto,*,Auto">
+                  <Border Width="52" Height="78" CornerRadius="8" ClipToBounds="True" Background="{StaticResource Surface2}">
+                    <Panel>
+                      <PathIcon Data="{StaticResource Icon.Cloud}" Width="18" Height="18" Foreground="{StaticResource Faint}" IsVisible="{Binding !HasPoster}" />
+                      <Image Source="{Binding Poster}" Stretch="UniformToFill" IsVisible="{Binding HasPoster}" />
+                    </Panel>
+                  </Border>
+                  <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center" Spacing="3">
+                    <TextBlock Classes="tile-name" Text="{Binding Name}" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Classes="caption" Text="{Binding Publisher}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Classes="caption faint" Text="{Binding GenreText}" TextTrimming="CharacterEllipsis" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                    <Border Classes="chip accent" IsVisible="{Binding FreeToPlay}"><TextBlock Text="Free" /></Border>
+                    <PathIcon Data="{StaticResource Icon.Play}" Width="16" Height="16" Foreground="{StaticResource Accent}" />
+                  </StackPanel>
+                </Grid>
+              </Button>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <Button Classes="ghost" HorizontalAlignment="Center" Command="{Binding ShowMoreCommand}" IsVisible="{Binding HasMore}" Content="Show more" />
+      </StackPanel>
+    </StackPanel>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

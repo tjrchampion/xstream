@@ -8,7 +8,7 @@ using System.Text.Json.Nodes;
 namespace XStream.App.Services;
 
 /// <summary>
-/// "Playing … via XStream" on Discord, through the Discord app's local IPC (a named pipe on Windows, a
+/// "Playing … via Vexel" on Discord, through the Discord app's local IPC (a named pipe on Windows, a
 /// Unix socket on macOS/Linux). Does nothing if Discord isn't running or no application id is set.
 /// All calls are fire-and-forget and never throw.
 /// </summary>
@@ -16,7 +16,7 @@ public sealed class DiscordPresence : IDisposable
 {
     /// <summary>
     /// The Discord application whose name shows as "Playing …". Create one at discord.com/developers
-    /// (name it "XStream"), then put its Application ID here or in settings.json as "DiscordAppId".
+    /// (name it "Vexel"), then put its Application ID here or in settings.json as "DiscordAppId".
     /// </summary>
     public const string DefaultAppId = "1526590132805959780";
 
