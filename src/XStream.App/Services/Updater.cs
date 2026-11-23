@@ -20,7 +20,7 @@ public sealed class Updater(SettingsStore settings)
     /// Where releases are published. Set this (or "UpdateFeedUrl" in settings.json) to the URL of the latest.json
     /// that scripts/publish-windows.sh writes, e.g. https://github.com/OWNER/xstream/releases/latest/download/latest.json
     /// </summary>
-    public const string DefaultFeed = "";
+    public const string DefaultFeed = "https://github.com/tjrchampion/xstream/releases/latest/download/latest.json";
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
     private readonly SemaphoreSlim _gate = new(1, 1);

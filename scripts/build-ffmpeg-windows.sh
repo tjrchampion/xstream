@@ -4,7 +4,8 @@
 # this one is a few MB, which takes the single-file XStream.exe from ~68 MB to ~30 MB.
 #
 # LGPL (no --enable-gpl / nonfree), shared DLLs: avcodec-NN.dll, avutil-NN.dll, swresample-N.dll.
-# Needs a MinGW-w64 cross compiler and nasm:  macOS: brew install mingw-w64 nasm   Debian/Ubuntu: apt install mingw-w64 nasm
+# Needs a MinGW-w64 cross compiler, nasm and a native C compiler (for FFmpeg's build tools):
+#   macOS: brew install mingw-w64 nasm (plus Xcode command line tools)   Debian/Ubuntu: apt install build-essential mingw-w64 nasm
 # Output: .cache/win-x64/ffmpeg-min/bin/*.dll (publish-windows.sh uses it when present).
 set -euo pipefail
 cd "$(dirname "$0")/.."

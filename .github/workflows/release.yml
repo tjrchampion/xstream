@@ -1,0 +1,100 @@
+# Release build: push a tag like v0.3.0 and this builds, tests and (once SignPath is set up) code-signs
+# XStream.exe, then attaches it to a DRAFT GitHub release. Finish on your own machine with
+#   scripts/finish-release.sh v0.3.0
+# which signs latest.json with the release key (never stored on GitHub) and publishes the release.
+# Draft releases are invisible to the auto-updater, so users only get releases you've finished.
+#
+# Free for public repositories (standard GitHub-hosted runner).
+# SignPath (free for open source, https://signpath.org): add repository secret SIGNPATH_API_TOKEN and
+# repository variable SIGNPATH_ORGANIZATION_ID; the signing step is skipped until then.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g. 0.3.0). Builds an artifact only; no release is created.'
+        required: true
+
+permissions:
+  contents: write   # create the draft release
+  actions: read     # SignPath reads the build artifact
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then V="${GITHUB_REF_NAME#v}"; else V="${{ inputs.version }}"; fi
+          echo "XS_VERSION=$V" >> "$GITHUB_ENV"
+          echo "Building XStream $V"
+
+      - name: Build tools (MinGW-w64 cross compiler for FFmpeg)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential mingw-w64 nasm zip unzip xz-utils pkg-config
+
+      # SDL2/FFmpeg downloads and the minimal FFmpeg build: rebuilt only when the build script changes.
+      - uses: actions/cache@v4
+        with:
+          path: .cache
+          key: natives-${{ hashFiles('scripts/build-ffmpeg-windows.sh', 'scripts/publish-windows.sh') }}
+
+      - name: Patched SIPSorcery (low-latency input channel)
+        run: ./scripts/get-sipsorcery.sh
+
+      - name: Minimal FFmpeg (H.264 + Opus, LGPL)
+        run: ls .cache/win-x64/ffmpeg-min/bin/avcodec-*.dll >/dev/null 2>&1 || ./scripts/build-ffmpeg-windows.sh
+
+      - name: Tests
+        run: dotnet run --project tests/XStream.Tests -c Release
+
+      - name: Build XStream.exe
+        env:
+          XS_REQUIRE_MIN_FFMPEG: '1'   # fail instead of quietly shipping the 100 MB general-purpose FFmpeg
+        run: ./scripts/publish-windows.sh
+
+      - name: Upload unsigned build
+        id: unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: XStream-${{ env.XS_VERSION }}-unsigned
+          path: dist/XStream.exe
+          if-no-files-found: error
+
+      - name: Code-sign with SignPath
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: xstream
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Use the signed exe
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        run: cp signed/XStream.exe dist/XStream.exe
+
+      - name: Upload release build
+        uses: actions/upload-artifact@v4
+        with:
+          name: XStream-${{ env.XS_VERSION }}
+          path: dist/XStream.exe
+
+      - name: Draft GitHub release
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/XStream.exe --draft --generate-notes --title "XStream $XS_VERSION"
+          echo "Draft release created. Finish it with: scripts/finish-release.sh $GITHUB_REF_NAME"

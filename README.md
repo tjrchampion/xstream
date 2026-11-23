@@ -129,7 +129,7 @@ dotnet run --project src/XStream.App   # the launcher
 dotnet run --project tests/XStream.Tests
 ```
 
-**Windows release build:** `./scripts/publish-windows.sh` makes `dist/XStream.exe`, a single self-contained file. It runs on macOS, Linux or Git Bash. Run `./scripts/build-ffmpeg-windows.sh` first (it needs MinGW-w64 and nasm) for a minimal LGPL FFmpeg; that brings the exe down to about 30 MB. The full release process, including code signing and signed update manifests, is in [docs/RELEASING.md](docs/RELEASING.md).
+**Windows release build:** `./scripts/publish-windows.sh` makes `dist/XStream.exe`, a single self-contained file. It runs on macOS, Linux or Git Bash. Run `./scripts/build-ffmpeg-windows.sh` first (it needs MinGW-w64 and nasm) for a minimal LGPL FFmpeg; that brings the exe down to about 30 MB. The full release process (GitHub build, code signing and signed update manifests) is in [docs/RELEASING.md](docs/RELEASING.md). The code-signing policy is in [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
 
 **Command-line client:** useful for testing without the UI:
 

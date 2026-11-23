@@ -30,19 +30,22 @@ if ls "$CACHE"/ffmpeg-min/bin/avcodec-*.dll >/dev/null 2>&1; then
   echo "Using minimal FFmpeg from $CACHE/ffmpeg-min"
   cp "$CACHE"/ffmpeg-min/bin/{avcodec,avutil,swresample}-*.dll "$CACHE/x/natives/"
 else
+  if [ -n "${XS_REQUIRE_MIN_FFMPEG:-}" ]; then echo "Minimal FFmpeg missing: run scripts/build-ffmpeg-windows.sh" >&2; exit 1; fi
   echo "Using the full FFmpeg build (run scripts/build-ffmpeg-windows.sh for a much smaller exe)"
   unzip -q -j -o "$CACHE/ffmpeg.zip" '*/bin/avcodec-*.dll' '*/bin/avutil-*.dll' '*/bin/swresample-*.dll' -d "$CACHE/x/natives"
 fi
 NATIVES="$PWD/$CACHE/x/natives.zip"
 (cd "$CACHE/x/natives" && zip -q -9 "$NATIVES" *.dll)
 
-echo "Publishing single-file XStream.exe (self-contained win-x64)..."
+# Version: from XS_VERSION (the release workflow sets it from the git tag), else the csproj.
+VERSION="${XS_VERSION:-$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' src/XStream.App/XStream.App.csproj | head -1)}"
+echo "Publishing single-file XStream.exe $VERSION (self-contained win-x64)..."
 rm -rf "$OUT" dist/XStream.exe
 # Single file: runtime, app and UI libraries inside the exe; SDL2/FFmpeg ride along as natives.zip and are
 # unpacked on first launch with a progress window (src/XStream.App/Services/NativeBundle.cs).
 dotnet publish src/XStream.App/XStream.App.csproj -c Release -r win-x64 --self-contained true \
   -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true \
-  -p:DebugType=none -p:AllowedReferenceRelatedFileExtensions=none -p:XsTrim=true -p:XsNativeBundle="$NATIVES" -o "$OUT" | grep -E "error|->" || true
+  -p:DebugType=none -p:AllowedReferenceRelatedFileExtensions=none -p:XsTrim=true -p:Version="$VERSION" -p:XsNativeBundle="$NATIVES" -o "$OUT" | grep -E "error|->" || true
 [ -f "$OUT/XStream.exe" ] || { echo "Publish failed: no XStream.exe"; exit 1; }
 EXTRA=$(ls "$OUT" | grep -v '^XStream.exe$' || true)
 [ -z "$EXTRA" ] || echo "Note: extra files next to the exe: $EXTRA"
@@ -69,23 +72,11 @@ else
   echo "Not code-signed (set SIGN_PFX or AZURE_SIGNING_* to sign; see README)."
 fi
 
-# ---- Update manifest: dist/latest.json, signed with the release key ------------------------------------------
-# The app installs an update only if this signature verifies against the public key built into it
-# (src/XStream.Core/Update/UpdateManifest.cs). Publish XStream.exe and latest.json together, with
-# XSTREAM_UPDATE_BASE_URL set to where XStream.exe will be downloadable from (https).
-KEY="${XSTREAM_RELEASE_KEY:-$HOME/.xstream-release/update-signing-private.pem}"
-VERSION=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' src/XStream.App/XStream.App.csproj | head -1)
-if [ -f "$KEY" ] && [ -n "${XSTREAM_UPDATE_BASE_URL:-}" ]; then
-  URL="${XSTREAM_UPDATE_BASE_URL%/}/XStream.exe"
-  SHA=$(shasum -a 256 dist/XStream.exe | cut -d' ' -f1)
-  SIZE=$(wc -c < dist/XStream.exe | tr -d ' ')
-  SIG=$(printf 'xstream-update-v1\n%s\n%s\n%s\n%s' "$VERSION" "$URL" "$SHA" "$SIZE" | openssl dgst -sha256 -sign "$KEY" | base64 | tr -d '\n')
-  NOTES="${XSTREAM_RELEASE_NOTES:-}"
-  printf '{\n  "version": "%s",\n  "url": "%s",\n  "sha256": "%s",\n  "size": %s,\n  "notes": "%s",\n  "signature": "%s"\n}\n' \
-    "$VERSION" "$URL" "$SHA" "$SIZE" "$NOTES" "$SIG" > dist/latest.json
-  echo "Update manifest: dist/latest.json (version $VERSION -> $URL)"
-else
-  echo "No update manifest (set XSTREAM_UPDATE_BASE_URL; release key: $KEY)."
+# ---- Update manifest (local releases): dist/latest.json, signed with the release key ---------------------
+# The GitHub release workflow skips this (the key never leaves your machine): scripts/finish-release.sh
+# signs the manifest for the exe the workflow built. For a fully local release, set XSTREAM_UPDATE_BASE_URL.
+if [ -n "${XSTREAM_UPDATE_BASE_URL:-}" ]; then
+  scripts/make-manifest.sh dist/XStream.exe "$VERSION" "${XSTREAM_UPDATE_BASE_URL%/}/XStream.exe" dist/latest.json
 fi
 
 echo
