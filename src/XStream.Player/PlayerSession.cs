@@ -427,7 +427,7 @@ public sealed class PlayerSession
 
             void Connect(StreamSession s)
             {
-                var p = new XboxPeer(o.Stability);
+                var p = new XboxPeer(o.Stability, live.IceServers);
                 var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
                 VideoPipeline? v = null;
                 if (window is not null && mailbox is not null)
@@ -502,8 +502,9 @@ public sealed class PlayerSession
                     Controller = backend?.Name ?? "none",
                     Audio = audio?.DeviceInfo ?? "off",
                     LowLatencyInput = XboxPeer.UnreliableInputSupported,
-                    Remb = p.RembNegotiated, Nack = p.NackNegotiated, LogPath = logPath,
+                    Remb = p.RembNegotiated, Nack = p.NackNegotiated, LogPath = logPath, Route = p.Route,
                 });
+                overlay?.SetRoute(p.Route);
             }
 
             // Close the live connection (tells the service the session is over) and its decoder.
@@ -707,6 +708,7 @@ public sealed class PlayerSession
         XboxApiException a when a.Message.Contains("Session failed") =>
             "The console refused the session. Check that remote features are on and power mode is Sleep, and that nobody else is streaming from it.",
         XboxApiException a => "Xbox service error: " + a.Message,
+        XStream.WebRtc.ConsoleUnreachableException u => u.Message,
         TimeoutException t => "The console didn't answer in time (" + t.Message + "). Is it on or in Sleep mode?",
         HttpRequestException h => "Network error: " + h.Message,
         _ => ex.Message,

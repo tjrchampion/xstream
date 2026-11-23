@@ -96,5 +96,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/XStream.exe --draft --generate-notes --title "XStream $XS_VERSION"
+          gh release create "$GITHUB_REF_NAME" dist/XStream.exe --draft --generate-notes --title "XStream $XS_VERSION" \
+            --notes "Download **XStream.exe** below and run it (Windows 10/11, x64). Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org)."
           echo "Draft release created. Finish it with: scripts/finish-release.sh $GITHUB_REF_NAME"

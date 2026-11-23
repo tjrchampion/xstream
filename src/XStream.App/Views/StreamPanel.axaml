@@ -220,7 +220,7 @@
       <!-- Details -->
       <Expander Header="Connection details and log" HorizontalAlignment="Stretch">
         <StackPanel Spacing="14">
-          <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" IsVisible="{Binding Info, Converter={x:Static ObjectConverters.IsNotNull}}">
+          <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" IsVisible="{Binding Info, Converter={x:Static ObjectConverters.IsNotNull}}">
             <Grid.Styles>
               <Style Selector="TextBlock"><Setter Property="Margin" Value="0,3" /><Setter Property="FontSize" Value="13" /></Style>
               <Style Selector="TextBlock.k"><Setter Property="Foreground" Value="{StaticResource Muted}" /><Setter Property="Margin" Value="0,3,24,3" /></Style>
@@ -233,6 +233,8 @@
             <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Info.Controller, FallbackValue=–}" />
             <TextBlock Grid.Row="3" Classes="k" Text="Low-latency input" />
             <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Info.LowLatencyInput, FallbackValue=–}" />
+            <TextBlock Grid.Row="6" Classes="k" Text="Route to console" />
+            <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding Info.Route, FallbackValue=–}" TextWrapping="Wrap" />
             <TextBlock Grid.Row="5" Classes="k" Text="Game audio" />
             <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding Info.Audio, FallbackValue=–}" />
             <TextBlock Grid.Row="4" Classes="k" Text="Bitrate caps / resend" />

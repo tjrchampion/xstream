@@ -69,16 +69,33 @@ public sealed class XboxPeer : IAsyncDisposable
 
     public double NowMs => _clock.Elapsed.TotalMilliseconds;
 
-    public XboxPeer(StabilityOptions? options = null)
+    /// <summary>
+    /// Public STUN servers (the Xbox web player uses STUN the same way). They tell us our public address so the
+    /// console can reach us from outside the home network; without them only same-network play works reliably.
+    /// </summary>
+    public static readonly string[] DefaultIceServers = ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"];
+
+    private readonly IReadOnlyList<string> _iceServers;
+
+    /// <param name="iceServers">STUN/TURN servers ("url" or "url;username;password"); null/empty = <see cref="DefaultIceServers"/>.</param>
+    public XboxPeer(StabilityOptions? options = null, IReadOnlyList<string>? iceServers = null)
     {
         _options = options ?? new StabilityOptions();
         Engine = new StabilityEngine(_options);
+        _iceServers = iceServers is { Count: > 0 } ? iceServers : DefaultIceServers;
     }
+
+    /// <summary>How the connection reached the console (set once connected): home network, internet direct, or relayed.</summary>
+    public string Route { get; private set; } = "unknown";
 
     public async Task ConnectAsync(StreamSession session, CancellationToken ct = default)
     {
         _session = session;
-        _pc = new RTCPeerConnection(new RTCConfiguration { X_UseRtpFeedbackProfile = true });
+        _pc = new RTCPeerConnection(new RTCConfiguration
+        {
+            X_UseRtpFeedbackProfile = true,
+            iceServers = _iceServers.Select(RTCIceServer.Parse).ToList(),
+        });
 
         var audio = new MediaStreamTrack(new AudioFormat(AudioCodecsEnum.OPUS, 111, 48000, 2, "minptime=10;useinbandfec=1"),
             MediaStreamStatusEnum.SendRecv);
@@ -116,7 +133,10 @@ public sealed class XboxPeer : IAsyncDisposable
         // here held a healthy 1080p stream at ~10 Mbps all session.
         offer.sdp = SdpTools.PrepareOffer(offer.sdp, (int)_options.MaxKbps);
         await _pc.setLocalDescription(offer);
-        await Task.WhenAny(gathered.Task, Task.Delay(3_000, ct));
+        // Gathering includes asking the STUN servers for our public address (usually well under a second).
+        await Task.WhenAny(gathered.Task, Task.Delay(4_000, ct));
+        lock (local)
+            Log?.Invoke("Local candidates: " + string.Join(", ", local.GroupBy(c => CandidateType(c.Candidate)).Select(g => $"{g.Count()} {g.Key}")));
 
         var answer = await session.ExchangeSdpAsync(offer.sdp, ct);
         RembNegotiated = SdpTools.AnswerSupportsRemb(answer);
@@ -149,8 +169,48 @@ public sealed class XboxPeer : IAsyncDisposable
             catch (Exception ex) { Debug.WriteLine($"Skipping candidate {c.Candidate}: {ex.Message}"); }
         }
 
+        Log?.Invoke("Console candidates: " + string.Join(", ", remote.GroupBy(c => CandidateType(c.Candidate)).Select(g => $"{g.Count()} {g.Key}")));
+
+        // From outside the home network this is where it either finds a path or doesn't: say so plainly.
+        if (!await WaitConnectedAsync(TimeSpan.FromSeconds(20), ct))
+            throw new ConsoleUnreachableException();
+        Route = DescribeRoute();
+        Log?.Invoke("Route: " + Route);
+
         _tick = new Timer(_ => Tick(), null, 100, 100);
         _fastTick = new Timer(_ => FastTick(), null, 10, 10);
+    }
+
+    private static string CandidateType(string candidate)
+    {
+        var parts = candidate.Split(' ');
+        int i = Array.IndexOf(parts, "typ");
+        return i >= 0 && i + 1 < parts.Length ? parts[i + 1] : "unknown";
+    }
+
+    /// <summary>The candidate pair ICE settled on, in plain words.</summary>
+    private string DescribeRoute()
+    {
+        try
+        {
+            var pair = _pc?.GetRtpChannel()?.NominatedEntry;
+            if (pair is null) return "connected";
+            var l = pair.LocalCandidate; var r = pair.RemoteCandidate;
+            string detail = $"{l.type} {l.address} -> {r.type} {r.address}:{r.port}";
+            if (l.type == RTCIceCandidateType.relay || r.type == RTCIceCandidateType.relay) return "Relayed through TURN (" + detail + ")";
+            return IPAddress.TryParse(r.address, out var ip) && IsPrivate(ip)
+                ? "Home network (" + detail + ")"
+                : "Internet, direct (" + detail + ")";
+        }
+        catch { return "connected"; }
+    }
+
+    private static bool IsPrivate(IPAddress ip)
+    {
+        if (ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal || IPAddress.IsLoopback(ip)) return true;
+        if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6) return (ip.GetAddressBytes()[0] & 0xFE) == 0xFC; // fc00::/7
+        var b = ip.GetAddressBytes();
+        return b[0] == 10 || (b[0] == 172 && b[1] is >= 16 and <= 31) || (b[0] == 192 && b[1] == 168) || (b[0] == 100 && b[1] is >= 64 and <= 127);
     }
 
     private void OnRtp(IPEndPoint ep, SDPMediaTypesEnum media, RTPPacket pkt)
@@ -327,3 +387,9 @@ public sealed class XboxPeer : IAsyncDisposable
         if (_session is not null) { try { await _session.StopAsync(); } catch { /* best effort */ } }
     }
 }
+
+/// <summary>The connection to the console never came up (typically: away from home and no path through the routers).</summary>
+public sealed class ConsoleUnreachableException() : Exception(
+    "Couldn't reach the console over the network. If you're away from home: on the Xbox, check Settings → General → " +
+    "Network settings shows NAT type Open or Moderate (turn on UPnP on your home router if it says Strict), and try another " +
+    "network if this one blocks it (some workplaces and mobile carriers do). A TURN server can be added in settings.json for strict networks.");

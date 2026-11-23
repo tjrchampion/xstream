@@ -28,6 +28,7 @@ When you sign in and stream, XStream connects to:
 
 - **Microsoft and Xbox services**, which provide sign-in, your console list, game streaming, your recently played games and what's playing now
 - **the Microsoft Store image service**, for game art
+- **public STUN servers (Google, Cloudflare)**, which see only your internet address. That lets XStream connect to your console when you're away from home.
 - **this project's GitHub releases**, to check for updates (this can be turned off in Settings)
 - **the Discord app on your own computer**, only if it's running and "Show on Discord" is on
 

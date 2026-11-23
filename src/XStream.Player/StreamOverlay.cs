@@ -116,6 +116,14 @@ public sealed class StreamOverlay : IVideoOverlay
         lock (_gate) { _s = s; _dirty = true; }
     }
 
+    private string _route = "";
+    /// <summary>"Home network" / "Internet" / "Relayed", shown under the console name in the menu.</summary>
+    public void SetRoute(string route)
+    {
+        string shortRoute = route.StartsWith("Home") ? "Home network" : route.StartsWith("Internet") ? "Internet" : route.StartsWith("Relayed") ? "Relayed" : "";
+        lock (_gate) { _route = shortRoute; _dirty = true; }
+    }
+
     public void UpdateStats(LiveStats s, (int w, int h) videoSize)
     {
         lock (_gate)
@@ -568,7 +576,7 @@ public sealed class StreamOverlay : IVideoOverlay
         using (var title = Font(Bold, 50, Text)) c.DrawText(Trim(_console, title, lw), lx, y + 62, title);
         var elapsed = DateTime.UtcNow - _started;
         using (var meta = Font(Regular, 24, Muted))
-            c.DrawText($"{s.Profile} · {(elapsed.TotalHours >= 1 ? elapsed.ToString(@"h\:mm\:ss") : elapsed.ToString(@"m\:ss"))}", lx, y + 104, meta);
+            c.DrawText($"{s.Profile} · {(elapsed.TotalHours >= 1 ? elapsed.ToString(@"h\:mm\:ss") : elapsed.ToString(@"m\:ss"))}{(_route.Length > 0 ? " · " + _route : "")}", lx, y + 104, meta);
 
         y += 146;
         var tiles = new (string label, string value, string unit)[]

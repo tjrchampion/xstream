@@ -42,6 +42,8 @@ public sealed record SessionInfo
     public bool Remb { get; init; }
     public bool Nack { get; init; }
     public string LogPath { get; init; } = "";
+    /// <summary>How the stream reached the console: home network, internet direct, or relayed.</summary>
+    public string Route { get; init; } = "";
 }
 
 /// <summary>

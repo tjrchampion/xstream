@@ -33,6 +33,7 @@ XStream streams your Xbox console over your home network. It's built for playing
   - no frames queued for display
 - **Clear feedback:** short messages when the network, frame rate or battery needs attention, and when things are back to normal.
 - **Sharper picture:** an optional halo-free Clarity boost before the picture is scaled to your screen, plus Fit, Fill and Stretch for screens that aren't 16:9.
+- **Play from anywhere:** at home or away. XStream finds a direct path to your console over the internet, and shows which route it's using.
 - **Game audio, party chat, rumble and screenshots.**
 - **Made for the ROG Ally:**
   - runs the 120 Hz panel at the stream's 60 Hz
@@ -80,6 +81,32 @@ From then on, XStream updates itself: new versions download in the background an
 
 > If Windows shows "Windows protected your PC", choose **More info → Run anyway**. This happens with new releases until they build reputation with Microsoft SmartScreen.
 
+**Code signing:** Windows releases are signed through the SignPath Foundation. Free code signing is provided by [SignPath.io](https://about.signpath.io), with the certificate from [SignPath Foundation](https://signpath.org). See the [code signing policy](docs/CODE_SIGNING.md).
+
+### Playing away from home
+
+XStream works over the internet as well as on your home network. You don't need to set anything up in XStream, but your home network has to let the console be reached:
+
+1. On the Xbox, open **Settings → General → Network settings** and check the **NAT type**:
+   - **Open** or **Moderate** works.
+   - **Strict** usually won't connect. Turn on **UPnP** in your home router's settings, then choose **Test NAT type** on the Xbox.
+2. Keep **remote features** on, with power mode on **Sleep**. XStream wakes the console from anywhere.
+3. Away from home, you need a reasonable connection: about 15 Mbps or more, and ideally under about 60 ms ping to home. Choose the **Smooth** profile for patchy networks.
+
+**How it connects:** XStream asks public STUN servers (Google's and Cloudflare's) for its own internet address, then exchanges addresses with the console through Xbox's servers. The two connect directly, and the game stream never passes through anyone else's servers. The stream menu shows the route (*Home network* or *Internet*), and the full details are in the session log.
+
+**If it can't connect away from home**, XStream says so instead of hanging. Some networks block direct connections, notably workplaces, hotels and some mobile carriers. Two ways round that:
+
+- **A VPN back to your home network.** For example, [Tailscale](https://tailscale.com/kb/1019/subnets) or WireGuard with a "subnet router" at home. XStream then sees the console as if you were home.
+- **Your own TURN relay server.** For example [coturn](https://github.com/coturn/coturn). Add it to `settings.json` in `%USERPROFILE%\.xstream` (`~/.xstream` on macOS):
+  ```json
+  "IceServers": [
+    "stun:stun.l.google.com:19302",
+    "turn:turn.example.com:3478;username;password"
+  ]
+  ```
+  The stream then travels through your relay when no direct path exists. That adds a little latency.
+
 ### Controls
 
 | | Controller | Keyboard / touch |
@@ -108,6 +135,7 @@ While the stream menu is open, the console gets no controller input, so you can 
 - **Sign-in:** your sign-in is stored only on your device, in `~/.xstream` (`%USERPROFILE%\.xstream` on Windows), along with your settings, session logs and cached game art. Signing out deletes the sign-in and the cached art.
 - **Services XStream talks to:**
   - Microsoft's sign-in and Xbox services: the console list, streaming, your recently played games and what's playing now
+  - public STUN servers (Google, Cloudflare), which only see your internet address. They tell XStream that address so it can connect to the console from away from home. The game stream doesn't pass through them.
   - the Microsoft Store image service, for game art
   - the update feed
   - the Discord app on your own device, if it's running and the Discord setting is on
@@ -182,6 +210,7 @@ XStream measures the incoming video every 100 ms and reacts before you see a pro
 | Reading and sending input | 1 kHz controller reads, sent on change, over an unordered, never-retransmit data channel (patched SIPSorcery) so a lost packet never holds up the next |
 | Decode and display | Hardware decode on the renderer's own GPU device (zero-copy on Windows), newest frame only, no queued frames, flip-model swap chain |
 | Network | Larger socket receive buffer so keyframe bursts aren't dropped; on Windows, Wi-Fi background scans off and game-class thread scheduling |
+| Away from home | ICE with STUN (public address discovery) plus the console's Teredo-derived IPv4 candidates, for a direct peer-to-peer path; optional TURN relay for strict networks; the chosen route is logged |
 
 The patch tests and the network simulator are in `tests/` and `src/XStream.Sim`.
 

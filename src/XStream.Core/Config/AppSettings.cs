@@ -57,6 +57,11 @@ public sealed record AppSettings
     public bool AutoUpdate { get; init; } = true;
     /// <summary>Release feed (latest.json) override; empty uses the built-in one.</summary>
     public string? UpdateFeedUrl { get; init; }
+    /// <summary>
+    /// STUN/TURN servers for reaching the console from outside the home network ("url" or "url;username;password").
+    /// Empty uses the built-in public STUN servers. Add a TURN server for networks where a direct path is impossible.
+    /// </summary>
+    public string[]? IceServers { get; init; }
     /// <summary>Connect to the last console as soon as XStream opens.</summary>
     public bool AutoConnect { get; init; }
 
