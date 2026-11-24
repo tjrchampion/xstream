@@ -38,9 +38,9 @@ public sealed partial class StreamViewModel : ObservableObject
     ];
     public ObservableCollection<string> LogLines { get; } = [];
 
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasPanel), nameof(IsConnecting), nameof(ShowLoader))] public partial bool IsRunning { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasPanel), nameof(IsConnecting), nameof(ShowLoader), nameof(ShowStartScreen))] public partial bool IsRunning { get; set; }
     [ObservableProperty, NotifyPropertyChangedFor(nameof(HasPanel))] public partial bool HasResult { get; set; }
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(IsConnecting), nameof(ShowLoader))] public partial bool IsStreaming { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(IsConnecting), nameof(ShowLoader), nameof(ShowStartScreen))] public partial bool IsStreaming { get; set; }
     [ObservableProperty] public partial bool IsReconnecting { get; set; }
     [ObservableProperty] public partial bool IsStopping { get; set; }
     /// <summary>The launcher's Settings page is open over a running stream (from "More settings…").</summary>
@@ -70,11 +70,20 @@ public sealed partial class StreamViewModel : ObservableObject
     public bool HasPanel => IsRunning || HasResult;
     public bool IsConnecting => IsRunning && !IsStreaming;
     public bool HasError => Error.Length > 0;
-    partial void OnErrorChanged(string value) { OnPropertyChanged(nameof(HasError)); OnPropertyChanged(nameof(ShowLoader)); }
+    partial void OnErrorChanged(string value) { OnPropertyChanged(nameof(HasError)); OnPropertyChanged(nameof(ShowLoader)); OnPropertyChanged(nameof(ShowStartScreen)); }
 
     // Full-screen connecting screen
     /// <summary>The full-screen connecting screen is up (until the picture arrives, or it fails).</summary>
     public bool ShowLoader => IsConnecting && !HasError;
+    /// <summary>
+    /// The stream never got its picture (it failed, or the stream process closed early). The connecting screen
+    /// stays up and says why, with Try again / Close, on whatever page Stream was pressed. It used to vanish,
+    /// leaving only a result card that exists on the Consoles page: on any other page the start just "flickered".
+    /// </summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ShowStartScreen))] public partial bool StartFailed { get; set; }
+    /// <summary>The full-screen connecting screen is up: connecting, or showing why the start failed.</summary>
+    public bool ShowStartScreen => ShowLoader || StartFailed;
+    private bool _everStreamed, _cancelled;
     /// <summary>Key art from recently played games for the connecting screen.</summary>
     [ObservableProperty] public partial IReadOnlyList<GameArt> Art { get; set; } = [];
     [ObservableProperty] public partial string Tip { get; set; } = "";
@@ -165,6 +174,8 @@ public sealed partial class StreamViewModel : ObservableObject
     {
         if (IsRunning) return;
         Reset();
+        _everStreamed = _cancelled = false;
+        StartFailed = false;
         ConsoleName = name;
         ServerId = serverId;
         ProfileText = profile.ToString();
@@ -185,6 +196,8 @@ public sealed partial class StreamViewModel : ObservableObject
             HasResult = true;
             Error = "Couldn't start the stream: " + ex.Message;
             SetStep(0, StepState.Failed);
+            StartFailed = true;
+            AddLog(Error);
             return;
         }
         RunningChanged?.Invoke(true);
@@ -194,6 +207,7 @@ public sealed partial class StreamViewModel : ObservableObject
     private void Stop()
     {
         if (!IsRunning) return;
+        _cancelled = true;
         IsStopping = true;
         StageText = "Ending the session";
         _launcher.Stop();
@@ -215,6 +229,7 @@ public sealed partial class StreamViewModel : ObservableObject
     private void StreamAgain()
     {
         if (IsRunning || ServerId.Length == 0) return;
+        StartFailed = false;
         StreamAgainRequested?.Invoke(ServerId);
     }
 
@@ -223,6 +238,7 @@ public sealed partial class StreamViewModel : ObservableObject
     {
         if (IsRunning) return;
         HasResult = false;
+        StartFailed = false;
         Reset();
     }
 
@@ -298,13 +314,14 @@ public sealed partial class StreamViewModel : ObservableObject
         {
             StepNumber = Math.Min(step + 1, Steps.Count);
             for (int i = 0; i < Steps.Count; i++) Steps[i].State = i < step ? StepState.Done : i == step ? StepState.Active : StepState.Pending;
-            if (step == 4) { Steps[4].State = StepState.Done; IsStreaming = true; _clock.Start(); _startedAt = DateTime.UtcNow; }
+            if (step == 4) { Steps[4].State = StepState.Done; _everStreamed = true; IsStreaming = true; _clock.Start(); _startedAt = DateTime.UtcNow; }
         }
         if (stage == PlayerStage.Failed)
         {
             Error = message;
             var active = Steps.FirstOrDefault(s => s.State == StepState.Active);
             if (active is not null) active.State = StepState.Failed;
+            if (!_everStreamed && !_cancelled) StartFailed = true;
         }
         AddLog(message);
     }
@@ -347,6 +364,12 @@ public sealed partial class StreamViewModel : ObservableObject
         IsReconnecting = false;
         if (failed && Error.Length == 0 && _stage != PlayerStage.Ended)
             Error = "The stream stopped unexpectedly. The log below may say why.";
+        if (!_everStreamed && !_cancelled)
+        {
+            // Closed before the picture came up, without saying why: never just make the screen disappear.
+            if (Error.Length == 0) Error = "The stream closed before the picture came up. Try again, or save diagnostics so we can see why.";
+            StartFailed = true;
+        }
         HasResult = true;
         RunningChanged?.Invoke(false);
     }

@@ -53,6 +53,9 @@ public sealed class AdaptiveBitrateController
         _lastStableKbps = CapKbps;
     }
 
+    /// <summary>Share of the cap kept when packets come back after an outage.</summary>
+    public double OutageResumeFraction { get; init; } = 0.75;
+
     public double Update(in NetworkSample s)
     {
         double dt = double.IsNaN(_lastSampleMs) ? 100 : Math.Clamp(s.TimeMs - _lastSampleMs, 1, 2000);
@@ -65,6 +68,13 @@ public sealed class AdaptiveBitrateController
             LastReason = "no media";
             return CapKbps;
         }
+
+        // Back after an outage: resume a step lower rather than halving (the gap isn't counted as loss, see
+        // RtpReceiveMonitor.OutageGapMs). The old rate often still fits (home Wi-Fi dropping out for a moment), but
+        // walking away from the router the link really is weaker afterwards, and resuming at the full rate there
+        // froze more (simulator, handheld: Smooth 7.2 -> 8.1 freezes per run).
+        if (s.OutageEnded && now - _lastDecreaseMs > 2_000)
+            Decrease(now, CapKbps * OutageResumeFraction, "after outage");
 
         _lossEwma += (s.LossFraction - _lossEwma) * 0.3;
         double cq = _t.CongestionQueueMs;

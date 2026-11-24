@@ -107,6 +107,6 @@ public sealed class TokenStore(XboxAuth auth, string? path = null)
     public async Task<(XboxStreamingClient client, XboxTokens tokens)> CreateClientAsync(HttpClient http, AppSettings settings, CancellationToken ct = default)
     {
         var t = await GetFreshAsync(ct);
-        return (new XboxStreamingClient(http, t.StreamHost!, t.GsToken!) { Locale = settings.Locale, Resolution = settings.Resolution }, t);
+        return (new XboxStreamingClient(http, t.StreamHost!, t.GsToken!) { Locale = settings.Locale, Resolution = StreamResolutions.Resolve(settings.Resolution) }, t);
     }
 }

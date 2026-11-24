@@ -32,6 +32,10 @@ public sealed class StreamLauncher
     public event Action? OpenSettingsRequested;
     /// <summary>The player went back to the game from the video window (tapped it).</summary>
     public event Action? ReturnedToGame;
+    /// <summary>Where the stream's window was when it closed (windowed only): the launcher reopens there.</summary>
+    public event Action<WindowPlace>? WindowClosedAt;
+    /// <summary>Where the stream's window should open: the launcher window's client area (set by the app).</summary>
+    public Func<WindowPlace?>? Placement { get; set; }
     /// <summary>The watchdog closed a stream that stopped responding (the reason is in the argument).</summary>
     public event Action<string>? Hung;
 
@@ -103,7 +107,8 @@ public sealed class StreamLauncher
     {
         if (Running) throw new InvalidOperationException("A stream is already running.");
         _stopRequested = false;
-        if (StandbyReady && Send(_standby, $"play {serverId}\t{consoleName.Replace('\t', ' ')}"))
+        string place = Placement?.Invoke()?.ToString() ?? "";
+        if (StandbyReady && Send(_standby, $"play {serverId}\t{consoleName.Replace('\t', ' ')}\t{place}"))
         {
             _proc = _standby;
             _standby = null;
@@ -114,7 +119,7 @@ public sealed class StreamLauncher
             return;
         }
         DropStandby();
-        _proc = Spawn(serverId, consoleName);
+        _proc = Spawn(serverId, consoleName, place);
         AllowToFront(_proc);
         ArmWatchdog();
     }
@@ -145,7 +150,7 @@ public sealed class StreamLauncher
         });
     }
 
-    private Process Spawn(string serverId, string? consoleName)
+    private Process Spawn(string serverId, string? consoleName, string place = "")
     {
         var psi = new ProcessStartInfo
         {
@@ -160,6 +165,7 @@ public sealed class StreamLauncher
         psi.ArgumentList.Add(StreamLauncherArgs.ChildCommand);
         psi.ArgumentList.Add(serverId);
         if (consoleName is not null) psi.ArgumentList.Add(consoleName);
+        if (consoleName is not null && place.Length > 0) psi.ArgumentList.Add(place);
 
         var p = new Process { StartInfo = psi, EnableRaisingEvents = true };
         // Only the session process talks to the UI; a standby child only says when it's ready.
@@ -213,6 +219,7 @@ public sealed class StreamLauncher
                 case "open-settings": OpenSettingsRequested?.Invoke(); break;
                 case "returned": ReturnedToGame?.Invoke(); break;
                 case "heartbeat": OnHeartbeat(e.Message); break;
+                case "window" when WindowPlace.Parse(e.Message) is { } w: WindowClosedAt?.Invoke(w); break;
             }
         });
     }

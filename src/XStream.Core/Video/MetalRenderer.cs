@@ -17,6 +17,7 @@ namespace XStream.Core.Video;
 /// </summary>
 internal sealed unsafe class MetalRenderer : IVideoRenderer
 {
+    public float ColorFlags { get; set; }
     private const string Shaders = """
         #include <metal_stdlib>
         using namespace metal;
@@ -49,14 +50,16 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
             return clamp(c + p.sharpen * (4 * c - n - s - e - w), lo, hi);
         }
 
-        // BT.709, limited range (16-235 luma, 16-240 chroma): what the console sends.
-        static float4 toRgb(float y, float2 cbcr)
+        // YUV -> RGB as the stream's SPS says: p.pad bit 0 = full range (else 16-235 luma, 16-240 chroma),
+        // bit 1 = BT.601 matrix (else BT.709). The console normally sends BT.709 limited range.
+        static float4 toRgb(float y, float2 cbcr, constant Params& p)
         {
-            y = (y - 16.0 / 255.0) * (255.0 / 219.0);
-            cbcr = (cbcr - 128.0 / 255.0) * (255.0 / 224.0);
-            float3 rgb = float3(y + 1.5748 * cbcr.y,
-                                y - 0.1873 * cbcr.x - 0.4681 * cbcr.y,
-                                y + 1.8556 * cbcr.x);
+            int f = int(p.pad + 0.5);
+            if ((f & 1) == 0) { y = (y - 16.0 / 255.0) * (255.0 / 219.0); cbcr = (cbcr - 128.0 / 255.0) * (255.0 / 224.0); }
+            else cbcr = cbcr - 128.0 / 255.0;
+            float3 rgb = (f & 2) != 0
+                ? float3(y + 1.402 * cbcr.y, y - 0.344136 * cbcr.x - 0.714136 * cbcr.y, y + 1.772 * cbcr.x)
+                : float3(y + 1.5748 * cbcr.y, y - 0.1873 * cbcr.x - 0.4681 * cbcr.y, y + 1.8556 * cbcr.x);
             return float4(saturate(rgb), 1);
         }
 
@@ -64,14 +67,14 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
                                constant Params& p [[buffer(0)]])
         {
             float2 uv = p.uvOffset + i.uv * p.uvScale;
-            return toRgb(luma(ty, uv, p), tuv.sample(samp, uv).rg);
+            return toRgb(luma(ty, uv, p), tuv.sample(samp, uv).rg, p);
         }
 
         fragment float4 fsI420(VOut i [[stage_in]], texture2d<float> ty [[texture(0)]], texture2d<float> tu [[texture(1)]],
                                texture2d<float> tv [[texture(2)]], constant Params& p [[buffer(0)]])
         {
             float2 uv = p.uvOffset + i.uv * p.uvScale;
-            return toRgb(luma(ty, uv, p), float2(tu.sample(samp, uv).r, tv.sample(samp, uv).r));
+            return toRgb(luma(ty, uv, p), float2(tu.sample(samp, uv).r, tv.sample(samp, uv).r), p);
         }
 
         fragment float4 fsOverlay(VOut i [[stage_in]], texture2d<float> t [[texture(0)]]) { return t.sample(samp, i.uv); }
@@ -398,7 +401,7 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
     private ((int X, int Y, int W, int H) rect, Params prm) Layout(int sharpenLevel, VideoScaling scaling, Func<int, int, int, int, (int X, int Y, int W, int H)> fit)
     {
         (int X, int Y, int W, int H) rect = (0, 0, _outW, _outH);
-        var prm = new Params { TexelX = 1f / Math.Max(1, _w), TexelY = 1f / Math.Max(1, _h), Sharpen = Sharpen.Strength(sharpenLevel) / 16f, ScaleX = 1, ScaleY = 1 };
+        var prm = new Params { TexelX = 1f / Math.Max(1, _w), TexelY = 1f / Math.Max(1, _h), Sharpen = Sharpen.Strength(sharpenLevel) / 16f, Pad = ColorFlags, ScaleX = 1, ScaleY = 1 };
         if (!HasPicture) return (rect, prm);
         if (scaling == VideoScaling.Fill)
         {
@@ -527,6 +530,8 @@ internal interface IVideoRenderer : IDisposable
     string Name { get; }
     bool HasPicture { get; }
     (int W, int H) OutputSize { get; }
+    /// <summary>Colour signalling for the shader: bit 0 full range, bit 1 BT.601 (see <see cref="H264Format"/>).</summary>
+    float ColorFlags { get; set; }
     void Upload(DecodedPicture p);
     void Render(int sharpenLevel, VideoScaling scaling, IVideoOverlay? overlay, Func<IVideoOverlay, byte[]?>? overlayPixels,
         Action<byte[], int, int>? screenshot, Func<int, int, int, int, (int X, int Y, int W, int H)> fit);

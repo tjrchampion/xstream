@@ -20,6 +20,7 @@ namespace XStream.Core.Video;
 /// </summary>
 internal sealed unsafe class D3D11Renderer : IVideoRenderer
 {
+    public float ColorFlags { get; set; }
     private const string Shaders = """
         Texture2D<float>  texY  : register(t0);
         Texture2D<float2> texUV : register(t1);
@@ -62,14 +63,16 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
             return clamp(c + sharpen * (4 * c - n - s - e - w), lo, hi);
         }
 
-        // BT.709, limited range (16-235 luma, 16-240 chroma): what the console sends.
+        // YUV -> RGB as the stream's SPS says: pad bit 0 = full range (else 16-235 luma, 16-240 chroma),
+        // bit 1 = BT.601 matrix (else BT.709). The console normally sends BT.709 limited range.
         float4 ToRgb(float y, float2 cbcr)
         {
-            y = (y - 16.0 / 255.0) * (255.0 / 219.0);
-            cbcr = (cbcr - 128.0 / 255.0) * (255.0 / 224.0);
-            float3 rgb = float3(y + 1.5748 * cbcr.y,
-                                y - 0.1873 * cbcr.x - 0.4681 * cbcr.y,
-                                y + 1.8556 * cbcr.x);
+            int f = (int)(pad + 0.5);
+            if ((f & 1) == 0) { y = (y - 16.0 / 255.0) * (255.0 / 219.0); cbcr = (cbcr - 128.0 / 255.0) * (255.0 / 224.0); }
+            else cbcr = cbcr - 128.0 / 255.0;
+            float3 rgb = (f & 2) != 0
+                ? float3(y + 1.402 * cbcr.y, y - 0.344136 * cbcr.x - 0.714136 * cbcr.y, y + 1.772 * cbcr.x)
+                : float3(y + 1.5748 * cbcr.y, y - 0.1873 * cbcr.x - 0.4681 * cbcr.y, y + 1.8556 * cbcr.x);
             return float4(saturate(rgb), 1);
         }
 
@@ -325,7 +328,7 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
             var prm = new Params
             {
                 TexelX = 1f / _w, TexelY = 1f / _h,
-                Sharpen = Sharpen.Strength(sharpenLevel) / 16f,
+                Sharpen = Sharpen.Strength(sharpenLevel) / 16f, Pad = ColorFlags,
                 ScaleX = 1, ScaleY = 1,
             };
             switch (scaling)

@@ -43,6 +43,9 @@ public static class Diagnostics
         }
         foreach (var crash in logs.GetFiles("crash-*.txt").OrderByDescending(f => f.LastWriteTimeUtc).Take(5))
             zip.CreateEntryFromFile(crash.FullName, "crashes/" + crash.Name);
+        // What the updater did and why (checks, downloads, signature failures, installs).
+        var updates = new FileInfo(Path.Combine(AppPaths.Logs, "updates.log"));
+        if (updates.Exists) zip.CreateEntryFromFile(updates.FullName, "updates.log");
         return path;
     }
 

@@ -258,6 +258,61 @@ var tests = new List<(string name, Action body)>
         True(k.Update(S(1_300, kbps: 10_000), decoderError: true), "re-request while still broken");
         False(k.Update(S(1_400, kbps: 10_000) with { KeyframeSeen = true }), "keyframe arrived");
     }),
+    ("A repeat keyframe request waits for loss to stop, but not for long", () =>
+    {
+        bool lossy = true;
+        var k = new KeyframeRecovery { Lossy = _ => lossy };
+        True(k.Update(S(1_000, kbps: 10_000), decoderError: true), "first request goes out even in loss");
+        False(k.OnPictureLost(1_300, 5), "re-ask held while packets are being lost");
+        True(k.Held, "held");
+        False(k.PollHeld(1_350), "still lossy");
+        lossy = false;
+        True(k.PollHeld(1_360), "sent once the link is calm");
+        lossy = true;
+        False(k.OnPictureLost(1_700, 5), "held again");
+        False(k.PollHeld(1_750), "within the hold limit");
+        True(k.PollHeld(1_800), "sent anyway after 100 ms");
+    }),
+    ("Stream format is read from the SPS (size, profile, colour range and matrix)", () =>
+    {
+        // Made with ffmpeg/x264: 1080p High BT.709 limited range, and 720p Main BT.601 full range.
+        var hd = H264Format.Parse(Convert.FromHexString("6764002aacd940780227e5c05a810100a0000003002000000f01e30632c0"))!;
+        Eq(1920, hd.Width); Eq(1080, hd.Height); Eq(100, hd.Profile); Eq(42, hd.Level);
+        False(hd.FullRange, "limited"); False(hd.Bt601, "709"); Eq(1, hd.Matrix);
+        var sd = H264Format.Parse(Convert.FromHexString("674d4020eca02802dd80b702020640000003004000001e03c60c6580"))!;
+        Eq(1280, sd.Width); Eq(720, sd.Height); Eq(77, sd.Profile);
+        True(sd.FullRange, "full"); True(sd.Bt601, "601");
+        var au = Convert.FromHexString("000000016764002aacd940780227e5c05a810100a0000003002000000f01e30632c00000000168ebe3cb22c0");
+        Eq(1920, H264Format.FromAccessUnit(au)?.Width);
+    }),
+    ("Old settings move to the new quality defaults, chosen values stay", () =>
+    {
+        var old = AppSettings.Migrate(new AppSettings { MaxMbps = 30, StartMbps = 10, Resolution = StreamResolution.Max });
+        Eq(50.0, old.MaxMbps); Eq(20.0, old.StartMbps); Eq(StreamResolution.Auto, old.Resolution);
+        var mine = AppSettings.Migrate(new AppSettings { MaxMbps = 40, StartMbps = 40, Resolution = StreamResolution.R720 });
+        Eq(40.0, mine.MaxMbps); Eq(40.0, mine.StartMbps); Eq(StreamResolution.R720, mine.Resolution);
+        var again = AppSettings.Migrate(old with { MaxMbps = 30 });
+        Eq(30.0, again.MaxMbps); // chosen after the update: not touched again
+    }),
+    ("Window place survives the trip between launcher and stream", () =>
+    {
+        var p = new WindowPlace(-1920, 40, 1280, 800);
+        Eq(p, WindowPlace.Parse(p.ToString()));
+        True(WindowPlace.Parse("") is null, "empty");
+        True(WindowPlace.Parse("1,2,3") is null, "too short");
+        True(WindowPlace.Parse("1,2,0,5") is null, "zero size");
+    }),
+    ("Recent loss: clean, lossy, and silent links", () =>
+    {
+        var l = new RecentLoss();
+        ushort seq = 0; double t = 0;
+        for (int i = 0; i < 200; i++, t += 0.4) l.OnPacket(seq++, t);
+        False(l.IsLossy(t), "clean");
+        for (int i = 0; i < 200; i++, t += 0.4) { l.OnPacket(seq, t); seq += 2; } // every other packet missing
+        True(l.IsLossy(t), "half lost");
+        False(new RecentLoss().IsLossy(0), "no packets yet isn't loss");
+        True(l.IsLossy(t + 40), "nothing arriving for 40 ms");
+    }),
     ("Engine learns whether the console honours caps", () =>
     {
         var honoured = new StabilityEngine(new StabilityOptions { StartKbps = 15_000 });
@@ -632,6 +687,21 @@ var tests = new List<(string name, Action body)>
         True(st.Presented + st.Dropped >= 118, "every frame shown or superseded by a newer one");
         True(st.ArrivalToPresentP50Ms < 8, $"network->screen p50 {st.ArrivalToPresentP50Ms:F2} ms");
     }),
+    ("A total outage isn't counted as packet loss (no bitrate cut when it ends)", () =>
+    {
+        var m = new RtpReceiveMonitor();
+        ushort seq = 0; double t = 0;
+        for (int i = 0; i < 300; i++) m.OnPacket(seq++, (uint)(i * 30), true, 1200, t += 0.35);
+        m.TakeSample(t);
+        seq += 2000; t += 3000;                       // 3 s of nothing, then the stream carries on
+        for (int i = 0; i < 300; i++) m.OnPacket(seq++, (uint)(90_000 + i * 30), true, 1200, t += 0.35);
+        var s = m.TakeSample(t);
+        Eq(0.0, s.LossFraction); Eq(1L, m.Outages); Eq(2000L, m.OutagePackets);
+        // Real loss still counts: a few missing packets in a steady stream.
+        m.OnPacket(seq, 200_000, true, 1200, t + 0.35); m.OnPacket((ushort)(seq + 3), 200_030, true, 1200, t + 0.7);
+        m.OnPacket((ushort)(seq + 4), 200_060, true, 1200, t + 1.0); m.OnPacket((ushort)(seq + 5), 200_090, true, 1200, t + 1.3);
+        True(m.TakeSample(t + 2).LossFraction > 0, "ordinary loss counted");
+    }),
     ("Playout buffer keeps decode order when frames are released together", () =>
     {
         // A resend completes a stalled frame and the frames behind it come out of one drain, all late (due = now).
@@ -812,7 +882,7 @@ var tests = new List<(string name, Action body)>
             var s = new AppSettings { Profile = StreamProfile.Smooth, MaxMbps = 12, StartMbps = 30, VSync = true, LastServerId = "F400" };
             s.Save(path);
             var back = AppSettings.Load(path);
-            Eq(s, back);
+            Eq(s with { SettingsVersion = AppSettings.CurrentVersion }, back); // loading stamps the defaults version
             True(File.ReadAllText(path).Contains("\"Smooth\""), "profile stored by name");
             var o = back.ToStabilityOptions();
             Eq(StreamProfile.Smooth, o.Profile);

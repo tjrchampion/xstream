@@ -19,7 +19,7 @@
 
   <Panel>
     <!-- Signed in: sidebar + page -->
-    <Grid ColumnDefinitions="236,*" IsVisible="{Binding IsSignedIn}" IsEnabled="{Binding !Stream.ShowLoader}">
+    <Grid ColumnDefinitions="236,*" IsVisible="{Binding IsSignedIn}" IsEnabled="{Binding !Stream.ShowStartScreen}">
       <Border Classes="sidebar" Background="{StaticResource Sidebar}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
         <DockPanel Margin="16,22,16,16">
           <!-- Brand -->
@@ -141,6 +141,6 @@
     </Panel>
 
     <!-- Starting a stream: full-screen connecting screen over everything -->
-    <v:ConnectingView DataContext="{Binding Stream}" IsVisible="{Binding ShowLoader}" />
+    <v:ConnectingView DataContext="{Binding Stream}" IsVisible="{Binding ShowStartScreen}" />
   </Panel>
 </Window>

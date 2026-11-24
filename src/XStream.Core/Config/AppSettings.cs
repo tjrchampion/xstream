@@ -13,14 +13,20 @@ public sealed record AppSettings
 {
     public StreamProfile Profile { get; init; } = StreamProfile.Balanced;
     /// <summary>Ceiling the stability engine never asks above.</summary>
-    public double MaxMbps { get; init; } = 30;
+    /// <summary>
+    /// Was 30: on a ROG Ally on good Wi-Fi (4 ms, ~0.1% loss) the stream sat at that cap for a whole 29-minute session,
+    /// i.e. Vexel was holding the console back. The bitrate controller still steers below this on a congested link.
+    /// </summary>
+    public double MaxMbps { get; init; } = 50;
     /// <summary>First request before anything is measured. Lower it if the console ignores bitrate caps.</summary>
-    public double StartMbps { get; init; } = 10;
+    public double StartMbps { get; init; } = 20;
     public bool Fullscreen { get; init; } = true;
     public bool VSync { get; init; }
     public bool HardwareDecode { get; init; } = true;
     /// <summary>Highest resolution to ask for. Max lets the console pick its top tier (1440p, or 4K where offered).</summary>
-    public StreamResolution Resolution { get; init; } = StreamResolution.Max;
+    public StreamResolution Resolution { get; init; } = StreamResolution.Auto;
+    /// <summary>Which defaults this file was written with (see <see cref="Migrate"/>). 0: before 0.4.2.</summary>
+    public int SettingsVersion { get; init; }
     public string Locale { get; init; } = "en-GB";
     /// <summary>Hide the launcher while a stream is running.</summary>
     public bool HideLauncherWhileStreaming { get; init; } = true;
@@ -78,11 +84,30 @@ public sealed record AppSettings
         path ??= AppPaths.Settings;
         for (int attempt = 0; ; attempt++)
         {
-            try { return File.Exists(path) ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), Json) ?? new() : new(); }
+            try { return Migrate(File.Exists(path) ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), Json) ?? new() : new()); }
             catch (JsonException) { return new(); }
             catch (IOException) when (attempt < 5) { Thread.Sleep(15); } // being replaced by the other process
             catch (IOException) { return new(); }
         }
+    }
+
+    public const int CurrentVersion = 2;
+
+    /// <summary>
+    /// Every setting is written to the file, so a changed default never reached anyone who already had one. Settings
+    /// still at an old default move to the new one; anything the user chose is kept.
+    /// </summary>
+    public static AppSettings Migrate(AppSettings s)
+    {
+        if (s.SettingsVersion >= CurrentVersion) return s;
+        if (s.SettingsVersion < 2) // 0.4.2: picture quality to match the Xbox app
+            s = s with
+            {
+                MaxMbps = s.MaxMbps == 30 ? 50 : s.MaxMbps,
+                StartMbps = s.StartMbps == 10 ? 20 : s.StartMbps,
+                Resolution = s.Resolution == StreamResolution.Max ? StreamResolution.Auto : s.Resolution,
+            };
+        return s with { SettingsVersion = CurrentVersion };
     }
 
     /// <summary>

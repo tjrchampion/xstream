@@ -1,3 +1,4 @@
+using XStream.Player;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -79,14 +80,46 @@ public partial class App : Application
             void UpdatePad()
             {
                 // ...and on the connecting screen, so B cancels.
-                if (settings.Current.ControllerNavigation && (!vm.Stream.IsRunning || vm.Stream.IsAway || vm.Stream.ShowLoader)) _pad.Enable();
+                if (settings.Current.ControllerNavigation && (!vm.Stream.IsRunning || vm.Stream.IsAway || vm.Stream.ShowStartScreen)) _pad.Enable();
                 else _pad.Disable();
                 vm.SettingsPage.ControllerStatus = _pad.Available ? $"Controller: {_pad.BackendName}" : "No controller library found";
+            }
+            // One window, not two: the stream opens over the launcher's own window (same place, size and display), the
+            // launcher steps aside when the picture is up, and comes back where the stream's window was.
+            // Screen units: Windows works in physical pixels in both processes (per-monitor DPI aware); on macOS SDL
+            // works in points, i.e. Avalonia's desktop units.
+            double ToSdl() => OperatingSystem.IsWindows() ? 1 : 1 / Math.Max(0.5, window.DesktopScaling);
+            PixelPoint frameOffset = default; // client area's top-left minus the window's position (title bar, border)
+            launcher.Placement = () =>
+            {
+                if (!window.IsVisible || window.WindowState == WindowState.Minimized) return null;
+                var tl = window.PointToScreen(new Point(0, 0));
+                var br = window.PointToScreen(new Point(window.ClientSize.Width, window.ClientSize.Height));
+                frameOffset = new PixelPoint(tl.X - window.Position.X, tl.Y - window.Position.Y);
+                double k = ToSdl();
+                return new WindowPlace((int)Math.Round(tl.X * k), (int)Math.Round(tl.Y * k),
+                    (int)Math.Round((br.X - tl.X) * k), (int)Math.Round((br.Y - tl.Y) * k));
+            };
+            WindowPlace? returnTo = null;
+            launcher.WindowClosedAt += p => returnTo = p;
+            void HideForStream()
+            {
+                if (OperatingSystem.IsWindows()) window.Hide(); // no second taskbar button next to the stream's
+                else window.WindowState = WindowState.Minimized; // macOS: keep it in the Dock's window list
             }
             void ShowLauncher()
             {
                 window.Show();
                 window.WindowState = settings.Current.LauncherFullscreen ? WindowState.FullScreen : WindowState.Normal;
+                if (returnTo is { } p && window.WindowState == WindowState.Normal)
+                {
+                    double k = 1 / ToSdl();
+                    window.Position = new PixelPoint((int)Math.Round(p.X * k) - frameOffset.X, (int)Math.Round(p.Y * k) - frameOffset.Y);
+                    double toDip = OperatingSystem.IsWindows() ? 1 / window.RenderScaling : 1;
+                    window.Width = p.W * toDip;
+                    window.Height = p.H * toDip;
+                }
+                returnTo = null;
                 window.Activate();
             }
             bool fullscreenSetting = settings.Current.LauncherFullscreen;
@@ -110,8 +143,8 @@ public partial class App : Application
                     ShowLauncher();
                     _pad.FocusDefaultSoon();
                 }
-                else if (vm.Stream.IsRunning && settings.Current.HideLauncherWhileStreaming && settings.Current.Fullscreen)
-                    window.WindowState = WindowState.Minimized;
+                else if (vm.Stream.IsStreaming && settings.Current.HideLauncherWhileStreaming)
+                    HideForStream();
             };
 
             // Exit: end a running stream cleanly (the console is told), then close.
@@ -148,14 +181,14 @@ public partial class App : Application
             };
             vm.Stream.PropertyChanged += (_, e) =>
             {
-                if (e.PropertyName == nameof(StreamViewModel.ShowLoader))
+                if (e.PropertyName is nameof(StreamViewModel.ShowLoader) or nameof(StreamViewModel.ShowStartScreen))
                 {
                     UpdatePad();
                     _pad.FocusDefaultSoon();
                 }
                 if (e.PropertyName == nameof(StreamViewModel.IsStreaming) && vm.Stream.IsStreaming
-                    && settings.Current.HideLauncherWhileStreaming && settings.Current.Fullscreen)
-                    window.WindowState = WindowState.Minimized;
+                    && settings.Current.HideLauncherWhileStreaming)
+                    HideForStream();
             };
 
             // Keep a warmed-up stream process ready so Stream starts quickly. It's recycled every 20 minutes
@@ -180,7 +213,7 @@ public partial class App : Application
             Updater.CleanUp();
             var updateTimer = new DispatcherTimer(TimeSpan.FromHours(6), DispatcherPriority.Background, async (_, _) => await vm.Updates.CheckAsync());
             updateTimer.Start();
-            DispatcherTimer.RunOnce(() => _ = vm.Updates.CheckAsync(), TimeSpan.FromSeconds(15));
+            DispatcherTimer.RunOnce(() => _ = vm.Updates.CheckAsync(), TimeSpan.FromSeconds(3));
             vm.RestartRequested += () =>
             {
                 if (vm.Stream.IsRunning) return;

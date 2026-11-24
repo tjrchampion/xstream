@@ -8,9 +8,10 @@ namespace XStream.App.Services;
 /// <summary>
 /// Keeps the Windows build up to date: checks the release feed (latest.json) at launch and every 6 hours,
 /// downloads a newer XStream.exe in the background, verifies its signature and hash (see UpdateManifest),
-/// then offers "Restart to update". Applying swaps the exe in place: the running file is renamed (Windows
-/// allows that), the new one takes its name, it's started, and this copy exits. The old file is deleted on
-/// the next launch. Never touches a running stream.
+/// then offers "Install and restart" (banner, and in Settings). A downloaded update is also installed the next
+/// time Vexel opens (<see cref="TryInstallPending"/>), so quitting and reopening updates too. Installing swaps the
+/// exe in place: the running file is renamed (Windows allows that), the new one takes its name, it's started, and
+/// this copy exits. The old file is deleted on the next launch. Never touches a running stream.
 ///
 /// Only the single-file Windows build updates itself; a dev build (dotnet run) just reports what's available.
 /// </summary>
@@ -39,11 +40,21 @@ public sealed class Updater(SettingsStore settings)
     public string Feed => settings.Current.UpdateFeedUrl is { Length: > 0 } u ? u : DefaultFeed;
     public bool Configured => Feed.Length > 0;
 
-    /// <summary>True when this process is the installed single-file exe that can replace itself.</summary>
+    /// <summary>
+    /// True when this process is the single-file Windows exe, which can replace itself. Whatever the file is called:
+    /// it used to have to be exactly Vexel.exe, so a second browser download ("Vexel (1).exe") never updated and
+    /// never showed an install button.
+    /// </summary>
     public static bool CanSelfUpdate =>
         OperatingSystem.IsWindows() && Environment.ProcessPath is { } p
-        && Path.GetFileName(p) is var n && (n.Equals("Vexel.exe", StringComparison.OrdinalIgnoreCase) || n.Equals("XStream.exe", StringComparison.OrdinalIgnoreCase))
+        && p.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
         && string.IsNullOrEmpty(Assembly.GetEntryAssembly()?.Location); // single-file publish (not dotnet run)
+
+    /// <summary>A verified update is downloaded and this build can install it.</summary>
+    public bool CanInstall => Ready is not null && CanSelfUpdate;
+
+    /// <summary>Where to get the update by hand when this build can't install it itself (e.g. macOS, dev builds).</summary>
+    public const string ReleasesPage = "https://github.com/tjrchampion/xstream/releases/latest";
 
     private static string UpdatesDir => Directory.CreateDirectory(Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "XStream", "updates")).FullName;
@@ -58,10 +69,40 @@ public sealed class Updater(SettingsStore settings)
         catch { /* still locked by a closing process: next time */ }
         try
         {
-            foreach (var f in Directory.EnumerateFiles(UpdatesDir, "*.exe"))
-                if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddDays(-30)) File.Delete(f);
+            foreach (var f in Directory.EnumerateFiles(UpdatesDir))
+            {
+                // Installed (this version or older) or abandoned: no longer needed.
+                bool installed = Path.GetFileNameWithoutExtension(f) is var n && n.StartsWith("Vexel-")
+                                 && Version.TryParse(n["Vexel-".Length..], out var v) && v <= Current;
+                if (installed || File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddDays(-30)) File.Delete(f);
+            }
         }
         catch { }
+    }
+
+    /// <summary>
+    /// At launch, before any window: if an update was downloaded and verified earlier (its manifest is saved next to
+    /// it), install it and start the new version. True = done, this copy should exit. Checks the signature and the
+    /// file's hash again first, so nothing that changed on disk since gets run.
+    /// </summary>
+    public static bool TryInstallPending()
+    {
+        if (!CanSelfUpdate) return false;
+        try
+        {
+            foreach (var json in Directory.EnumerateFiles(UpdatesDir, "Vexel-*.json").OrderByDescending(f => f))
+            {
+                var m = UpdateManifest.Parse(File.ReadAllText(json));
+                string exe = Path.ChangeExtension(json, ".exe");
+                if (!UpdateSignature.Valid(m, out _) || !m.IsNewerThan(Current) || !m.Matches(exe)) continue;
+                Log($"Installing {m.Version}, downloaded earlier, at launch");
+                if (Install(exe, out var error)) return true;
+                Log($"Couldn't install {m.Version} at launch: {error}");
+                return false;
+            }
+        }
+        catch { /* a bad leftover never stops Vexel opening */ }
+        return false;
     }
 
     /// <summary>Check the feed; download and verify a newer version if there is one. Never throws.</summary>
@@ -74,7 +115,12 @@ public sealed class Updater(SettingsStore settings)
         {
             SetStatus("Checking for updates…");
             var manifest = UpdateManifest.Parse(await Http.GetStringAsync(Feed));
-            if (!manifest.SignatureValid()) { SetStatus("Ignored an update that wasn't signed by Vexel."); return; }
+            if (!UpdateSignature.Valid(manifest, out var why))
+            {
+                Log($"Signature check failed for {manifest.Version}: {why ?? "signature doesn't match"} (sig {manifest.Signature?.Length ?? 0} chars, sha {manifest.Sha256})");
+                SetStatus("Ignored an update that wasn't signed by Vexel.");
+                return;
+            }
             if (!manifest.IsNewerThan(Current)) { SetStatus($"Vexel {Current} is up to date."); return; }
             if (!Uri.TryCreate(manifest.Url, UriKind.Absolute, out var url) || (url.Scheme != Uri.UriSchemeHttps && !url.IsLoopback))
             { SetStatus("Ignored an update with an insecure download link."); return; }
@@ -89,16 +135,33 @@ public sealed class Updater(SettingsStore settings)
                     res.EnsureSuccessStatusCode();
                     await using var src = await res.Content.ReadAsStreamAsync();
                     await using var dst = File.Create(part);
-                    await src.CopyToAsync(dst);
+                    var buf = new byte[81920];
+                    long got = 0; int lastPct = -1, n;
+                    while ((n = await src.ReadAsync(buf)) > 0)
+                    {
+                        await dst.WriteAsync(buf.AsMemory(0, n));
+                        got += n;
+                        int pct = manifest.Size > 0 ? (int)(got * 100 / manifest.Size) : 0;
+                        if (pct / 5 != lastPct / 5) { lastPct = pct; SetStatus($"Downloading Vexel {manifest.Version}… {Math.Min(pct, 100)}%"); }
+                    }
                 }
                 File.Move(part, file, overwrite: true);
                 if (!manifest.Matches(file)) { File.Delete(file); SetStatus("The update download was damaged; it'll be retried later."); return; }
             }
+            // Kept next to the exe so the next launch can install it (TryInstallPending re-verifies both).
+            await File.WriteAllTextAsync(Path.ChangeExtension(file, ".json"), System.Text.Json.JsonSerializer.Serialize(manifest));
             _readyFile = file;
             Ready = manifest;
-            SetStatus(CanSelfUpdate ? $"Vexel {manifest.Version} is ready. Restart to update." : $"Vexel {manifest.Version} is available.");
+            SetStatus(CanSelfUpdate
+                ? $"Vexel {manifest.Version} is ready to install. It also installs next time you open Vexel."
+                : $"Vexel {manifest.Version} is available. This build can't update itself: download it from the releases page.");
         }
-        catch (Exception ex) { SetStatus(userAsked ? "Couldn't check for updates: " + ex.Message : ""); }
+        catch (Exception ex)
+        {
+            Log("Check failed: " + ex);
+            // A background check stays quiet in the window, but says why in Settings (it used to say nothing at all).
+            SetStatus("Couldn't check for updates: " + ex.Message);
+        }
         finally { _gate.Release(); }
     }
 
@@ -108,24 +171,43 @@ public sealed class Updater(SettingsStore settings)
     /// </summary>
     public bool ApplyAndRestart()
     {
-        if (Ready is null || _readyFile is null || !CanSelfUpdate || Environment.ProcessPath is not { } self) return false;
+        if (Ready is null || _readyFile is null || !CanSelfUpdate) return false;
+        if (!Ready.Matches(_readyFile)) { SetStatus("The update file changed on disk; downloading it again."); Ready = null; Changed?.Invoke(); return false; }
+        Log($"Installing {Ready.Version} (asked to)");
+        if (Install(_readyFile, out var error)) return true;
+        SetStatus($"Couldn't install the update ({error}). If Vexel is in Program Files, move it to a folder you own.");
+        return false;
+    }
+
+    /// <summary>Swap the running exe for <paramref name="newExe"/> and start it (the caller then exits).</summary>
+    private static bool Install(string newExe, out string? error)
+    {
+        error = null;
+        if (Environment.ProcessPath is not { } self) { error = "unknown exe path"; return false; }
         string old = self + ".old";
         try
         {
-            if (!Ready.Matches(_readyFile)) { SetStatus("The update file changed on disk; downloading it again."); Ready = null; return false; }
             if (File.Exists(old)) File.Delete(old);
             File.Move(self, old);                 // a running exe can be renamed, not overwritten
-            try { File.Copy(_readyFile, self); }
+            try { File.Copy(newExe, self); }
             catch { File.Move(old, self); throw; } // put it back: never leave the user without an exe
             Process.Start(new ProcessStartInfo(self) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(self)! });
             return true;
         }
-        catch (Exception ex)
-        {
-            SetStatus($"Couldn't install the update ({ex.Message}). If Vexel is in Program Files, move it to a folder you own.");
-            return false;
-        }
+        catch (Exception ex) { error = ex.Message; return false; }
     }
 
-    private void SetStatus(string s) { Status = s; Changed?.Invoke(); }
+    private void SetStatus(string s)
+    {
+        if (s.Length > 0 && !s.StartsWith("Downloading", StringComparison.Ordinal) || s.EndsWith(" 100%", StringComparison.Ordinal)) Log(s);
+        Status = s;
+        Changed?.Invoke();
+    }
+
+    /// <summary>logs/updates.log (included in Export diagnostics): what the updater did and why.</summary>
+    private static void Log(string line)
+    {
+        try { File.AppendAllText(Path.Combine(AppPaths.Logs, "updates.log"), $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{Current}] {line}{Environment.NewLine}"); }
+        catch { }
+    }
 }

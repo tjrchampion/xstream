@@ -84,7 +84,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] public partial int ScalingIndex { get; set; }
     public string[] ScalingModes { get; } = ["Fit (whole picture, bars)", "Fill (trim edges, no bars)", "Stretch (no bars, slightly stretched)"];
     partial void OnScalingIndexChanged(int value) => Save(s => s with { Scaling = (XStream.Core.Video.VideoScaling)Math.Clamp(value, 0, 2) });
-    public string[] Resolutions { get; } = ["Maximum (1440p / 4K where offered)", "1080p", "720p (lowest delay, low bandwidth)"];
+    // Listed in this order; the enum's order (Max, R1080, R720, Auto) is what's stored.
+    public string[] Resolutions { get; } = ["Match display (1080p on handhelds, like the Xbox app)", "Maximum (1440p / 4K where offered)", "1080p", "720p (lowest delay, low bandwidth)"];
+    private static readonly XStream.Core.Xbox.StreamResolution[] ResolutionOrder =
+        [XStream.Core.Xbox.StreamResolution.Auto, XStream.Core.Xbox.StreamResolution.Max, XStream.Core.Xbox.StreamResolution.R1080, XStream.Core.Xbox.StreamResolution.R720];
     [ObservableProperty] public partial bool HideLauncherWhileStreaming { get; set; }
     [ObservableProperty] public partial bool ControllerNavigation { get; set; }
     [ObservableProperty] public partial bool LauncherFullscreen { get; set; }
@@ -102,6 +105,17 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Set by the shell.</summary>
     public Updater? Updates { get; set; }
     [RelayCommand] private async Task CheckForUpdates() { if (Updates is not null) await Updates.CheckAsync(userAsked: true); }
+    /// <summary>A verified update is downloaded and can be installed now.</summary>
+    [ObservableProperty] public partial bool CanInstallUpdate { get; set; }
+    /// <summary>A newer version exists but this build can't install it (macOS, dev builds): link to the download.</summary>
+    [ObservableProperty] public partial bool UpdateAvailableElsewhere { get; set; }
+    public event Action? InstallUpdateRequested;
+    [RelayCommand] private void InstallUpdate() => InstallUpdateRequested?.Invoke();
+    [RelayCommand] private void OpenReleasesPage()
+    {
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Updater.ReleasesPage) { UseShellExecute = true }); }
+        catch { UpdateStatus = "Open " + Updater.ReleasesPage + " to download it."; }
+    }
     [ObservableProperty] public partial bool ConnectionAlerts { get; set; }
     partial void OnConnectionAlertsChanged(bool value) => Save(s => s with { ConnectionAlerts = value });
     [ObservableProperty] public partial bool AutoConnect { get; set; }
@@ -143,7 +157,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnFullscreenChanged(bool value) => Save(s => s with { Fullscreen = value });
     partial void OnVSyncChanged(bool value) => Save(s => s with { VSync = value });
     partial void OnHardwareDecodeChanged(bool value) => Save(s => s with { HardwareDecode = value });
-    partial void OnResolutionIndexChanged(int value) => Save(s => s with { Resolution = (XStream.Core.Xbox.StreamResolution)Math.Clamp(value, 0, 2) });
+    partial void OnResolutionIndexChanged(int value) => Save(s => s with { Resolution = ResolutionOrder[Math.Clamp(value, 0, ResolutionOrder.Length - 1)] });
     partial void OnHideLauncherWhileStreamingChanged(bool value) => Save(s => s with { HideLauncherWhileStreaming = value });
     partial void OnControllerNavigationChanged(bool value) => Save(s => s with { ControllerNavigation = value });
 
@@ -201,7 +215,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         Fullscreen = s.Fullscreen;
         VSync = s.VSync;
         HardwareDecode = s.HardwareDecode;
-        ResolutionIndex = (int)s.Resolution;
+        ResolutionIndex = Math.Max(0, Array.IndexOf(ResolutionOrder, s.Resolution));
         ScalingIndex = (int)s.Scaling;
         HideLauncherWhileStreaming = s.HideLauncherWhileStreaming;
         ControllerNavigation = s.ControllerNavigation;

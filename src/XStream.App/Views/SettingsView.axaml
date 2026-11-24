@@ -297,16 +297,21 @@
           <Grid Classes="row" ColumnDefinitions="*,Auto">
             <StackPanel>
               <TextBlock FontWeight="SemiBold" Text="{Binding VersionText}" />
-              <TextBlock Classes="caption" TextWrapping="Wrap" Text="New versions download in the background and install when you restart Vexel. Every update is checked against Vexel's signature first." />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="New versions download in the background. Install one with the button, or it installs the next time you open Vexel. Every update is checked against Vexel's signature first." />
               <TextBlock Classes="caption" Foreground="{StaticResource Accent}" Text="{Binding UpdateStatus}" TextWrapping="Wrap" Margin="0,4,0,0"
                          IsVisible="{Binding UpdateStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             </StackPanel>
-            <Button Grid.Column="1" Classes="ghost" Command="{Binding CheckForUpdatesCommand}" VerticalAlignment="Center">
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <PathIcon Data="{StaticResource Icon.Refresh}" />
-                <TextBlock Text="Check now" />
-              </StackPanel>
-            </Button>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+              <Button Classes="primary" Content="Install and restart" Command="{Binding InstallUpdateCommand}" IsVisible="{Binding CanInstallUpdate}"
+                      IsEnabled="{Binding !Stream.IsRunning}" ToolTip.Tip="Closes Vexel, installs the new version and opens it again (a few seconds)" />
+              <Button Classes="primary" Content="Download" Command="{Binding OpenReleasesPageCommand}" IsVisible="{Binding UpdateAvailableElsewhere}" />
+              <Button Classes="ghost" Command="{Binding CheckForUpdatesCommand}" IsVisible="{Binding !CanInstallUpdate}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <PathIcon Data="{StaticResource Icon.Refresh}" />
+                  <TextBlock Text="Check now" />
+                </StackPanel>
+              </Button>
+            </StackPanel>
           </Grid>
           <Separator />
           <Grid Classes="row" ColumnDefinitions="*,Auto">

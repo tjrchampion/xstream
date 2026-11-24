@@ -49,7 +49,7 @@
     </Panel>
 
     <!-- Game art -->
-    <c:ArtSlideshow x:Name="Slides" Items="{Binding Art}" IsActive="{Binding ShowLoader}" />
+    <c:ArtSlideshow x:Name="Slides" Items="{Binding Art}" IsActive="{Binding ShowStartScreen}" />
 
     <!-- Shading so the text reads on any picture -->
     <Border IsHitTestVisible="False">
@@ -95,13 +95,13 @@
 
         <TextBlock Text="{Binding TargetLabel}" FontSize="18" Foreground="#CCFFFFFF" />
         <TextBlock Text="{Binding ConsoleName}" FontSize="52" FontWeight="Bold" LetterSpacing="-1" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
-        <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,10,0,0">
+        <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,10,0,0" IsVisible="{Binding !StartFailed}">
           <Ellipse Classes="dot good pulse" VerticalAlignment="Center" />
           <TextBlock Text="{Binding LoaderText}" FontSize="16" Foreground="#E6FFFFFF" VerticalAlignment="Center" />
         </StackPanel>
 
         <!-- Progress: one bar that fills through waking, connecting and starting the stream -->
-        <StackPanel Margin="0,30,0,0" Spacing="12">
+        <StackPanel Margin="0,30,0,0" Spacing="12" IsVisible="{Binding !StartFailed}">
           <ProgressBar Classes="loader" Minimum="0" Maximum="1" Value="{Binding Progress}" />
           <Grid ColumnDefinitions="*,*,*">
             <TextBlock Classes="phase on" Text="{Binding FirstPhaseLabel}" />
@@ -120,7 +120,35 @@
         </Border>
 
         <!-- Tip + cancel -->
-        <Grid ColumnDefinitions="*,Auto" Margin="0,30,0,0">
+        <!-- The start failed: say why, right here (whatever page Stream was pressed on) -->
+        <StackPanel IsVisible="{Binding StartFailed}" Margin="0,22,0,0" Spacing="22">
+          <Border Background="#40E5484D" BorderBrush="#99E5484D" BorderThickness="1" CornerRadius="12" Padding="18,14" HorizontalAlignment="Left" MaxWidth="900">
+            <Grid ColumnDefinitions="Auto,*">
+              <PathIcon Data="{StaticResource Icon.Alert}" Width="18" Height="18" Foreground="{StaticResource Bad}" VerticalAlignment="Top" Margin="0,2,12,0" />
+              <StackPanel Grid.Column="1" Spacing="4">
+                <TextBlock Text="Couldn't start the stream" FontSize="16" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding Error}" FontSize="14" Foreground="#E6FFFFFF" TextWrapping="Wrap" />
+              </StackPanel>
+            </Grid>
+          </Border>
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <Button Classes="primary" Command="{Binding StreamAgainCommand}" Padding="18,11">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <PathIcon Data="{StaticResource Icon.Refresh}" Width="14" Height="14" />
+                <TextBlock Text="Try again" />
+              </StackPanel>
+            </Button>
+            <Button Classes="ghost" Command="{Binding ExportDiagnosticsNowCommand}" Background="#40000000" Padding="18,11" Content="Save diagnostics" />
+            <Button Classes="ghost" Command="{Binding DismissCommand}" Background="#40000000" Padding="18,11">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <PathIcon Data="{StaticResource Icon.Close}" Width="14" Height="14" />
+                <TextBlock Text="Close  (B)" />
+              </StackPanel>
+            </Button>
+          </StackPanel>
+        </StackPanel>
+
+        <Grid ColumnDefinitions="*,Auto" Margin="0,30,0,0" IsVisible="{Binding !StartFailed}">
           <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
             <PathIcon Data="{StaticResource Icon.Gamepad}" Width="16" Height="16" Foreground="#99FFFFFF" />
             <c:HintText Hint="{Binding Tip}" FontSize="14" Foreground="#B3FFFFFF" TextWrapping="Wrap" VerticalAlignment="Center" />

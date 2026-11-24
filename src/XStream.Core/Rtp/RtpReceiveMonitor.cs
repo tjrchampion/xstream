@@ -16,7 +16,8 @@ public readonly record struct NetworkSample(
     int BrokenFrames,         // frames with missing packets
     bool KeyframeSeen,
     double RttMs,
-    bool KeyframeInFlight = false); // a keyframe arrived in or just before this window: its size, not the network, can explain queueing
+    bool KeyframeInFlight = false, // a keyframe arrived in or just before this window: its size, not the network, can explain queueing
+    bool OutageEnded = false);     // packets came back after an outage (see RtpReceiveMonitor.OutageGapMs) in this window
 
 /// <summary>
 /// Transport-agnostic RTP video receive statistics. Feed it every RTP video packet
@@ -65,6 +66,20 @@ public sealed class RtpReceiveMonitor
     public double RttMs { get; set; } = 30;
     public long TotalReceived { get; private set; }
     public long TotalLost { get; private set; }
+    /// <summary>
+    /// Nothing at all arriving for this long is an outage (Wi-Fi dropped out, cable pulled), not packet loss: the
+    /// packets missed in it aren't counted as lost. Counted, they read as ~97% loss in the first window after it and
+    /// the bitrate cap was halved (live, 3 and 6 s outages: 40 -> 20 Mbps, ~10 s to climb back) though the link was
+    /// fine again. Congestion that bad builds a queue first, which is measured separately. 1 s, not less: shorter
+    /// silences walking away from the router are the link fading, and still count (the bitrate controller resumes
+    /// 25% lower after a real outage, see AdaptiveBitrateController.OutageResumeFraction).
+    /// </summary>
+    public double OutageGapMs { get; init; } = 1000;
+    /// <summary>Outages seen (silences of <see cref="OutageGapMs"/> or more followed by newer packets).</summary>
+    public long Outages { get; private set; }
+    public long OutagePackets { get; private set; }
+    private double _lastArrivalMs = double.NaN;
+    private bool _outageEndedInWindow;
 
     public RtpReceiveMonitor(int clockRateHz = 90000) => _clockRateKhz = clockRateHz / 1000.0;
 
@@ -74,6 +89,8 @@ public sealed class RtpReceiveMonitor
     {
         if (double.IsNaN(_windowStartMs)) _windowStartMs = arrivalMs;
         if (double.IsNaN(_firstPacketMs)) _firstPacketMs = arrivalMs;
+        double previousArrival = _lastArrivalMs;
+        _lastArrivalMs = arrivalMs;
         TotalReceived++;
         _windowBytes += payloadBytes + 12;
         _windowReceived++;
@@ -90,7 +107,13 @@ public sealed class RtpReceiveMonitor
         }
         else if (ext > _highestExtSeq)
         {
-            for (long s = _highestExtSeq + 1; s < ext; s++) _missing.Add(s);
+            if (!double.IsNaN(previousArrival) && arrivalMs - previousArrival >= OutageGapMs)
+            {
+                Outages++;
+                OutagePackets += ext - _highestExtSeq - 1; // not loss: see OutageGapMs
+                _outageEndedInWindow = true;
+            }
+            else for (long s = _highestExtSeq + 1; s < ext; s++) _missing.Add(s);
             _highestExtSeq = ext;
         }
         else
@@ -198,7 +221,9 @@ public sealed class RtpReceiveMonitor
             _completeFrames, _brokenFrames, _keySeen, RttMs,
             // A 1440p keyframe is 200-400 KB: the console paces it out over tens to hundreds of ms and the frames
             // behind it wait, which reads as queueing although the network is fine. Allow 300 ms to drain.
-            _keyframeInWindow || nowMs - _keyframeLastMs < 300);
+            _keyframeInWindow || nowMs - _keyframeLastMs < 300,
+            _outageEndedInWindow);
+        _outageEndedInWindow = false;
 
         _windowStartMs = nowMs;
         _windowBytes = 0;

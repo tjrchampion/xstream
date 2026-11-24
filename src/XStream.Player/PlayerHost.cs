@@ -22,7 +22,7 @@ public static class PlayerHost
     /// <summary>Server-id prefix that means "Xbox Cloud Gaming, this title" (e.g. cloud:FORTNITE).</summary>
     public const string CloudPrefix = "cloud:";
 
-    public static int RunChild(string serverId, string? consoleName = null)
+    public static int RunChild(string serverId, string? consoleName = null, string? place = null)
     {
         var output = Console.Out;
         var gate = new object();
@@ -46,6 +46,7 @@ public static class PlayerHost
             var parts = line[5..].Split('\t');
             serverId = parts[0].Trim();
             consoleName = parts.Length > 1 ? parts[1] : null;
+            place = parts.Length > 2 ? parts[2] : null;
             startup.Restart();
         }
 
@@ -110,8 +111,14 @@ public static class PlayerHost
         async Task<XboxStreamingClient> Refresh() => cloudTitle is null
             ? (await store.CreateClientAsync(http, AppSettings.Load())).client
             : (await store.CreateCloudClientAsync(http, AppSettings.Load())).client;
-        return session.Run(PlayerOptions.From(settings, serverId) with { ConsoleName = consoleName ?? "Xbox", CloudTitleId = cloudTitle }, client,
+        int code = session.Run(PlayerOptions.From(settings, serverId) with
+            {
+                ConsoleName = consoleName ?? "Xbox", CloudTitleId = cloudTitle, Place = WindowPlace.Parse(place),
+            }, client,
             async () => await auth.GetTransferTokenAsync(store.Load() ?? tokens), Refresh);
+        // Tell the launcher where the (windowed) video was, so it reappears in the same place: one window, not two.
+        if (session.LastWindow is { } last) Emit(new PlayerEvent { Type = "window", Message = last.ToString() });
+        return code;
     }
 
     /// <summary>Do the slow first-time work now: native libraries, sign-in refresh, a warm TLS connection.</summary>

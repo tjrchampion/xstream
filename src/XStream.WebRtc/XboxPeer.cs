@@ -472,9 +472,10 @@ public sealed class XboxPeer : IAsyncDisposable
         _pc?.close();
         if (Depacketizer.FramesDelivered > 0)
             Log?.Invoke($"Loss recovery: {Depacketizer.FramesLost} frames lost, {Depacketizer.FramesSkipped} lost non-reference frames skipped " +
-                        $"without a freeze, {Video.FastKeyframeRequests} keyframes asked for at once; NACKs: {Nacks.Requested} asked, " +
+                        $"without a freeze, {Video.FastKeyframeRequests} keyframes asked for at once, {Engine.KeyframeHolds} repeat requests held until loss eased; NACKs: {Nacks.Requested} asked, " +
                         $"{Nacks.Recovered} recovered, {Nacks.GivenUp} given up, {Nacks.Abandoned} dropped with their frame; " +
-                        $"resend round trip {Nacks.RttEstimateMs:F1} ms");
+                        $"resend round trip {Nacks.RttEstimateMs:F1} ms; " +
+                        $"{Monitor.Outages} outages (nothing arriving for 1+ s, {Monitor.OutagePackets} packets missed, not counted as loss)");
 #if XS_PATCHED_SIPSORCERY
         if (SctpSendDelay.Count > 0)
             Log?.Invoke($"Data channel send delay: {SctpSendDelay.Count} messages, {SctpSendDelay.Over1Ms} waited >1 ms, " +

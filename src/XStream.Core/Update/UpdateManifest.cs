@@ -31,8 +31,12 @@ public sealed record UpdateManifest(string Version, string Url, string Sha256, l
         JsonSerializer.Deserialize<UpdateManifest>(json, Json) ?? throw new InvalidDataException("Empty update manifest");
 
     /// <summary>True if the signature was made by the release key over these fields.</summary>
-    public bool SignatureValid(string publicKeyPem = PublicKeyPem)
+    public bool SignatureValid(string publicKeyPem = PublicKeyPem) => SignatureValid(out _, publicKeyPem);
+
+    /// <param name="why">Why it didn't verify (for the update log): a crypto error, or null for a plain mismatch.</param>
+    public bool SignatureValid(out string? why, string publicKeyPem = PublicKeyPem)
     {
+        why = null;
         try
         {
             using var key = ECDsa.Create();
@@ -43,7 +47,7 @@ public sealed record UpdateManifest(string Version, string Url, string Sha256, l
             return key.VerifyData(data, sig, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence)
                 || key.VerifyData(data, sig, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
         }
-        catch { return false; }
+        catch (Exception ex) { why = ex.GetType().Name + ": " + ex.Message; return false; }
     }
 
     /// <summary>Newer than the running version? (Versions like 1.2.3; anything unparsable counts as not newer.)</summary>

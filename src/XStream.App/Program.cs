@@ -29,8 +29,11 @@ internal static class Program
                 }.ToLine());
                 return 1;
             }
-            return PlayerHost.RunChild(args[1], args.Length > 2 ? args[2] : null);
+            return PlayerHost.RunChild(args[1], args.Length > 2 ? args[2] : null, args.Length > 3 ? args[3] : null);
         }
+
+        // An update downloaded last time: install it and open the new version instead (before any window).
+        if (Services.Updater.TryInstallPending()) return 0;
 
         return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }

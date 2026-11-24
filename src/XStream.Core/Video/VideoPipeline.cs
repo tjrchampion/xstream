@@ -22,6 +22,10 @@ public sealed class VideoPipeline : IDisposable
     private int _n;
 
     public VideoDecoder Decoder => _decoder;
+    /// <summary>The stream's format, from the SPS in its keyframes (null until the first one).</summary>
+    public H264Format? Format { get; private set; }
+    /// <summary>The format changed (first keyframe, or the console switched resolution). Called on the decode thread.</summary>
+    public Action<H264Format>? FormatChanged { get; set; }
     /// <summary>Called on the decode thread for each picture before it goes to the window (testing hooks).</summary>
     public Action<DecodedPicture>? PictureDecoded { get; set; }
 
@@ -73,6 +77,11 @@ public sealed class VideoPipeline : IDisposable
                     // Note when the recording starts on the stream's clock, so stats can be lined up with it.
                     if (_dump.Position == 0) File.WriteAllText(_dump.Name + ".start", _clock().ToString(System.Globalization.CultureInfo.InvariantCulture));
                     _dump.Write(au.Data);
+                }
+                if (au.IsKeyframe && H264Format.FromAccessUnit(au.Data) is { } f && f != Format)
+                {
+                    Format = f;
+                    FormatChanged?.Invoke(f);
                 }
                 long errorsBefore = _decoder.Errors;
                 var pic = _decoder.Decode(au);

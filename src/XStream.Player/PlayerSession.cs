@@ -7,6 +7,21 @@ using XStream.WebRtc;
 
 namespace XStream.Player;
 
+/// <summary>A window's client area in screen coordinates ("x,y,w,h" between the launcher and the stream process).</summary>
+public readonly record struct WindowPlace(int X, int Y, int W, int H)
+{
+    public override string ToString() => FormattableString.Invariant($"{X},{Y},{W},{H}");
+    public static WindowPlace? Parse(string? s)
+    {
+        var p = s?.Split(',');
+        if (p is not { Length: 4 }) return null;
+        var n = new int[4];
+        for (int i = 0; i < 4; i++)
+            if (!int.TryParse(p[i], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out n[i])) return null;
+        return n[2] > 0 && n[3] > 0 ? new WindowPlace(n[0], n[1], n[2], n[3]) : null;
+    }
+}
+
 public sealed record PlayerOptions
 {
     public required string ServerId { get; init; }
@@ -20,6 +35,8 @@ public sealed record PlayerOptions
     /// <summary>No video window: still connects, measures, and logs.</summary>
     public bool Headless { get; init; }
     public string WindowTitle { get; init; } = "Vexel";
+    /// <summary>The launcher window's client area (screen coordinates) to open the video window over; null: centred.</summary>
+    public WindowPlace? Place { get; init; }
     /// <summary>Controller rumble strength, 0-100%.</summary>
     public int RumbleStrength { get; init; } = 100;
     /// <summary>Pass impulse-trigger rumble through (off: main motors only, like the xbox.com client).</summary>
@@ -52,6 +69,9 @@ public sealed record PlayerOptions
 /// </summary>
 public sealed class PlayerSession
 {
+    /// <summary>Where the video window was when the session ended (null: full screen or none): the launcher reopens there.</summary>
+    public WindowPlace? LastWindow { get; private set; }
+
     private readonly ManualResetEventSlim _stop = new();
     private readonly CancellationTokenSource _cts = new();
 
@@ -188,6 +208,8 @@ public sealed class PlayerSession
                     window = new VideoWindow(mailbox, Now, new VideoWindowOptions
                     {
                         Title = o.WindowTitle, Fullscreen = o.Fullscreen, VSync = o.VSync, StartHidden = true,
+                        X = o.Place?.X, Y = o.Place?.Y,
+                        Width = o.Place is { W: >= 320 } p ? p.W : 1280, Height = o.Place is { H: >= 200 } q ? q.H : 720,
                     });
                     window.Sharpen = o.Sharpen;
                     window.Scaling = o.Scaling;
@@ -476,6 +498,8 @@ public sealed class PlayerSession
                         v.PictureDecoded = probe.OnPicture;
                         probe.Start(m => Log?.Invoke(m));
                     }
+                    var win = window;
+                    v.FormatChanged = f => { win.Format = f; Log?.Invoke("Video stream: " + f); };
                     p.FrameQueued += () => { if (!ending && p == cur) v.Notify(); };
                     p.DecoderErrorSource = v.TakeDecodeError;
                 }
@@ -706,6 +730,7 @@ public sealed class PlayerSession
                 Log?.Invoke($"Audio: {audio.PacketsDecoded} packets played; lost packets {audio.PacketsRecovered} rebuilt (FEC), {audio.PacketsConcealed} concealed, {audio.PacketsSkipped} skipped; " +
                              $"{audio.CaughtUpMs:F0} ms of built-up lag removed, {audio.Resyncs} resets");
             audio?.Dispose();
+            LastWindow = window?.WindowedRect is { } r ? new WindowPlace(r.X, r.Y, r.W, r.H) : null;
             window?.Dispose();
             backend?.Dispose();
             AppDomain.CurrentDomain.UnhandledException -= onCrash;

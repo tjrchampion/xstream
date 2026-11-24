@@ -5,8 +5,26 @@ using System.Text.Json.Nodes;
 
 namespace XStream.Core.Xbox;
 
-/// <summary>Resolution the client asks for: Max lets the console send its highest tier (1440p/4K where offered).</summary>
-public enum StreamResolution { Max, R1080, R720 }
+/// <summary>
+/// Resolution the client asks for: Max lets the console send its highest tier (1440p/4K where offered). Auto matches
+/// the screen: 1080p on screens up to 1200 lines (a ROG Ally, most laptops), like the Xbox app, and Max on bigger
+/// ones. Asking a 1080p screen for 1440p spread the same bitrate over 78% more pixels, then scaled them back down.
+/// </summary>
+public enum StreamResolution { Max, R1080, R720, Auto }
+
+public static class StreamResolutions
+{
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
+
+    /// <summary>What <see cref="StreamResolution.Auto"/> asks for on this device.</summary>
+    public static StreamResolution Resolve(StreamResolution r)
+    {
+        if (r != StreamResolution.Auto) return r;
+        int height = 0;
+        try { if (OperatingSystem.IsWindows()) height = GetSystemMetrics(1); } catch { } // SM_CYSCREEN, physical pixels (DPI aware)
+        return height is > 0 and <= 1200 ? StreamResolution.R1080 : StreamResolution.Max;
+    }
+}
 
 public sealed record XboxConsole(string DeviceName, string ServerId, string PowerState, string ConsoleType,
     bool OutOfHomeWarning, bool WirelessWarning);

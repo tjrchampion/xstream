@@ -70,6 +70,26 @@ public sealed class KeyframeRecovery
     /// <summary>Re-ask this soon (at least 4 round trips) while still waiting, even if nothing new broke.</summary>
     public double KeepAskingMs { get; init; } = 500;
 
+    /// <summary>
+    /// The link is losing packets right now (argument: now, ms). While it is, a request is held rather than sent: a
+    /// keyframe is ~5x a normal frame, so in the middle of a loss burst it's lost too, and each one asked for into
+    /// the burst meant another round of waiting (live on a ROG Ally: ~10 keyframes per 4 s Wi-Fi episode, nearly
+    /// all lost). Null: never hold.
+    /// </summary>
+    public Func<double, bool>? Lossy { get; set; }
+    /// <summary>Hold a request at most this long, then send it anyway (a link that never calms down still recovers).</summary>
+    public double MaxHoldMs { get; set; } = 100;
+    /// <summary>
+    /// Hold the first request after a loss too, not just re-asks. Off: in the packet simulator holding the first one
+    /// made on/off loss 60% worse (its keyframe is usually repaired by resends), while holding only re-asks cut the
+    /// 400 ms burst's freezing by a quarter and left the Ally pattern level (20 seeds).
+    /// </summary>
+    public bool HoldFirst { get; set; }
+    private bool _held;
+    private double _heldSinceMs;
+    public bool Held => _held;
+    public int Holds { get; private set; }
+
     /// <param name="decoderError">Set by the decoder when it can't decode (reference frame missing).</param>
     public bool Update(in NetworkSample s, bool decoderError = false)
     {
@@ -102,7 +122,29 @@ public sealed class KeyframeRecovery
         return false;
     }
 
+    /// <summary>Every ~10 ms: send a held request once the link is calm (or it's been held too long).</summary>
+    public bool PollHeld(double now)
+    {
+        if (!_held) return false;
+        if (Lossy?.Invoke(now) == true && now - _heldSinceMs < MaxHoldMs) return false;
+        _held = false;
+        return Send(now);
+    }
+
     private bool Fire(double now)
+    {
+        if (_held) return false; // already waiting for the link to calm down: PollHeld sends it
+        if ((_awaiting || HoldFirst) && Lossy?.Invoke(now) == true)
+        {
+            _held = true;
+            _heldSinceMs = now;
+            Holds++;
+            return false;
+        }
+        return Send(now);
+    }
+
+    private bool Send(double now)
     {
         _lastRequestMs = now;
         if (!_awaiting) _awaitSinceMs = now;

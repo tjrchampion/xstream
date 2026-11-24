@@ -152,6 +152,10 @@ public sealed class PacketSimulation(LossPattern loss, RecoveryOptions recovery,
             new("wifi3", "Poor Wi-Fi, 3% random loss", (r, _) => r.NextDouble() < 0.03),
             Bursty("bursty", "Bursty Wi-Fi (short loss bursts, ~0.5% overall)", 0.001, 0.2, 0.6),
             new("hiccup400", "77% loss for 400 ms every 10 s (the live test)", (r, t) => t % 10_000 is >= 5_000 and < 5_400 && r.NextDouble() < 0.77),
+            // From a real ROG Ally session: 4 s episodes where 100 ms slots alternate ~55% loss / clean.
+            new("ally4s", "Ally Wi-Fi: 4 s of on/off ~55% loss, every 30 s", (r, t) => t % 30_000 is >= 10_000 and < 14_000 && ((int)(t / 100) % 2 == 0) && r.NextDouble() < 0.55),
+            // Same episodes, shaped like a Wi-Fi background scan: the radio leaves the channel for 55 ms in every 100.
+            new("allyscan", "Ally Wi-Fi as scanning: 4 s of 55 ms outages every 100 ms, every 30 s", (r, t) => t % 30_000 is >= 10_000 and < 14_000 && t % 100 < 55),
             new("hiccup100", "30% loss for 100 ms every 5 s", (r, t) => t % 5_000 is >= 2_500 and < 2_600 && r.NextDouble() < 0.30),
         ];
     }

@@ -35,10 +35,16 @@ public sealed record RecoveryOptions
     /// the playout buffer.
     /// </summary>
     public bool CountOnlyLostFrames { get; init; } = true;
+    /// <summary>Hold repeat keyframe requests while packets are being lost (see <see cref="KeyframeRecovery.Lossy"/>).</summary>
+    public bool HoldKeyframeInLoss { get; init; } = true;
+    /// <summary>Hold the first request too (see <see cref="KeyframeRecovery.HoldFirst"/>; off by default).</summary>
+    public bool HoldFirstKeyframe { get; init; }
+    public double MaxKeyframeHoldMs { get; init; } = 100;
 
     public static RecoveryOptions Legacy { get; } = new()
     {
         FastKeyframe = false, ForgetAbandoned = false, NackMinRetryMs = 20, LegacyWait = true, NackMaxTries = 3, CountOnlyLostFrames = false,
+        HoldKeyframeInLoss = false,
     };
 
     /// <summary>From XSTREAM_RECOVERY ("legacy" = the 0.4.0 behaviour); the defaults otherwise.</summary>
@@ -65,7 +71,11 @@ public sealed class VideoReceiver
         _engine = engine;
         Options = options ?? new RecoveryOptions();
         Nacks = new NackGenerator { MinRetryMs = Options.NackMinRetryMs, Backoff = Options.NackBackoff, MaxTries = Options.NackMaxTries };
+        if (Options.HoldKeyframeInLoss) engine.HoldKeyframesWhile(Loss.IsLossy, Options.HoldFirstKeyframe, Options.MaxKeyframeHoldMs);
     }
+
+    /// <summary>Packet loss over the last few tens of milliseconds (decides when a keyframe request is worth sending).</summary>
+    public RecentLoss Loss { get; } = new();
 
     public RecoveryOptions Options { get; }
     public RtpReceiveMonitor Monitor { get; } = new();
@@ -100,6 +110,7 @@ public sealed class VideoReceiver
             RemoteSsrc = ssrc;
             Monitor.OnPacket(seq, timestamp, marker, payload.Length, now, H264.IsKeyframeStart(payload));
             Nacks.OnPacket(seq, now);
+            Loss.OnPacket(seq, now);
             foreach (var au in Depacketizer.Push(seq, timestamp, marker, payload, now)) { Frames.Enqueue(au, au.RtpTimestamp, now); queued++; }
             keyframe = AfterDrain(now, decoderFailed: false);
             // Ask for a lost packet as soon as its reorder wait is over (packets arrive every ~0.3 ms), not at the next
@@ -120,6 +131,7 @@ public sealed class VideoReceiver
         {
             foreach (var au in Depacketizer.Tick(now)) { Frames.Enqueue(au, au.RtpTimestamp, now); queued++; }
             keyframe = AfterDrain(now, decoderFailed);
+            if (Options.HoldKeyframeInLoss && _engine.PollHeldKeyframe(now)) keyframe = true;
             if (NackEnabled) nack = BuildNack(Nacks.Poll(now, Monitor.RttMs));
         }
         Act(queued, nack, keyframe);
@@ -183,5 +195,49 @@ public sealed class VideoReceiver
         if (nack is not null) SendRtcp?.Invoke(nack);
         if (keyframe) { FastKeyframeRequests++; KeyframeNeeded?.Invoke(); }
         for (int i = 0; i < queued; i++) FrameQueued?.Invoke();
+    }
+}
+
+/// <summary>
+/// Loss over the last ~40 ms, from sequence numbers as packets first arrive (resends don't count). Read from other
+/// threads without the receiver's lock (the engine asks while holding its own), so the state is a few plain fields.
+/// </summary>
+public sealed class RecentLoss
+{
+    private const double SliceMs = 10;
+    private const int Slices = 4;
+    private readonly int[] _expected = new int[Slices], _received = new int[Slices];
+    private readonly long[] _slice = new long[Slices];
+    private int _highest = -1;
+    private double _lastPacketMs = double.NaN;
+
+    /// <summary>Over this fraction lost in the window counts as lossy.</summary>
+    public double Threshold { get; init; } = 0.10;
+    /// <summary>Nothing at all for this long counts as lossy too (a burst so heavy nothing gets through).</summary>
+    public double SilenceMs { get; init; } = 25;
+
+    public void OnPacket(ushort seq, double now)
+    {
+        _lastPacketMs = now;
+        if (_highest < 0) { _highest = seq; return; }
+        int diff = (short)(seq - (ushort)_highest);
+        if (diff <= 0) return; // late or resent
+        _highest = seq;
+        long slice = (long)(now / SliceMs);
+        int i = (int)(slice % Slices);
+        if (_slice[i] != slice) { _slice[i] = slice; _expected[i] = 0; _received[i] = 0; }
+        _expected[i] += diff;
+        _received[i]++;
+    }
+
+    public bool IsLossy(double now)
+    {
+        if (double.IsNaN(_lastPacketMs)) return false;
+        if (now - _lastPacketMs > SilenceMs) return true;
+        long slice = (long)(now / SliceMs);
+        int expected = 0, received = 0;
+        for (int i = 0; i < Slices; i++)
+            if (slice - _slice[i] < Slices) { expected += _expected[i]; received += _received[i]; }
+        return expected >= 8 && expected - received > expected * Threshold;
     }
 }

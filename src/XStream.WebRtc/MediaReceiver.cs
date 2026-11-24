@@ -138,6 +138,7 @@ internal sealed class MediaReceiver : IDisposable
                 continue;
             }
             if (n <= 0) continue;
+            if (InOutage()) continue;
 
             try { Dispatch(buf, n, from); }
             catch (Exception ex) { Log?.Invoke("Receive path: dropped a packet (" + ex.Message + ")"); }
@@ -186,6 +187,36 @@ internal sealed class MediaReceiver : IDisposable
             || !uint.TryParse(parts[2], out var pct)) return (long.MaxValue, long.MinValue, 0);
         long from = Stopwatch.GetTimestamp() + (long)(at * Stopwatch.Frequency);
         return (from, from + (long)(ms / 1000 * Stopwatch.Frequency), Math.Min(pct, 100));
+    }
+
+    // XSTREAM_TEST_OUTAGE="seconds,ms[,repeatSeconds]" (testing): drop EVERY incoming packet (video, audio, ICE, DTLS,
+    // RTCP) for that long, like Wi-Fi dropping out, starting that many seconds in and repeating every repeatSeconds.
+    // Incoming only: what we send still reaches the console.
+    private readonly (double at, double ms, double every) _outage = ParseOutage();
+    private readonly long _startedAt = Stopwatch.GetTimestamp();
+    private int _outageLogged = -1;
+
+    private static (double, double, double) ParseOutage()
+    {
+        var parts = Environment.GetEnvironmentVariable("XSTREAM_TEST_OUTAGE")?.Split(',');
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        if (parts is not { Length: 2 or 3 } || !double.TryParse(parts[0], inv, out var at) || !double.TryParse(parts[1], inv, out var ms))
+            return (double.NaN, 0, 0);
+        double every = parts.Length == 3 && double.TryParse(parts[2], inv, out var e) ? e : 0;
+        return (at, ms, every);
+    }
+
+    private bool InOutage()
+    {
+        if (double.IsNaN(_outage.at)) return false;
+        double t = Stopwatch.GetElapsedTime(_startedAt).TotalSeconds - _outage.at;
+        if (t < 0) return false;
+        int k = _outage.every > 0 ? (int)(t / _outage.every) : 0;
+        if (_outage.every <= 0 && t * 1000 >= _outage.ms) return false;
+        double into = t - k * (_outage.every > 0 ? _outage.every : 0);
+        if (into * 1000 >= _outage.ms) return false;
+        if (_outageLogged != k) { _outageLogged = k; Log?.Invoke($"Test mode: network outage now ({_outage.ms:F0} ms, all incoming packets)"); }
+        return true;
     }
 
     private bool TestDrop(ushort seq)

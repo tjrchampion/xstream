@@ -25,6 +25,9 @@ if (args.Contains("--packets"))
     if (args.Contains("--variants"))
         recoveries.AddRange(new (string, RecoveryOptions, StabilityOptions)[]
         {
+            ("no-hold", cur with { HoldKeyframeInLoss = false }, bal),
+            ("hold-first", cur with { HoldFirstKeyframe = true }, bal),
+            ("hold250", cur with { MaxKeyframeHoldMs = 250 }, bal),
             ("backoff", cur with { NackBackoff = true }, bal),
             ("3 tries", cur with { NackMaxTries = 3 }, bal),
             ("keep 500", cur, bal with { KeyframeKeepAskingMs = 500 }),

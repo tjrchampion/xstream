@@ -80,6 +80,12 @@ public sealed record VideoWindowOptions
     /// nothing black covers the launcher's connecting screen while the connection and first keyframe arrive.
     /// </summary>
     public bool StartHidden { get; init; }
+    /// <summary>
+    /// Where to open, in screen coordinates (null: centred). The launcher passes its own window's spot so the stream
+    /// takes over the same window's place (and, full screen, the same display) instead of popping up somewhere else.
+    /// </summary>
+    public int? X { get; init; }
+    public int? Y { get; init; }
 }
 
 /// <summary>Live display numbers.</summary>
@@ -123,6 +129,7 @@ public sealed unsafe class VideoWindow : IDisposable
     [DllImport(Lib)] private static extern int SDL_RenderCopy(IntPtr r, IntPtr t, IntPtr src, IntPtr dst);
     [DllImport(Lib)] private static extern int SDL_GetRendererOutputSize(IntPtr r, out int w, out int h);
     [DllImport(Lib)] private static extern void SDL_GetWindowSize(IntPtr w, out int width, out int height);
+    [DllImport(Lib)] private static extern void SDL_GetWindowPosition(IntPtr w, out int x, out int y);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Rect { public int X, Y, W, H; public Rect(int x, int y, int w, int h) { X = x; Y = y; W = w; H = h; } }
@@ -201,6 +208,12 @@ public sealed unsafe class VideoWindow : IDisposable
     public bool IsFullscreen => _fullscreen;
     /// <summary>Clarity boost level 0-3 (see <see cref="Video.Sharpen"/>). Safe to change from any thread.</summary>
     public int Sharpen { get => _sharpen; set => _sharpen = Math.Clamp(value, 0, 3); }
+
+    /// <summary>The stream's own colour signalling (from its SPS): the GPU renderers convert to RGB to match. Any thread.</summary>
+    public H264Format? Format
+    {
+        set { if (value is not null && _gpu is { } g) g.ColorFlags = (value.FullRange ? 1 : 0) + (value.Bt601 ? 2 : 0); }
+    }
     /// <summary>Fit / Fill / Stretch. Safe to change from any thread; applies on the next frame.</summary>
     public VideoScaling Scaling { get => (VideoScaling)_scaling; set { _scaling = (int)value; _rescaled = true; } }
     private volatile int _scaling;
@@ -237,7 +250,7 @@ public sealed unsafe class VideoWindow : IDisposable
         uint flags = (o.StartHidden ? WindowHidden : WindowShown) | WindowAllowHighDpi | (o.Fullscreen ? WindowFullscreenDesktop : WindowResizable)
                      | (ownMetal ? WindowMetal : 0);
         _hidden = o.StartHidden;
-        _win = SDL_CreateWindow(o.Title, WindowPosCentered, WindowPosCentered, o.Width, o.Height, flags);
+        _win = SDL_CreateWindow(o.Title, o.X ?? WindowPosCentered, o.Y ?? WindowPosCentered, o.Width, o.Height, flags);
         if (_win == IntPtr.Zero) throw new InvalidOperationException("Could not create window: " + Err());
         _fullscreen = o.Fullscreen;
         if (o.Fullscreen) SDL_ShowCursor(0);
@@ -560,6 +573,18 @@ public sealed unsafe class VideoWindow : IDisposable
     }
 
     public void SetTitle(string title) => SDL_SetWindowTitle(_win, title);
+
+    /// <summary>Where the window is (screen coordinates), or null when it's full screen. The launcher reopens there.</summary>
+    public (int X, int Y, int W, int H)? WindowedRect
+    {
+        get
+        {
+            if (_win == IntPtr.Zero || _fullscreen) return null;
+            SDL_GetWindowPosition(_win, out int x, out int y);
+            SDL_GetWindowSize(_win, out int w, out int h);
+            return (x, y, w, h);
+        }
+    }
 
     /// <summary>Stats since the last call (fps) and over the last 512 frames (latency).</summary>
     public DisplayStats TakeStats()

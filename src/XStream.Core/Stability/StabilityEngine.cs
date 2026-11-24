@@ -83,6 +83,19 @@ public sealed class StabilityEngine
         lock (_gate) return _keyframes.OnPictureLost(nowMs, rttMs);
     }
 
+    /// <summary>See <see cref="KeyframeRecovery.Lossy"/>: set by the receive path, which sees every packet.</summary>
+    public void HoldKeyframesWhile(Func<double, bool> lossy, bool holdFirst, double maxHoldMs)
+    {
+        lock (_gate) { _keyframes.Lossy = lossy; _keyframes.HoldFirst = holdFirst; _keyframes.MaxHoldMs = maxHoldMs; }
+    }
+    public int KeyframeHolds { get { lock (_gate) return _keyframes.Holds; } }
+
+    /// <summary>Every ~10 ms: true if a held keyframe request should go out now.</summary>
+    public bool PollHeldKeyframe(double nowMs)
+    {
+        lock (_gate) return _keyframes.PollHeld(nowMs);
+    }
+
     public StabilityDecision Update(in NetworkSample s, bool decoderError = false)
     {
         lock (_gate) return UpdateLocked(s, decoderError);

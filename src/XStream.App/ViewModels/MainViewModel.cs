@@ -23,6 +23,8 @@ public sealed partial class MainViewModel : ObservableObject
         {
             UpdateText = Updates.Ready is { } r && Updater.CanSelfUpdate ? $"Vexel {r.Version} is ready" : "";
             SettingsPage.UpdateStatus = Updates.Status;
+            SettingsPage.CanInstallUpdate = Updates.CanInstall;
+            SettingsPage.UpdateAvailableElsewhere = Updates.Ready is not null && !Updater.CanSelfUpdate;
         });
         Settings = settings;
         Stream = new StreamViewModel(launcher);
@@ -33,6 +35,7 @@ public sealed partial class MainViewModel : ObservableObject
         Sessions = new SessionsViewModel();
         SettingsPage = new SettingsViewModel(settings) { Stream = Stream };
         SettingsPage.Updates = Updates;
+        SettingsPage.InstallUpdateRequested += RestartToUpdate;
 
         Nav =
         [
@@ -119,6 +122,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         if (Stream.IsAway) { Stream.ReturnToGameCommand.Execute(null); return; }
         if (Stream.ShowLoader) { Stream.StopCommand.Execute(null); return; }
+        if (Stream.StartFailed && !Stream.IsRunning) { Stream.DismissCommand.Execute(null); return; }
         if (!IsSignedIn) { SignIn.CancelCommand.Execute(null); return; }
         if (Stream.HasResult && !Stream.IsRunning) { Stream.DismissCommand.Execute(null); return; }
         if (SelectedNav != Nav[0]) SelectedNav = Nav[0];
