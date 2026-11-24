@@ -288,7 +288,9 @@ var tests = new List<(string name, Action body)>
     ("Old settings move to the new quality defaults, chosen values stay", () =>
     {
         var old = AppSettings.Migrate(new AppSettings { MaxMbps = 30, StartMbps = 10, Resolution = StreamResolution.Max });
-        Eq(50.0, old.MaxMbps); Eq(20.0, old.StartMbps); Eq(StreamResolution.Auto, old.Resolution);
+        Eq(50.0, old.MaxMbps); Eq(20.0, old.StartMbps); Eq(StreamResolution.Max, old.Resolution);
+        Eq(StreamResolution.Max, AppSettings.Migrate(new AppSettings { SettingsVersion = 2, Resolution = StreamResolution.Auto }).Resolution); // 0.4.2's default
+        Eq(StreamResolution.R1080, AppSettings.Migrate(new AppSettings { SettingsVersion = 2, Resolution = StreamResolution.R1080 }).Resolution);
         var mine = AppSettings.Migrate(new AppSettings { MaxMbps = 40, StartMbps = 40, Resolution = StreamResolution.R720 });
         Eq(40.0, mine.MaxMbps); Eq(40.0, mine.StartMbps); Eq(StreamResolution.R720, mine.Resolution);
         var again = AppSettings.Migrate(old with { MaxMbps = 30 });

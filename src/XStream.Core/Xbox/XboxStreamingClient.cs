@@ -7,8 +7,8 @@ namespace XStream.Core.Xbox;
 
 /// <summary>
 /// Resolution the client asks for: Max lets the console send its highest tier (1440p/4K where offered). Auto matches
-/// the screen: 1080p on screens up to 1200 lines (a ROG Ally, most laptops), like the Xbox app, and Max on bigger
-/// ones. Asking a 1080p screen for 1440p spread the same bitrate over 78% more pixels, then scaled them back down.
+/// the screen: 1080p on screens up to 1200 lines (a ROG Ally, most laptops) and Max on bigger ones. Max is the
+/// default: on a ROG Ally the Xbox app looked better than 1080p did.
 /// </summary>
 public enum StreamResolution { Max, R1080, R720, Auto }
 

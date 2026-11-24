@@ -127,6 +127,24 @@ public sealed class PlayerSession
     /// <summary>How many times a dropped connection is retried before the stream gives up.</summary>
     public const int ReconnectAttempts = 4;
     private static readonly int[] ReconnectBackoffMs = [0, 2_000, 5_000, 10_000];
+    /// <summary>
+    /// Tries at starting a stream before giving up. A console just woken from Sleep often turns the first session
+    /// down, or its first connection times out, and pressing Stream again worked: live on a ROG Ally it took
+    /// several presses. Now Vexel presses again itself, while the connecting screen stays up.
+    /// </summary>
+    public const int StartAttempts = 4;
+    private static readonly int[] StartBackoffMs = [0, 2_000, 4_000, 6_000];
+
+    /// <summary>Worth trying again: not a sign-in problem, and not the user cancelling.</summary>
+    private bool Retryable(Exception ex) =>
+        !_stop.IsSet && ex is not OperationCanceledException && ex is not XboxApiException { Status: 401 or 403 };
+
+    private bool WaitForRetry(int attempt, string what)
+    {
+        int ms = StartBackoffMs[Math.Min(attempt, StartBackoffMs.Length - 1)];
+        SetStage(PlayerStage.WakingConsole, $"{what} (try {attempt + 1} of {StartAttempts})");
+        return !_stop.Wait(ms);
+    }
 
     /// <returns>0 if the session ran and ended normally, 1 if it failed.</returns>
     /// <param name="refreshClient">Fresh streaming client (sign-in refreshed) for reconnects; the first one may have expired by then.</param>
@@ -160,7 +178,16 @@ public sealed class PlayerSession
                     quiet ? null : OnQueue).GetAwaiter().GetResult();
                 return s;
             }
-            session = OpenSession(client, quiet: false);
+            for (int attempt = 1; ; attempt++)
+            {
+                try { session = OpenSession(client, quiet: false); break; }
+                catch (Exception ex) when (attempt < StartAttempts && Retryable(ex))
+                {
+                    Log?.Invoke($"Start attempt {attempt} failed: {Friendly(ex)}");
+                    if (!WaitForRetry(attempt, o.IsCloud ? "The cloud server isn't ready yet, trying again" : "The console is still waking up, trying again")) throw;
+                    if (refreshClient is not null) client = refreshClient().GetAwaiter().GetResult();
+                }
+            }
 
             SetStage(PlayerStage.Connecting, "Connecting video and controller");
             // A controller-only session looks idle to Windows: keep the screen on and the device awake.
@@ -170,11 +197,9 @@ public sealed class PlayerSession
                 ? XStream.Core.Native.WindowsDisplay.MatchRefreshRate(60)
                 : (null, NoUndo.Instance);
             using var _refresh = refreshUndo;
-            if (refreshChange is not null) Log?.Invoke(refreshChange);
             // Wi-Fi without the once-a-minute scan spikes; game-class scheduling for this (present) thread.
             var (wifiChange, wifiUndo) = XStream.Core.Native.WindowsStreaming.QuietWifi();
             using var _wifi = wifiUndo;
-            if (wifiChange is not null) Log?.Invoke(wifiChange);
             XStream.Core.Native.WindowsStreaming.RaiseProcessPriority();
             using var _mmcss = XStream.Core.Native.WindowsStreaming.GameThread();
             var logPath = Path.Combine(AppPaths.Logs, $"{DateTime.Now:yyyyMMdd-HHmmss}-{profile.ToString().ToLowerInvariant()}.csv");
@@ -184,6 +209,9 @@ public sealed class PlayerSession
             var textLog = new StreamWriter(Path.ChangeExtension(logPath, ".log"), append: false) { AutoFlush = true };
             Action<string> toFile = m => { lock (textLog) { try { textLog.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {m}"); } catch { } } };
             Log += toFile;
+            // Logged only now, so they reach the session's log file (they used to be written before it was open).
+            if (refreshChange is not null) Log?.Invoke(refreshChange);
+            Log?.Invoke(wifiChange ?? "Wi-Fi: no connected Wi-Fi adapter to tune");
             // Settings that can change mid-stream (in-stream menu, or the launcher's Settings page).
             AppSettings live = o.Settings ?? AppSettings.Load();
             // Set once shutdown starts. Timer and network threads can still fire for a moment after that, so
@@ -603,7 +631,23 @@ public sealed class PlayerSession
                 }
             }
 
-            Connect(session);
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    if (attempt > 1) session = OpenSession(client, quiet: true);
+                    Connect(session);
+                    break;
+                }
+                catch (Exception ex) when (attempt < StartAttempts && Retryable(ex))
+                {
+                    Log?.Invoke($"Connect attempt {attempt} failed: {Friendly(ex)}");
+                    if (cur is not null) Disconnect(); else { try { session.StopAsync().Wait(TimeSpan.FromSeconds(5)); } catch { } }
+                    if (!WaitForRetry(attempt, "Couldn't connect yet, trying again")) throw;
+                    try { if (refreshClient is not null) client = refreshClient().GetAwaiter().GetResult(); }
+                    catch (Exception rex) when (Retryable(rex)) { Log?.Invoke("Sign-in refresh failed: " + Friendly(rex)); }
+                }
+            }
             pump?.Start();
             padToastsFrom = DateTime.UtcNow.AddSeconds(3);
             UpdateMic(live.Microphone);

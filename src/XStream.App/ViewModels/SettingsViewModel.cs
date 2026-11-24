@@ -85,9 +85,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     public string[] ScalingModes { get; } = ["Fit (whole picture, bars)", "Fill (trim edges, no bars)", "Stretch (no bars, slightly stretched)"];
     partial void OnScalingIndexChanged(int value) => Save(s => s with { Scaling = (XStream.Core.Video.VideoScaling)Math.Clamp(value, 0, 2) });
     // Listed in this order; the enum's order (Max, R1080, R720, Auto) is what's stored.
-    public string[] Resolutions { get; } = ["Match display (1080p on handhelds, like the Xbox app)", "Maximum (1440p / 4K where offered)", "1080p", "720p (lowest delay, low bandwidth)"];
+    public string[] Resolutions { get; } = ["Maximum (1440p / 4K where offered)", "Match display (1080p on 1080p screens)", "1080p", "720p (lowest delay, low bandwidth)"];
     private static readonly XStream.Core.Xbox.StreamResolution[] ResolutionOrder =
-        [XStream.Core.Xbox.StreamResolution.Auto, XStream.Core.Xbox.StreamResolution.Max, XStream.Core.Xbox.StreamResolution.R1080, XStream.Core.Xbox.StreamResolution.R720];
+        [XStream.Core.Xbox.StreamResolution.Max, XStream.Core.Xbox.StreamResolution.Auto, XStream.Core.Xbox.StreamResolution.R1080, XStream.Core.Xbox.StreamResolution.R720];
     [ObservableProperty] public partial bool HideLauncherWhileStreaming { get; set; }
     [ObservableProperty] public partial bool ControllerNavigation { get; set; }
     [ObservableProperty] public partial bool LauncherFullscreen { get; set; }

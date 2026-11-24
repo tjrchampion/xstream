@@ -29,6 +29,7 @@ public static class WindowsStreaming
         {
             if (WlanOpenHandle(2, IntPtr.Zero, out _, out var h) != 0) return (null, new Undo(null));
             var changed = new List<Guid>();
+            var results = new List<string>();
             if (WlanEnumInterfaces(h, IntPtr.Zero, out var list) == 0)
             {
                 try
@@ -41,15 +42,18 @@ public static class WindowsStreaming
                         var guid = Marshal.PtrToStructure<Guid>(item);
                         if (Marshal.ReadInt32(item + 16 + 512) != WlanInterfaceStateConnected) continue;
                         int off = 0, on = 1;
-                        WlanSetInterface(h, ref guid, WlanIntfOpcodeBackgroundScanEnabled, 4, ref off, IntPtr.Zero);
-                        WlanSetInterface(h, ref guid, WlanIntfOpcodeMediaStreamingMode, 4, ref on, IntPtr.Zero);
+                        int scan = WlanSetInterface(h, ref guid, WlanIntfOpcodeBackgroundScanEnabled, 4, ref off, IntPtr.Zero);
+                        int media = WlanSetInterface(h, ref guid, WlanIntfOpcodeMediaStreamingMode, 4, ref on, IntPtr.Zero);
+                        string name = Marshal.PtrToStringUni(item + 16) ?? "adapter";
+                        results.Add($"{name}: background scanning {(scan == 0 ? "off" : $"NOT off (error {scan})")}, " +
+                                    $"media streaming mode {(media == 0 ? "on" : $"NOT on (error {media})")}");
                         changed.Add(guid);
                     }
                 }
                 finally { WlanFreeMemory(list); }
             }
             if (changed.Count == 0) { WlanCloseHandle(h, IntPtr.Zero); return (null, new Undo(null)); }
-            return ("Wi-Fi: background scanning off, media streaming mode on", new Undo(() =>
+            return ("Wi-Fi: " + string.Join("; ", results), new Undo(() =>
             {
                 foreach (var g in changed)
                 {

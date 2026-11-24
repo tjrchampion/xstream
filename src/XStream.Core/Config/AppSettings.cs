@@ -24,7 +24,11 @@ public sealed record AppSettings
     public bool VSync { get; init; }
     public bool HardwareDecode { get; init; } = true;
     /// <summary>Highest resolution to ask for. Max lets the console pick its top tier (1440p, or 4K where offered).</summary>
-    public StreamResolution Resolution { get; init; } = StreamResolution.Auto;
+    /// <summary>
+    /// Max: the console's top tier (1440p, or 4K where offered), on every device. 0.4.2 asked handhelds for 1080p
+    /// ("Match display"); on a ROG Ally the Xbox app still looked better, so the default is back to the highest.
+    /// </summary>
+    public StreamResolution Resolution { get; init; } = StreamResolution.Max;
     /// <summary>Which defaults this file was written with (see <see cref="Migrate"/>). 0: before 0.4.2.</summary>
     public int SettingsVersion { get; init; }
     public string Locale { get; init; } = "en-GB";
@@ -91,7 +95,7 @@ public sealed record AppSettings
         }
     }
 
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
 
     /// <summary>
     /// Every setting is written to the file, so a changed default never reached anyone who already had one. Settings
@@ -107,6 +111,8 @@ public sealed record AppSettings
                 StartMbps = s.StartMbps == 10 ? 20 : s.StartMbps,
                 Resolution = s.Resolution == StreamResolution.Max ? StreamResolution.Auto : s.Resolution,
             };
+        if (s.SettingsVersion < 3 && s.Resolution == StreamResolution.Auto) // 0.4.3: back to the highest resolution
+            s = s with { Resolution = StreamResolution.Max };
         return s with { SettingsVersion = CurrentVersion };
     }
 
