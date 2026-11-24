@@ -6,7 +6,8 @@
 #
 # Free for public repositories (standard GitHub-hosted runner).
 # SignPath (free for open source, https://signpath.org): add repository secret SIGNPATH_API_TOKEN and
-# repository variable SIGNPATH_ORGANIZATION_ID; the signing step is skipped until then.
+# repository variable SIGNPATH_ORGANIZATION_ID; the signing steps are skipped until then. The SignPath project needs
+# two artifact configurations: "natives" (a zip of DLLs: sign every *.dll inside) and the default one (Vexel.exe).
 name: Release
 
 on:
@@ -45,21 +46,55 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: .cache
-          key: natives-${{ hashFiles('scripts/build-ffmpeg-windows.sh', 'scripts/publish-windows.sh') }}
+          key: natives-${{ hashFiles('scripts/build-ffmpeg-windows.sh', 'scripts/build-opus-windows.sh', 'scripts/publish-windows.sh') }}
 
-      - name: Patched SIPSorcery (low-latency input channel)
+      - name: Patched SIPSorcery (low-latency input, hooks for Vexel's receive path)
         run: ./scripts/get-sipsorcery.sh
 
       - name: Minimal FFmpeg (H.264 + Opus, LGPL)
         run: ls .cache/win-x64/ffmpeg-min/bin/avcodec-*.dll >/dev/null 2>&1 || ./scripts/build-ffmpeg-windows.sh
 
+      - name: libopus (game audio decoder, BSD)
+        run: ls .cache/win-x64/opus/opus.dll >/dev/null 2>&1 || ./scripts/build-opus-windows.sh
+
       - name: Tests
         run: dotnet run --project tests/XStream.Tests -c Release
+
+      # Smart App Control (Windows 11) won't load unsigned DLLs, so the third-party DLLs Vexel ships (SDL2, FFmpeg,
+      # Avalonia's ANGLE) are signed BEFORE they're packed into the exe, then the exe itself is signed.
+      - name: Gather native DLLs
+        env:
+          XS_REQUIRE_MIN_FFMPEG: '1'
+          XS_REQUIRE_OPUS: '1'
+        run: ./scripts/prepare-natives.sh dist/natives
+
+      - name: Upload native DLLs for signing
+        id: natives
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vexel-${{ env.XS_VERSION }}-natives-unsigned
+          path: dist/natives/*.dll
+          if-no-files-found: error
+
+      - name: Code-sign native DLLs with SignPath
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: xstream
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: natives
+          github-artifact-id: ${{ steps.natives.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist/natives-signed
 
       - name: Build Vexel.exe
         env:
           XS_REQUIRE_MIN_FFMPEG: '1'   # fail instead of quietly shipping the 100 MB general-purpose FFmpeg
-        run: ./scripts/publish-windows.sh
+        run: |
+          if [ -d dist/natives-signed ]; then export XS_NATIVES_DIR=dist/natives-signed; else export XS_NATIVES_DIR=dist/natives; fi
+          ./scripts/publish-windows.sh
 
       - name: Upload unsigned build
         id: unsigned

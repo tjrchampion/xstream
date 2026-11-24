@@ -1,7 +1,34 @@
+using System.Buffers;
+
 namespace XStream.Core.Rtp;
 
 /// <summary>One complete H.264 access unit in Annex-B format, ready for a hardware decoder.</summary>
-public sealed record AccessUnit(byte[] Data, uint RtpTimestamp, bool IsKeyframe, double CompletedAtMs);
+public sealed class AccessUnit(byte[] buffer, int length, uint rtpTimestamp, bool isKeyframe, double completedAtMs, bool pooled = false)
+{
+    private byte[]? _buffer = buffer;
+    private readonly bool _pooled = pooled;
+
+    public AccessUnit(byte[] data, uint rtpTimestamp, bool isKeyframe, double completedAtMs)
+        : this(data, data.Length, rtpTimestamp, isKeyframe, completedAtMs) { }
+
+    /// <summary>The frame's bytes (empty once <see cref="Release"/> has been called).</summary>
+    public ReadOnlySpan<byte> Data => _buffer is { } b ? b.AsSpan(0, Length) : default;
+    public int Length { get; } = length;
+    public uint RtpTimestamp { get; } = rtpTimestamp;
+    public bool IsKeyframe { get; } = isKeyframe;
+    public double CompletedAtMs { get; } = completedAtMs;
+
+    /// <summary>
+    /// Done with the bytes (the decoder has copied them): a pooled buffer goes back for the next frame. Frames are
+    /// often over 85 KB at 1440p, and fresh arrays that size land on the large-object heap, whose clean-up is a full
+    /// (slow) garbage collection. A frame that's dropped without being released is simply collected as usual.
+    /// </summary>
+    public void Release()
+    {
+        var b = Interlocked.Exchange(ref _buffer, null);
+        if (b is not null && _pooled) System.Buffers.ArrayPool<byte>.Shared.Return(b);
+    }
+}
 
 /// <summary>
 /// Reassembles H.264 RTP packets (RFC 6184: single NAL, STAP-A, FU-A) into frames, in order,
@@ -14,8 +41,14 @@ public sealed record AccessUnit(byte[] Data, uint RtpTimestamp, bool IsKeyframe,
 /// </summary>
 public sealed class H264Depacketizer
 {
-    private sealed record Pkt(uint Ts, bool Marker, byte[] Payload, double Arrival);
+    // Payloads live in pooled buffers (returned when the packet leaves the store), so steady-state streaming
+    // allocates one exact-size array per frame and little else: fewer garbage collections, fewer frame hitches.
+    private readonly record struct Pkt(uint Ts, bool Marker, byte[] Buf, int Len, double Arrival)
+    {
+        public ReadOnlySpan<byte> Payload => Buf.AsSpan(0, Len);
+    }
 
+    private static readonly AccessUnit[] None = [];
     private readonly SortedDictionary<long, Pkt> _store = new();
     private bool _started;
     private long _highest;
@@ -36,21 +69,48 @@ public sealed class H264Depacketizer
     /// <summary>True once after a frame was lost (consumed by the engine each tick).</summary>
     public bool TakeDecoderError() { bool e = _decoderError; _decoderError = false; return e; }
 
-    public List<AccessUnit> Push(ushort seq, uint ts, bool marker, ReadOnlySpan<byte> payload, double nowMs)
+    public IReadOnlyList<AccessUnit> Push(ushort seq, uint ts, bool marker, ReadOnlySpan<byte> payload, double nowMs)
     {
         long ext = Extend(seq);
         if (ext > _highest || !_started) _highest = ext;
         _started = true;
-        if (ext > _resyncAfter && !_store.ContainsKey(ext)) _store[ext] = new Pkt(ts, marker, payload.ToArray(), nowMs);
+        if (ext > _resyncAfter && !_store.ContainsKey(ext))
+        {
+            var buf = ArrayPool<byte>.Shared.Rent(Math.Max(1, payload.Length));
+            payload.CopyTo(buf);
+            _store[ext] = new Pkt(ts, marker, buf, payload.Length, nowMs);
+        }
         return Drain(nowMs);
     }
 
     /// <summary>Call periodically (e.g. every 5 ms) so lost frames are given up on even when no packets arrive.</summary>
-    public List<AccessUnit> Tick(double nowMs) => Drain(nowMs);
+    public IReadOnlyList<AccessUnit> Tick(double nowMs) => Drain(nowMs);
 
-    private List<AccessUnit> Drain(double now)
+    private void Remove(long seq)
     {
-        var output = new List<AccessUnit>();
+        if (_store.Remove(seq, out var p)) ArrayPool<byte>.Shared.Return(p.Buf);
+    }
+
+    // Explicit loops rather than a predicate: a lambda capturing a local allocates on every call, even when unused.
+    private readonly List<long> _doomed = [];
+
+    private void RemoveBefore(long seq)
+    {
+        foreach (var k in _store.Keys) { if (k >= seq) break; _doomed.Add(k); }
+        foreach (var k in _doomed) Remove(k);
+        _doomed.Clear();
+    }
+
+    private void RemoveOlderThan(double arrivalMs)
+    {
+        foreach (var (k, v) in _store) if (v.Arrival < arrivalMs) _doomed.Add(k);
+        foreach (var k in _doomed) Remove(k);
+        _doomed.Clear();
+    }
+
+    private IReadOnlyList<AccessUnit> Drain(double now)
+    {
+        List<AccessUnit>? output = null;
         while (true)
         {
             if (_expectedStart is null && !Resync()) break;
@@ -71,26 +131,30 @@ public sealed class H264Depacketizer
 
             if (complete && !gap)
             {
-                Emit(s, cur, ts, now, output);
+                Emit(s, cur, ts, now, output ??= []);
                 _expectedStart = cur + 1;
                 continue;
             }
 
-            // Missing packet at 'cur'. Wait for a retransmission unless newer data has waited too long.
-            double oldestAfter = _store.Where(kv => kv.Key > cur).Select(kv => kv.Value.Arrival).DefaultIfEmpty(double.NaN).Min();
+            // The frame simply isn't finished yet (nothing newer has arrived): the usual case, mid-frame.
+            if (cur > _highest) break;
+
+            // Missing packet at 'cur' with newer ones behind it. Wait for a retransmission unless they've waited too long.
+            double oldestAfter = double.NaN;
+            foreach (var (k, v) in _store)
+                if (k > cur && !(v.Arrival >= oldestAfter)) oldestAfter = v.Arrival;
             if (double.IsNaN(oldestAfter) || now - oldestAfter < MaxWaitMs) break;
 
             FramesLost++;
             _chainOk = false;
             _decoderError = true;
             _resyncAfter = cur;
-            foreach (var k in _store.Keys.Where(k => k < cur).ToList()) _store.Remove(k);
+            RemoveBefore(cur);
             _expectedStart = null;
         }
         // Bound memory: anything older than 2 s is useless.
-        if (_store.Count > 2000)
-            foreach (var k in _store.Where(kv => now - kv.Value.Arrival > 2000).Select(kv => kv.Key).ToList()) _store.Remove(k);
-        return output;
+        if (_store.Count > 2000) RemoveOlderThan(now - 2000);
+        return output ?? (IReadOnlyList<AccessUnit>)None;
     }
 
     /// <summary>Find the next safe frame start after a loss: right after a marker we hold, or a keyframe start.</summary>
@@ -103,9 +167,15 @@ public sealed class H264Depacketizer
             if (afterMarker || H264.IsKeyframeStart(p.Payload))
             {
                 // Frames skipped while resyncing can't be shown either; count them as held back.
-                var skipped = _store.Where(kv => kv.Key < seq && kv.Key > _resyncAfter).Select(kv => kv.Value.Ts).Distinct().Count();
+                // (frames = distinct timestamps; packets of a frame are contiguous, so count timestamp changes)
+                int skipped = 0; uint? lastTs = null;
+                foreach (var (k, v) in _store)
+                {
+                    if (k >= seq) break;
+                    if (k > _resyncAfter && v.Ts != lastTs) { skipped++; lastTs = v.Ts; }
+                }
                 FramesHeldBack += skipped;
-                foreach (var k in _store.Keys.Where(k => k < seq).ToList()) _store.Remove(k);
+                RemoveBefore(seq);
                 _expectedStart = seq;
                 return true;
             }
@@ -115,32 +185,46 @@ public sealed class H264Depacketizer
 
     private void Emit(long from, long to, uint ts, double now, List<AccessUnit> output)
     {
-        using var ms = new MemoryStream();
+        // Two passes: measure, then write into one exact-size array (no growing/copying buffers).
         bool key = false;
+        int size = 0;
         for (long q = from; q <= to; q++)
         {
             var pl = _store[q].Payload;
-            _store.Remove(q);
-            if (pl.Length == 0) continue;
             if (q == from && H264.IsKeyframeStart(pl)) key = true;
-            AppendNalus(pl, ms, ref key);
+            size += AppendNalus(pl, default, measure: true, ref key);
+        }
+        var data = ArrayPool<byte>.Shared.Rent(Math.Max(1, size));
+        var dst = data.AsSpan(0, size);
+        for (long q = from; q <= to; q++)
+        {
+            int n = AppendNalus(_store[q].Payload, dst, measure: false, ref key);
+            dst = dst[n..];
+            Remove(q);
         }
         if (key) _chainOk = true;
-        if (!_chainOk) { FramesHeldBack++; return; }
+        if (!_chainOk) { FramesHeldBack++; ArrayPool<byte>.Shared.Return(data); return; }
         FramesDelivered++;
         LastDeliveredMs = now;
-        output.Add(new AccessUnit(ms.ToArray(), ts, key, now));
+        output.Add(new AccessUnit(data, size, ts, key, now, pooled: true));
     }
 
     private static readonly byte[] StartCode = { 0, 0, 0, 1 };
 
-    private static void AppendNalus(byte[] pl, MemoryStream ms, ref bool key)
+    /// <summary>
+    /// The Annex-B bytes for one RTP payload: writes them to <paramref name="dst"/> (unless only measuring) and
+    /// returns how many there are.
+    /// </summary>
+    private static int AppendNalus(ReadOnlySpan<byte> pl, Span<byte> dst, bool measure, ref bool key)
     {
+        if (pl.Length == 0) return 0;
+        int w = 0;
+        void Put(ReadOnlySpan<byte> src, Span<byte> d, ref int at) { if (!measure) src.CopyTo(d[at..]); at += src.Length; }
         int type = pl[0] & 0x1F;
         if (type is >= 1 and <= 23)
         {
             if (type == 5) key = true;
-            ms.Write(StartCode); ms.Write(pl);
+            Put(StartCode, dst, ref w); Put(pl, dst, ref w);
         }
         else if (type == 24) // STAP-A
         {
@@ -151,7 +235,7 @@ public sealed class H264Depacketizer
                 i += 2;
                 if (size == 0 || i + size > pl.Length) break;
                 if ((pl[i] & 0x1F) == 5) key = true;
-                ms.Write(StartCode); ms.Write(pl, i, size);
+                Put(StartCode, dst, ref w); Put(pl.Slice(i, size), dst, ref w);
                 i += size;
             }
         }
@@ -162,11 +246,13 @@ public sealed class H264Depacketizer
             if (start)
             {
                 if (inner == 5) key = true;
-                ms.Write(StartCode);
-                ms.WriteByte((byte)((pl[0] & 0xE0) | inner));
+                Put(StartCode, dst, ref w);
+                Span<byte> hdr = [(byte)((pl[0] & 0xE0) | inner)];
+                Put(hdr, dst, ref w);
             }
-            ms.Write(pl, 2, pl.Length - 2);
+            Put(pl[2..], dst, ref w);
         }
+        return w;
     }
 
     private long Extend(ushort seq)

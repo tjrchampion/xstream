@@ -21,7 +21,7 @@ public static class SystemCheck
         string ver = "Not found";
         if (ff)
         {
-            try { ver = H264Decoder.Version; }
+            try { ver = H264Decoder.LibVersion; }
             catch (Exception ex) { ff = false; ver = "Found but failed to load: " + ex.Message; }
         }
         list.Add(new("FFmpeg (video decode)", ff, ver, ff ? null : fix));

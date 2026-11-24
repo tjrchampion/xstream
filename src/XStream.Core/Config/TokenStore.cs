@@ -57,7 +57,19 @@ public sealed class TokenStore(XboxAuth auth, string? path = null)
                 Exception? last = null;
                 foreach (var offering in new[] { "xgpuweb", "xgpuwebf2p" })
                 {
-                    try { got = await auth.GetStreamingTokenAsync(t, offering, ct); t = got with { GsToken = t.GsToken, StreamHost = t.StreamHost, GsExpires = t.GsExpires, CloudToken = got.GsToken, CloudHost = got.StreamHost, CloudExpires = got.GsExpires, CloudOffering = offering }; break; }
+                    try
+                    {
+                        got = await auth.GetStreamingTokenAsync(t, offering, ct);
+                        // Cloud games run in the region whose API host we use: pick the nearest, not just the default.
+                        var (nearest, report) = await CloudRegions.PickNearestAsync(auth.LastRegions, ct);
+                        LastRegionReport = $"{report} -> {nearest?.Name ?? "default"}";
+                        t = got with
+                        {
+                            GsToken = t.GsToken, StreamHost = t.StreamHost, GsExpires = t.GsExpires,
+                            CloudToken = got.GsToken, CloudHost = nearest?.BaseUri ?? got.StreamHost, CloudExpires = got.GsExpires, CloudOffering = offering,
+                        };
+                        break;
+                    }
                     catch (Exception ex) when (ex is XboxApiException or HttpRequestException) { last = ex; }
                 }
                 if (got is null) throw new XboxApiException("Xbox Cloud Gaming isn't available for this account or region" + (last is null ? "" : $" ({last.Message})"), 403);
@@ -67,6 +79,9 @@ public sealed class TokenStore(XboxAuth auth, string? path = null)
         }
         finally { _lock.Release(); }
     }
+
+    /// <summary>Latency to each cloud region and the one chosen, from the last cloud sign-in (for the log).</summary>
+    public string? LastRegionReport { get; private set; }
 
     /// <summary>A streaming client for Xbox Cloud Gaming (see <see cref="GetFreshCloudAsync"/>).</summary>
     public async Task<(XboxStreamingClient client, XboxTokens tokens)> CreateCloudClientAsync(HttpClient http, AppSettings settings, CancellationToken ct = default)

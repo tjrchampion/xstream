@@ -27,7 +27,7 @@ try
     var buffer = new PlayoutBuffer<AccessUnit> { TargetDelayMs = 0 };
     using var decoder = new H264Decoder(!args.Contains("--software"), d3d11Device: window.D3D11Device);
     using var pipe = new VideoPipeline(buffer, decoder, mailbox, Now);
-    Console.WriteLine($"Renderer: {window.RendererName}  Decoder: {decoder.Backend} ({H264Decoder.Version})");
+    Console.WriteLine($"Renderer: {window.RendererName}  Decoder: {decoder.Backend} ({H264Decoder.LibVersion})");
     pipe.Start();
     var packets = H264Packetizer.Packetize(H264Packetizer.AccessUnits(stream)).ToList();
     var depack = new H264Depacketizer();

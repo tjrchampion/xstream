@@ -36,8 +36,16 @@ XSTREAM_RELEASE_NOTES="What changed" scripts/finish-release.sh v0.3.0
   1. Apply at [signpath.org](https://signpath.org). The project's policy is in [CODE_SIGNING.md](CODE_SIGNING.md).
   2. Once approved, create the SignPath project `xstream` with signing policy `release-signing`, linked to this
      repository as a trusted build system.
-  3. In the GitHub repository settings, add the secret `SIGNPATH_API_TOKEN` and the variable
-     `SIGNPATH_ORGANIZATION_ID`. The workflow's signing step switches on by itself.
+  3. Add two artifact configurations to the SignPath project:
+     - `natives`: a zip of DLLs; sign every `*.dll` inside it.
+     - the default one, for `Vexel.exe`.
+  4. In the GitHub repository settings, add the secret `SIGNPATH_API_TOKEN` and the variable
+     `SIGNPATH_ORGANIZATION_ID`. The workflow's signing steps switch on by themselves.
+
+  **Why the DLLs are signed too:** Windows 11's Smart App Control checks every binary Windows loads, not just the
+  exe, and blocks unsigned ones with no "Run anyway" option. So the build signs the third-party DLLs Vexel ships
+  before packing them into the exe: SDL2, the three FFmpeg DLLs, and Avalonia's `av_libglesv2.dll`
+  (`scripts/prepare-natives.sh` gathers them). SkiaSharp and HarfBuzz are already signed by Microsoft.
 
 ## How updates are verified
 
@@ -53,7 +61,7 @@ XSTREAM_RELEASE_NOTES="What changed" scripts/finish-release.sh v0.3.0
 `./scripts/publish-windows.sh` builds `dist/Vexel.exe` on macOS, Linux or Git Bash. Optional environment variables:
 
 - `XSTREAM_UPDATE_BASE_URL=https://…`: also writes a signed `dist/latest.json` for that download location.
-- `SIGN_PFX=cert.pfx SIGN_PFX_PASSWORD=…`: Authenticode-signs with a certificate file (needs `osslsigncode`).
+- `SIGN_PFX=cert.pfx SIGN_PFX_PASSWORD=…`: Authenticode-signs the native DLLs and the exe with a certificate file (needs `osslsigncode`). For example, a Certum "Open Source Code Signing" certificate.
 - `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE`: signs with Azure Artifact Signing instead (needs `jsign` and `az login`).
 
 Run `./scripts/build-ffmpeg-windows.sh` first for the minimal FFmpeg. It needs MinGW-w64 and nasm: `brew install mingw-w64 nasm`, or `apt install mingw-w64 nasm`.

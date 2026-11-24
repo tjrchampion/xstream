@@ -69,6 +69,9 @@ public sealed class XboxAuth(HttpClient http)
         return (await ReadJson(res, ct))["access_token"]!.GetValue<string>();
     }
 
+    /// <summary>The regions offered by the last streaming-token login (cloud gaming picks the nearest of these).</summary>
+    public IReadOnlyList<CloudRegion> LastRegions { get; private set; } = [];
+
     /// <summary>MSA token -> Xbox user token -> XSTS (gssv) -> xHome streaming token + host.</summary>
     public async Task<XboxTokens> GetStreamingTokenAsync(XboxTokens t, string offering = "xhome", CancellationToken ct = default)
     {
@@ -86,6 +89,8 @@ public sealed class XboxAuth(HttpClient http)
         var gs = await ReadJson(await http.SendAsync(req, ct), ct);
 
         var regions = gs["offeringSettings"]?["regions"]?.AsArray() ?? [];
+        LastRegions = regions.Where(r => r?["baseUri"] is not null).Select(r => new CloudRegion(
+            r!["name"]?.GetValue<string>() ?? "", r["baseUri"]!.GetValue<string>(), r["isDefault"]?.GetValue<bool>() == true)).ToList();
         var region = regions.FirstOrDefault(r => r?["isDefault"]?.GetValue<bool>() == true) ?? regions.FirstOrDefault();
         return t with
         {

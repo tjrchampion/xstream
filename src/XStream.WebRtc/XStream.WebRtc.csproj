@@ -12,8 +12,15 @@
   <ItemGroup Condition="Exists('$(PatchedSipSorcery)')">
     <ProjectReference Include="$(PatchedSipSorcery)" />
   </ItemGroup>
+  <!-- The patched source has the hooks Vexel's own receive path (MediaReceiver) needs. -->
+  <PropertyGroup Condition="Exists('$(PatchedSipSorcery)')">
+    <DefineConstants>$(DefineConstants);XS_PATCHED_SIPSORCERY</DefineConstants>
+  </PropertyGroup>
   <ItemGroup Condition="!Exists('$(PatchedSipSorcery)')">
     <PackageReference Include="SIPSorcery" Version="8.*" />
   </ItemGroup>
-  <ItemGroup><ProjectReference Include="../XStream.Core/XStream.Core.csproj" /></ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../XStream.Core/XStream.Core.csproj" />
+    <ProjectReference Include="../XStream.Net/XStream.Net.csproj" />
+  </ItemGroup>
 </Project>

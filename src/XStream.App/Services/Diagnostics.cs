@@ -31,13 +31,15 @@ public static class Diagnostics
         if (File.Exists(AppPaths.Settings)) zip.CreateEntryFromFile(AppPaths.Settings, "settings.json");
 
         var logs = new DirectoryInfo(AppPaths.Logs);
-        // Each session is a .csv plus its .summary.json, named by start time.
+        // Each session is a .csv plus its .summary.json and .log, named by start time.
         var sessions = logs.GetFiles("*.csv").OrderByDescending(f => f.LastWriteTimeUtc).Take(RecentSessions);
         foreach (var csv in sessions)
         {
             zip.CreateEntryFromFile(csv.FullName, "sessions/" + csv.Name, CompressionLevel.Optimal);
             var summary = Path.ChangeExtension(csv.FullName, ".summary.json");
             if (File.Exists(summary)) zip.CreateEntryFromFile(summary, "sessions/" + Path.GetFileName(summary));
+            var text = Path.ChangeExtension(csv.FullName, ".log");
+            if (File.Exists(text)) zip.CreateEntryFromFile(text, "sessions/" + Path.GetFileName(text));
         }
         foreach (var crash in logs.GetFiles("crash-*.txt").OrderByDescending(f => f.LastWriteTimeUtc).Take(5))
             zip.CreateEntryFromFile(crash.FullName, "crashes/" + crash.Name);

@@ -121,7 +121,7 @@ public static class PlayerHost
         {
             NativeLibs.Ensure();
             _ = NativeLibs.CanLoad("SDL2");
-            _ = H264Decoder.Version; // loads avcodec + avutil
+            _ = H264Decoder.LibVersion; // loads avcodec + avutil
         }
         catch { /* the session reports missing libraries properly */ }
         try

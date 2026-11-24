@@ -57,7 +57,12 @@ public sealed record RunResult(
     string Scenario, string Receiver, int Seed, bool CapsHonoured,
     double FrozenSec, int Freezes, int Stutters, double AvgKbps, double QualitySwing,
     double AvgLatencyMs, double P95LatencyMs, int SessionDrops, int KeyframeRequests,
-    List<TimelinePoint> Timeline);
+    List<TimelinePoint> Timeline)
+{
+    /// <summary>Seconds where the cap sat under 75% of what the link could carry (capped at the sender's 20 Mbps
+    /// maximum): picture softer than it needed to be. Outages don't count.</summary>
+    public double LowQualitySec => Timeline.Count(p => p.CapacityKbps > 0 && p.CapKbps < 0.75 * Math.Min(p.CapacityKbps, 20_000)) * 0.5;
+}
 
 /// <summary>
 /// Millisecond-step simulation of console -> network -> player. The console (sender) model is the
@@ -71,7 +76,8 @@ public sealed class Simulation(Scenario sc, IReceiverBrain brain, int seed, bool
 
     public RunResult Run()
     {
-        var rng = new Random(seed * 7919 + sc.Id.GetHashCode() % 1000);
+        // Stable per-scenario salt: string.GetHashCode() is randomised per process, which made runs unrepeatable.
+        var rng = new Random(seed * 7919 + sc.Id.Aggregate(17, (h, c) => h * 31 + c) % 1000);
         var monitor = new RtpReceiveMonitor();
         var arrivals = new PriorityQueue<(ushort seq, uint ts, bool marker, int bytes, bool key, double at), double>();
         var feedback = new PriorityQueue<Action, double>();

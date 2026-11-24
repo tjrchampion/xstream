@@ -5,7 +5,7 @@ using XStream.Core.Video;
 namespace XStream.Core.Audio;
 
 /// <summary>
-/// Game audio: Opus packets from the console -> FFmpeg's Opus decoder -> SDL audio output.
+/// Game audio: Opus packets from the console -> Opus decoder with loss recovery (Concentus) -> SDL audio output.
 ///
 /// Latency is kept low and steady: the output queue is held near <see cref="TargetMs"/>. If it grows past
 /// that by more than a frame or two (a network burst, or the sound card's clock running slow), the excess is
@@ -18,7 +18,6 @@ public sealed unsafe class AudioPlayer : IDisposable
     private const uint InitAudio = 0x10;
     private const ushort AudioF32Sys = 0x8120;
     private const int SampleRate = 48_000, Channels = 2;
-    private const int SampleFmtFlt = 3, SampleFmtFltp = 8;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct AudioSpec
@@ -41,95 +40,102 @@ public sealed unsafe class AudioPlayer : IDisposable
 
     private readonly object _lock = new();
     private uint _dev;
-    private IntPtr _ctx, _pkt, _frame;
+    // Opus decoding with loss recovery (FEC + concealment) instead of skipping lost packets; see OpusLossDecoder.
+    private readonly OpusLossDecoder _opus = new();
     private float[] _mix = new float[SampleRate / 50 * Channels * 3]; // room for 60 ms
-    private int _lastSeq = -1;
-    private bool _disposed;
+    private volatile bool _disposed;
 
     /// <summary>Output queue the player aims for. Lower = less lag, higher = fewer crackles on a jittery link.</summary>
     public double TargetMs { get; set; } = 40;
     /// <summary>0..1, applied while converting.</summary>
     public float Volume { get; set; } = 1f;
     public bool Muted { get; set; }
-    public long PacketsDecoded { get; private set; }
-    public long PacketsDropped { get; private set; }
-    /// <summary>Times the queue grew too long and was trimmed to stay in sync.</summary>
+    public long PacketsDecoded => _opus.Decoded;
+    public long PacketsDropped => _opus.Dropped;
+    /// <summary>Lost packets rebuilt from the next packet's FEC data / filled by concealment / too long a gap to fill.</summary>
+    public long PacketsRecovered => _opus.Recovered;
+    public long PacketsConcealed => _opus.Concealed;
+    public long PacketsSkipped => _opus.Skipped;
+    /// <summary>Times the queue grew far too long and was cleared to stay in sync.</summary>
     public long Resyncs { get; private set; }
+    /// <summary>Lag removed by catching up gently (quiet frames dropped, others played slightly faster), in ms.</summary>
+    public double CaughtUpMs { get; private set; }
     public string DeviceInfo { get; }
 
     public AudioPlayer()
     {
-        var codec = FF.avcodec_find_decoder_by_name("opus");
-        if (codec == IntPtr.Zero) codec = FF.avcodec_find_decoder_by_name("libopus");
-        if (codec == IntPtr.Zero) throw new InvalidOperationException("FFmpeg has no Opus decoder");
-        _ctx = FF.avcodec_alloc_context3(codec);
-        FF.av_opt_set(_ctx, "ch_layout", "stereo", 0);
-        FF.av_opt_set(_ctx, "sample_rate", SampleRate.ToString(), 0);
-        int r = FF.avcodec_open2(_ctx, codec, IntPtr.Zero);
-        if (r < 0) { FF.avcodec_free_context(ref _ctx); throw new InvalidOperationException("Opus decoder: " + FF.Error(r)); }
-        _pkt = FF.av_packet_alloc();
-        _frame = FF.av_frame_alloc();
-
-        if (SDL_InitSubSystem(InitAudio) != 0) { Free(); throw new InvalidOperationException("SDL audio: " + Err()); }
+        if (SDL_InitSubSystem(InitAudio) != 0) throw new InvalidOperationException("SDL audio: " + Err());
         var want = new AudioSpec { Freq = SampleRate, Format = AudioF32Sys, Channels = Channels, Samples = 256 };
         _dev = SDL_OpenAudioDevice(IntPtr.Zero, 0, ref want, out var have, 0); // 0: SDL converts if the device differs
-        if (_dev == 0) { SDL_QuitSubSystem(InitAudio); Free(); throw new InvalidOperationException("No audio output: " + Err()); }
+        if (_dev == 0) { SDL_QuitSubSystem(InitAudio); throw new InvalidOperationException("No audio output: " + Err()); }
         DeviceInfo = $"{have.Freq / 1000.0:0.#} kHz, {have.Channels} ch, {have.Samples}-sample buffer";
         SDL_PauseAudioDevice(_dev, 0);
     }
 
-    /// <summary>One RTP payload (an Opus packet) with its RTP sequence number.</summary>
+    // Decoding runs on its own thread: the network thread only queues the packet, so a 20 ms audio decode never
+    // holds up the video packets behind it.
+    private readonly System.Collections.Concurrent.ConcurrentQueue<(byte[] data, int seq)> _queue = new();
+    private readonly AutoResetEvent _wake = new(false);
+    private Thread? _thread;
+
+    /// <summary>Which Opus decoder is in use (libopus, or the managed fallback).</summary>
+    public string Decoder => _opus.DecoderName;
+
+    /// <summary>One RTP payload (an Opus packet) with its RTP sequence number. Any thread; returns immediately.</summary>
     public void Push(byte[] opus, int seq)
     {
-        lock (_lock)
-        {
-            if (_disposed || opus.Length == 0) return;
-            if (_lastSeq >= 0)
-            {
-                int d = (short)(ushort)(seq - _lastSeq);
-                if (d <= 0) { PacketsDropped++; return; } // late or duplicate: playing it now would only add lag
-            }
-            _lastSeq = seq;
+        if (_disposed) return;
+        if (_thread is null)
+            lock (_lock)
+                if (_thread is null)
+                {
+                    _thread = new Thread(DecodeLoop) { IsBackground = true, Name = "vexel-audio", Priority = ThreadPriority.AboveNormal };
+                    _thread.Start();
+                }
+        if (_queue.Count > 50) _queue.TryDequeue(out _); // a stalled decoder must not grow this without bound
+        _queue.Enqueue((opus, seq));
+        _wake.Set();
+    }
 
-            if (FF.av_new_packet(_pkt, opus.Length) < 0) return;
-            Marshal.Copy(opus, 0, (IntPtr)(*FF.PacketData(_pkt)), opus.Length);
-            int r = FF.avcodec_send_packet(_ctx, _pkt);
-            FF.av_packet_unref(_pkt);
-            if (r < 0) { PacketsDropped++; return; }
-            while (FF.avcodec_receive_frame(_ctx, _frame) >= 0)
-            {
-                Output();
-                FF.av_frame_unref(_frame);
-            }
-            PacketsDecoded++;
+    private void DecodeLoop()
+    {
+        using var _games = WindowsStreaming.GameThread();
+        while (!_disposed)
+        {
+            _wake.WaitOne(100);
+            while (_queue.TryDequeue(out var p))
+                lock (_lock)
+                {
+                    if (_disposed) return;
+                    _opus.Push(p.data, p.seq, Output);
+                }
         }
     }
 
-    private void Output()
+    /// <summary>Queue decoded audio (interleaved stereo 16-bit) for playback, with volume applied.</summary>
+    private void Output(short[] pcm, int n)
     {
-        int n = FF.FrameSamples(_frame), fmt = FF.FrameFormat(_frame);
         if (n <= 0) return;
         if (_mix.Length < n * Channels) _mix = new float[n * Channels];
-        byte** data = FF.FrameData(_frame);
-        float gain = Muted ? 0 : Math.Clamp(Volume, 0, 1);
-        if (fmt == SampleFmtFltp)
-        {
-            float* l = (float*)data[0], rch = data[1] != null ? (float*)data[1] : l; // mono: same on both sides
-            for (int i = 0; i < n; i++) { _mix[2 * i] = l[i] * gain; _mix[2 * i + 1] = rch[i] * gain; }
-        }
-        else if (fmt == SampleFmtFlt)
-        {
-            float* s = (float*)data[0];
-            for (int i = 0; i < n * Channels; i++) _mix[i] = s[i] * gain;
-        }
-        else return; // the native Opus decoder always produces float
+        float gain = Muted ? 0 : Math.Clamp(Volume, 0, 1) / 32768f;
+        for (int i = 0; i < n * Channels; i++) _mix[i] = pcm[i] * gain;
 
-        // Keep the queue near the target: if it's grown well past it, drop what's queued and start fresh.
+        // Keep the queue near the target. Bursty arrivals (start-up, after a hiccup) and clock drift between the console
+        // and this device make it grow, and with packets arriving as fast as they play it would never shrink again:
+        // sound would run ~50 ms behind the picture. So catch up without audible glitches.
         double queuedMs = SDL_GetQueuedAudioSize(_dev) / (double)(sizeof(float) * Channels) * 1000 / SampleRate;
-        if (queuedMs > TargetMs + 60)
+        double excess = queuedMs - TargetMs;
+        if (excess > 60)
         {
-            SDL_ClearQueuedAudio(_dev);
+            SDL_ClearQueuedAudio(_dev); // far behind (a long stall): start fresh
             Resyncs++;
+        }
+        else if (excess > AudioCatchUp.SlackMs)
+        {
+            if (AudioCatchUp.IsQuiet(_mix.AsSpan(0, n * Channels), gain)) { CaughtUpMs += n * 1000.0 / SampleRate; return; }
+            int shorter = AudioCatchUp.Shorten(_mix, n, Channels);
+            CaughtUpMs += (n - shorter) * 1000.0 / SampleRate;
+            n = shorter;
         }
         fixed (float* p = _mix) SDL_QueueAudio(_dev, p, (uint)(n * Channels * sizeof(float)));
     }
@@ -142,13 +148,6 @@ public sealed unsafe class AudioPlayer : IDisposable
 
     private static string Err() => Marshal.PtrToStringUTF8(SDL_GetError()) ?? "";
 
-    private void Free()
-    {
-        if (_frame != IntPtr.Zero) FF.av_frame_free(ref _frame);
-        if (_pkt != IntPtr.Zero) FF.av_packet_free(ref _pkt);
-        if (_ctx != IntPtr.Zero) FF.avcodec_free_context(ref _ctx);
-    }
-
     public void Dispose()
     {
         lock (_lock)
@@ -156,7 +155,8 @@ public sealed unsafe class AudioPlayer : IDisposable
             if (_disposed) return;
             _disposed = true;
             if (_dev != 0) { SDL_CloseAudioDevice(_dev); _dev = 0; SDL_QuitSubSystem(InitAudio); }
-            Free();
+            _opus.Dispose();
         }
+        _wake.Set();
     }
 }

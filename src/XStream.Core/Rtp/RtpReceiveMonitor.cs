@@ -15,7 +15,8 @@ public readonly record struct NetworkSample(
     int CompleteFrames,
     int BrokenFrames,         // frames with missing packets
     bool KeyframeSeen,
-    double RttMs);
+    double RttMs,
+    bool KeyframeInFlight = false); // a keyframe arrived in or just before this window: its size, not the network, can explain queueing
 
 /// <summary>
 /// Transport-agnostic RTP video receive statistics. Feed it every RTP video packet
@@ -58,6 +59,8 @@ public sealed class RtpReceiveMonitor
     private bool _keySeen;
     private double _lastCompleteFrameMs = double.NaN;
     private double _firstPacketMs = double.NaN;
+    private double _keyframeLastMs = double.NegativeInfinity; // last packet of a keyframe (or the start of one)
+    private bool _keyframeInWindow;
 
     public double RttMs { get; set; } = 30;
     public long TotalReceived { get; private set; }
@@ -76,6 +79,10 @@ public sealed class RtpReceiveMonitor
         _windowReceived++;
 
         long ext = Extend(seq);
+        // Only packets newer than any seen so far say anything about queueing on the path. A resent or reordered
+        // packet carries its original (older) RTP timestamp, so it would read as hundreds of ms of queueing:
+        // live, a 400 ms loss burst's resends showed a 1.6 s "queue" and pinned the bitrate cap at the minimum.
+        bool inOrder = !_started || ext > _highestExtSeq;
         if (!_started)
         {
             _started = true;
@@ -91,7 +98,9 @@ public sealed class RtpReceiveMonitor
             _missing.Remove(ext); // late / retransmitted packet repairs a gap
         }
 
-        // Jitter (RFC 3550 6.4.1)
+        // Jitter (RFC 3550 6.4.1). Resends count here on purpose: a frame waiting on one really does arrive late,
+        // and the jitter buffer sizes itself from this (simulator: leaving them out raised stutter 7-17% on a
+        // home-upload-limited link).
         double arrivalTs = arrivalMs * _clockRateKhz;
         double transit = arrivalTs - rtpTimestamp;
         if (!double.IsNaN(_lastTransit))
@@ -101,9 +110,8 @@ public sealed class RtpReceiveMonitor
         }
         _lastTransit = transit;
 
-        // One-way delay relative to sender clock (offset unknown, so only changes matter)
-        double owd = arrivalMs - rtpTimestamp / _clockRateKhz;
-        UpdateOwd(arrivalMs, owd);
+        // One-way delay relative to sender clock (offset unknown, so only changes matter). In-order packets only.
+        if (inOrder) UpdateOwd(arrivalMs, arrivalMs - rtpTimestamp / _clockRateKhz);
 
         // Frame assembly. A packet from an older frame (retransmission arriving late) only repairs
         // sequence gaps above; it must not close the frame currently being assembled.
@@ -123,6 +131,7 @@ public sealed class RtpReceiveMonitor
             _frameLastExtSeq = Math.Max(_frameLastExtSeq, ext);
         }
         if (isKeyframeStart) _frameIsKey = true;
+        if (_frameIsKey) { _keyframeLastMs = arrivalMs; _keyframeInWindow = true; }
         if (marker) CloseFrame(arrivalMs, complete: true);
     }
 
@@ -186,7 +195,10 @@ public sealed class RtpReceiveMonitor
         var sample = new NetworkSample(
             nowMs, loss, _jitterTs / _clockRateKhz, _lastQueueDelay,
             _lastQueueDelay - _windowStartQueueDelay, kbps, sinceFrame,
-            _completeFrames, _brokenFrames, _keySeen, RttMs);
+            _completeFrames, _brokenFrames, _keySeen, RttMs,
+            // A 1440p keyframe is 200-400 KB: the console paces it out over tens to hundreds of ms and the frames
+            // behind it wait, which reads as queueing although the network is fine. Allow 300 ms to drain.
+            _keyframeInWindow || nowMs - _keyframeLastMs < 300);
 
         _windowStartMs = nowMs;
         _windowBytes = 0;
@@ -194,6 +206,7 @@ public sealed class RtpReceiveMonitor
         _completeFrames = 0;
         _brokenFrames = 0;
         _keySeen = false;
+        _keyframeInWindow = false;
         _windowStartQueueDelay = _lastQueueDelay;
         return sample;
     }

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Fetches SIPSorcery at the pinned commit into third_party/sipsorcery and applies the XStream
-# PR-SCTP patch (unordered, never-retransmit input channel). XStream.WebRtc then builds against it
-# automatically instead of the NuGet package.
+# Fetches SIPSorcery at the pinned commit into third_party/sipsorcery and applies Vexel's patch:
+#  - unordered, never-retransmitted data channels (PR-SCTP), and input sent immediately rather than queued
+#  - hooks for Vexel's own media receive path (external receive loop, SRTP keys, receiver-report bookkeeping)
+# XStream.WebRtc then builds against it automatically instead of the NuGet package.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 COMMIT=6f379fdba939398a51b567064613e1772538a1c8
@@ -12,5 +13,5 @@ fi
 git -C "$DIR" fetch --depth 1 origin "$COMMIT"
 git -C "$DIR" checkout -q --force "$COMMIT"
 git -C "$DIR" clean -fdq -- src/SIPSorcery
-git -C "$DIR" apply "$PWD/patches/sipsorcery-pr-sctp.patch"
+git -C "$DIR" apply "$PWD/patches/sipsorcery-vexel.patch"
 echo "SIPSorcery $COMMIT patched in $DIR. Rebuild XStream to use it."

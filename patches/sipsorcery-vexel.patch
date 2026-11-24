@@ -1,8 +1,200 @@
-# XStream patch for SIPSorcery: unordered + partially reliable data channels (RFC 3758 PR-SCTP).
-# Base commit: 6f379fdba939398a51b567064613e1772538a1c8
-# Apply with scripts/get-sipsorcery.sh (macOS/Linux) or scripts/get-sipsorcery.ps1 (Windows).
+diff --git a/src/SIPSorcery/net/DtlsSrtp/DtlsSrtpTransport.cs b/src/SIPSorcery/net/DtlsSrtp/DtlsSrtpTransport.cs
+index a45eec2d..ac353c2a 100644
+--- a/src/SIPSorcery/net/DtlsSrtp/DtlsSrtpTransport.cs
++++ b/src/SIPSorcery/net/DtlsSrtp/DtlsSrtpTransport.cs
+@@ -54,6 +54,22 @@ namespace SIPSorcery.Net
+         public bool IsClient { get { return _connection is DtlsSrtpClient; } }
+         internal SrtpKeys Keys { get; private set; }
+ 
++        /// <summary>
++        /// Vexel: the master key and salt the remote peer protects its SRTP/SRTCP with (RFC 5764 section 4.2), for an
++        /// SRTP implementation outside this library. False until the handshake has completed.
++        /// </summary>
++        public bool TryGetRemoteSrtpMasterKey(out int protectionProfile, out byte[] masterKey, out byte[] masterSalt)
++        {
++            protectionProfile = SrtpProtectionProfile; masterKey = null; masterSalt = null;
++            var keys = _connection?.Keys;
++            if (keys == null || !_isHandshakeComplete && Context == null) return false;
++            // The client writes with the client keys, so the remote's keys are the other side's.
++            bool remoteIsServer = IsClient;
++            masterKey = (remoteIsServer ? keys.ServerWriteMasterKey : keys.ClientWriteMasterKey).ToArray();
++            masterSalt = (remoteIsServer ? keys.ServerWriteMasterSalt : keys.ClientWriteMasterSalt).ToArray();
++            return protectionProfile >= 0;
++        }
++
+         internal ThreadSafeSrtpSessionContext Context { get; private set; }
+ 
+         public int TimeoutMilliseconds { get { return _connection.TimeoutMilliseconds; } set { _connection.TimeoutMilliseconds = value; } }
+diff --git a/src/SIPSorcery/net/DtlsSrtp/Lib/DTLSSRTP/DtlsSrtpClient.cs b/src/SIPSorcery/net/DtlsSrtp/Lib/DTLSSRTP/DtlsSrtpClient.cs
+index e1547803..4ccc8826 100644
+--- a/src/SIPSorcery/net/DtlsSrtp/Lib/DTLSSRTP/DtlsSrtpClient.cs
++++ b/src/SIPSorcery/net/DtlsSrtp/Lib/DTLSSRTP/DtlsSrtpClient.cs
+@@ -146,6 +146,9 @@ namespace SIPSorcery.Net.SharpSRTP.DTLSSRTP
+             return extensions;
+         }
+ 
++        /// <summary>Vexel: the SRTP master keys the handshake produced (null until it completes).</summary>
++        public DtlsSrtpKeys Keys { get; private set; }
++
+         public virtual SrtpSessionContext CreateSessionContext(SecurityParameters securityParameters)
+         {
+             // this should only be called from OnHandshakeCompleted so we should still have _srtpData from the connection
+@@ -156,6 +159,7 @@ namespace SIPSorcery.Net.SharpSRTP.DTLSSRTP
+ 
+             int selectedProtectionProfile = _srtpData.ProtectionProfiles[0];
+             DtlsSrtpKeys keys = DtlsSrtpProtocol.CreateMasterKeys(selectedProtectionProfile, _srtpData.Mki, securityParameters, ForceUseExtendedMasterSecret);
++            Keys = keys;
+             return DtlsSrtpProtocol.CreateSrtpClientSessionContext(keys);
+         }
+     }
+diff --git a/src/SIPSorcery/net/DtlsSrtp/Lib/DTLSSRTP/DtlsSrtpServer.cs b/src/SIPSorcery/net/DtlsSrtp/Lib/DTLSSRTP/DtlsSrtpServer.cs
+index cfd1c7e8..f09c9e0b 100644
+--- a/src/SIPSorcery/net/DtlsSrtp/Lib/DTLSSRTP/DtlsSrtpServer.cs
++++ b/src/SIPSorcery/net/DtlsSrtp/Lib/DTLSSRTP/DtlsSrtpServer.cs
+@@ -127,6 +127,9 @@ namespace SIPSorcery.Net.SharpSRTP.DTLSSRTP
+             return extensions;
+         }
+ 
++        /// <summary>Vexel: the SRTP master keys the handshake produced (null until it completes).</summary>
++        public DtlsSrtpKeys Keys { get; private set; }
++
+         public virtual SrtpSessionContext CreateSessionContext(SecurityParameters securityParameters)
+         {
+             // this should only be called from OnHandshakeCompleted so we should still have _srtpData from the connection
+@@ -137,6 +140,7 @@ namespace SIPSorcery.Net.SharpSRTP.DTLSSRTP
+ 
+             int selectedProtectionProfile = _srtpData.ProtectionProfiles[0];
+             DtlsSrtpKeys keys = DtlsSrtpProtocol.CreateMasterKeys(_srtpData.ProtectionProfiles[0], _srtpData.Mki, securityParameters, ForceUseExtendedMasterSecret);
++            Keys = keys;
+             return DtlsSrtpProtocol.CreateSrtpServerSessionContext(keys);
+         }
+     }
+diff --git a/src/SIPSorcery/net/DtlsSrtp/Lib/DTLSSRTP/IDtlsSrtpPeer.cs b/src/SIPSorcery/net/DtlsSrtp/Lib/DTLSSRTP/IDtlsSrtpPeer.cs
+index 9896e068..bf38323c 100644
+--- a/src/SIPSorcery/net/DtlsSrtp/Lib/DTLSSRTP/IDtlsSrtpPeer.cs
++++ b/src/SIPSorcery/net/DtlsSrtp/Lib/DTLSSRTP/IDtlsSrtpPeer.cs
+@@ -48,5 +48,7 @@ namespace SIPSorcery.Net.SharpSRTP.DTLSSRTP
+     {
+         event EventHandler<DtlsSessionStartedEventArgs> OnSessionStarted;
+         SrtpSessionContext CreateSessionContext(SecurityParameters securityParameters);
++        /// <summary>Vexel: the SRTP master keys the handshake produced (null until it completes).</summary>
++        DtlsSrtpKeys Keys { get; }
+     }
+ }
+diff --git a/src/SIPSorcery/net/RTCP/RTCPSession.cs b/src/SIPSorcery/net/RTCP/RTCPSession.cs
+index 0f05e06c..de68fc2b 100644
+--- a/src/SIPSorcery/net/RTCP/RTCPSession.cs
++++ b/src/SIPSorcery/net/RTCP/RTCPSession.cs
+@@ -314,14 +314,20 @@ namespace SIPSorcery.Net
+         /// Records an RTP packet received at a specific time. Split out so the arrival time can
+         /// be controlled by tests.
+         /// </summary>
+-        internal void RecordRtpPacketReceived(RTPPacket rtpPacket, DateTime arrivalTime)
++        internal void RecordRtpPacketReceived(RTPPacket rtpPacket, DateTime arrivalTime) =>
++            RecordRtpPacketReceived(rtpPacket.Header.SyncSource, rtpPacket.Header.SequenceNumber, rtpPacket.Header.Timestamp,
++                rtpPacket.Header.PayloadType, (int)rtpPacket.GetPayloadLength(), arrivalTime);
++
++        /// <summary>
++        /// Vexel: records a received RTP packet from its header fields, for a receive path that parses packets
++        /// itself, so receiver reports and the inactivity timeout stay accurate.
++        /// </summary>
++        public void RecordRtpPacketReceived(uint ssrc, ushort sequenceNumber, uint timestamp, int payloadType, int payloadLength, DateTime arrivalTime)
+         {
+-            LastActivityAt = DateTime.Now;
++            LastActivityAt = arrivalTime;
+             IsTimedOut = false;
+             PacketsReceivedCount++;
+-            OctetsReceivedCount += rtpPacket.GetPayloadLength();
+-
+-            uint ssrc = rtpPacket.Header.SyncSource;
++            OctetsReceivedCount += (uint)payloadLength;
+ 
+             if (m_receptionReport == null)
+             {
+@@ -337,7 +343,7 @@ namespace SIPSorcery.Net
+             m_receptionReportLastPacketAt = arrivalTime;
+             m_candidatePacketCount = 0;
+ 
+-            var clockRate = GetReceiveClockRate(rtpPacket.Header.PayloadType);
++            var clockRate = GetReceiveClockRate(payloadType);
+ 
+             if (clockRate != m_receiveClockRate)
+             {
+@@ -349,7 +355,7 @@ namespace SIPSorcery.Net
+             }
+ 
+             var arrivalTimestamp = clockRate == 0 ? DateTimeToNtpTimestamp32(arrivalTime) : SecondsToRtpUnits((arrivalTime - CreatedAt).TotalSeconds, clockRate);
+-            m_receptionReport.RtpPacketReceived(rtpPacket.Header.SequenceNumber, rtpPacket.Header.Timestamp, arrivalTimestamp);
++            m_receptionReport.RtpPacketReceived(sequenceNumber, timestamp, arrivalTimestamp);
+         }
+ 
+         /// <summary>
+diff --git a/src/SIPSorcery/net/RTP/RTPChannel.cs b/src/SIPSorcery/net/RTP/RTPChannel.cs
+index 222239aa..15fab529 100644
+--- a/src/SIPSorcery/net/RTP/RTPChannel.cs
++++ b/src/SIPSorcery/net/RTP/RTPChannel.cs
+@@ -41,6 +41,9 @@ public class RTPChannel : IDisposable
+ {
+     private static readonly ILogger logger = LogFactory.CreateLogger<RTPChannel>();
+     protected UdpReceiver m_rtpReceiver;
++
++    /// <summary>Vexel: the receiver reading <see cref="RtpSocket"/>, so an owner can take its receive loop over.</summary>
++    public UdpReceiver RtpReceiver => m_rtpReceiver;
+     private Socket m_controlSocket;
+     protected UdpReceiver m_controlReceiver;
+     private bool m_rtpReceiverStarted = false;
+diff --git a/src/SIPSorcery/net/RTP/UdpReceiver.cs b/src/SIPSorcery/net/RTP/UdpReceiver.cs
+index c92c7f73..3b20c710 100644
+--- a/src/SIPSorcery/net/RTP/UdpReceiver.cs
++++ b/src/SIPSorcery/net/RTP/UdpReceiver.cs
+@@ -116,6 +116,25 @@ public class UdpReceiver
+     /// Starts the receive. This method returns immediately. An event will be fired in the corresponding "End" event to
+     /// return any data received.
+     /// </summary>
++    // Vexel: an owner can take over receiving on this socket with its own loop (a dedicated thread that reads into
++    // one reused buffer and handles media itself), handing everything else back through DeliverReceived. Once set,
++    // no further receives are posted here.
++    private volatile bool m_externalLoop;
++
++    /// <summary>Vexel: stop posting receives; the caller now reads the socket and calls <see cref="DeliverReceived"/>.</summary>
++    public void UseExternalReceiveLoop() => m_externalLoop = true;
++
++    /// <summary>Vexel: hand receiving back to this receiver (for example if the external loop has to stop).</summary>
++    public void StopExternalReceiveLoop()
++    {
++        m_externalLoop = false;
++        BeginReceiveFrom();
++    }
++
++    /// <summary>Vexel: process a packet read by an external receive loop exactly as if it had been received here.</summary>
++    public void DeliverReceived(IPEndPoint remoteEndPoint, byte[] packet) =>
++        CallOnPacketReceivedCallback(m_localEndPoint.Port, remoteEndPoint, packet);
++
+     public virtual void BeginReceiveFrom()
+     {
+         // Only one receive may be outstanding: the caller that sets the flag posts it.
+@@ -142,6 +161,7 @@ public class UdpReceiver
+     /// </summary>
+     private void PostReceive()
+     {
++        if (m_externalLoop) { m_isRunningReceive = false; return; }
+         try
+         {
+             EndPoint recvEndPoint = m_addressFamily == AddressFamily.InterNetwork ? new IPEndPoint(IPAddress.Any, 0) : new IPEndPoint(IPAddress.IPv6Any, 0);
+@@ -213,9 +233,9 @@ public class UdpReceiver
+             // It also avoids the situation where if the application cannot keep up with the network then BeginReceiveFrom
+             // will be called synchronously (if data is available it calls the callback method immediately) which can
+             // create a very nasty stack.
+-            if (!m_isClosed && m_socket.Available > 0)
++            if (!m_isClosed && !m_externalLoop && m_socket.Available > 0)
+             {
+-                while (!m_isClosed && m_socket.Available > 0)
++                while (!m_isClosed && !m_externalLoop && m_socket.Available > 0)
+                 {
+                     remoteEP = m_addressFamily == AddressFamily.InterNetwork ? new IPEndPoint(IPAddress.Any, 0) : new IPEndPoint(IPAddress.IPv6Any, 0);
+                     int bytesReadSync = m_socket.ReceiveFrom(m_recvBuffer, 0, m_recvBuffer.Length, SocketFlags.None, ref remoteEP);
 diff --git a/src/SIPSorcery/net/SCTP/Chunks/SctpChunk.cs b/src/SIPSorcery/net/SCTP/Chunks/SctpChunk.cs
-index 0fe9648..12f7347 100644
+index 0fe96480..12f73471 100644
 --- a/src/SIPSorcery/net/SCTP/Chunks/SctpChunk.cs
 +++ b/src/SIPSorcery/net/SCTP/Chunks/SctpChunk.cs
 @@ -62,7 +62,7 @@ namespace SIPSorcery.Net
@@ -24,10 +216,20 @@ index 0fe9648..12f7347 100644
                          logger.LogDebug("TODO: Implement parsing logic for well known chunk type {ChunkType}.", (SctpChunkType)chunkType);
                          return ParseBaseChunk(buffer, posn);
 diff --git a/src/SIPSorcery/net/SCTP/Chunks/SctpDataChunk.cs b/src/SIPSorcery/net/SCTP/Chunks/SctpDataChunk.cs
-index c066683..194272c 100644
+index c0666834..8dfe79de 100644
 --- a/src/SIPSorcery/net/SCTP/Chunks/SctpDataChunk.cs
 +++ b/src/SIPSorcery/net/SCTP/Chunks/SctpDataChunk.cs
-@@ -42,6 +42,12 @@ namespace SIPSorcery.Net
+@@ -24,6 +24,9 @@ namespace SIPSorcery.Net
+ {
+     public class SctpDataChunk : SctpChunk
+     {
++        /// <summary>Vexel: when the application queued this chunk (Stopwatch ticks), to measure send delay.</summary>
++        public long QueuedAtTicks;
++
+         /// <summary>
+         /// An empty data chunk. The main use is to indicate a DATA chunk has
+         /// already been delivered to the Upper Layer Protocol (ULP) in 
+@@ -42,6 +45,12 @@ namespace SIPSorcery.Net
          /// </summary>
          public bool Unordered { get; set; } = false;
  
@@ -42,7 +244,7 @@ index c066683..194272c 100644
          /// of a user message.
 diff --git a/src/SIPSorcery/net/SCTP/Chunks/SctpForwardTsnChunk.cs b/src/SIPSorcery/net/SCTP/Chunks/SctpForwardTsnChunk.cs
 new file mode 100644
-index 0000000..79ec468
+index 00000000..79ec4684
 --- /dev/null
 +++ b/src/SIPSorcery/net/SCTP/Chunks/SctpForwardTsnChunk.cs
 @@ -0,0 +1,95 @@
@@ -142,7 +344,7 @@ index 0000000..79ec468
 +    }
 +}
 diff --git a/src/SIPSorcery/net/SCTP/Chunks/SctpInitChunk.cs b/src/SIPSorcery/net/SCTP/Chunks/SctpInitChunk.cs
-index 166aa56..395d93b 100644
+index 166aa56b..395d93bb 100644
 --- a/src/SIPSorcery/net/SCTP/Chunks/SctpInitChunk.cs
 +++ b/src/SIPSorcery/net/SCTP/Chunks/SctpInitChunk.cs
 @@ -41,7 +41,8 @@ namespace SIPSorcery.Net
@@ -225,7 +427,7 @@ index 166aa56..395d93b 100644
                              // Used with INIT ACK chunks only.
                              initChunk.StateCookie = varParam.ParameterValue;
 diff --git a/src/SIPSorcery/net/SCTP/SctpAssociation.cs b/src/SIPSorcery/net/SCTP/SctpAssociation.cs
-index ad6069c..bcde16e 100644
+index ad6069ca..bcde16e8 100644
 --- a/src/SIPSorcery/net/SCTP/SctpAssociation.cs
 +++ b/src/SIPSorcery/net/SCTP/SctpAssociation.cs
 @@ -222,6 +222,7 @@ namespace SIPSorcery.Net
@@ -293,7 +495,7 @@ index ad6069c..bcde16e 100644
          }
  
 diff --git a/src/SIPSorcery/net/SCTP/SctpDataReceiver.cs b/src/SIPSorcery/net/SCTP/SctpDataReceiver.cs
-index 9676012..33b98d9 100644
+index 96760129..33b98d96 100644
 --- a/src/SIPSorcery/net/SCTP/SctpDataReceiver.cs
 +++ b/src/SIPSorcery/net/SCTP/SctpDataReceiver.cs
 @@ -319,6 +319,82 @@ namespace SIPSorcery.Net
@@ -380,7 +582,7 @@ index 9676012..33b98d9 100644
          /// Gets a SACK chunk that represents the current state of the receiver.
          /// </summary>
 diff --git a/src/SIPSorcery/net/SCTP/SctpDataSender.cs b/src/SIPSorcery/net/SCTP/SctpDataSender.cs
-index a37cef7..31fbc34 100644
+index a37cef77..91957689 100644
 --- a/src/SIPSorcery/net/SCTP/SctpDataSender.cs
 +++ b/src/SIPSorcery/net/SCTP/SctpDataSender.cs
 @@ -67,6 +67,24 @@ namespace SIPSorcery.Net
@@ -408,7 +610,7 @@ index a37cef7..31fbc34 100644
          private string _associationID;
          private ushort _defaultMTU;
          private uint _initialTSN;
-@@ -307,6 +325,18 @@ namespace SIPSorcery.Net
+@@ -307,14 +325,52 @@ namespace SIPSorcery.Net
          /// <param name="offset">The offset in <paramref name="data"/> at which to begin sending. Defaults to 0.</param>
          /// <param name="count">The number of bytes to send. Defaults to -1, meaning all bytes from <paramref name="offset"/> to the end of the array.</param>
          public void SendData(ushort streamID, uint ppid, byte[] data, int offset = 0, int count = -1)
@@ -427,8 +629,30 @@ index a37cef7..31fbc34 100644
          {
              int dataCount = count < 0 ? data.Length - offset : count;
  
-@@ -314,7 +344,11 @@ namespace SIPSorcery.Net
+             lock (_sendQueue)
              {
++                // Vexel: an unordered, never-retransmitted message that fits one chunk (controller input) goes out
++                // now, from this thread. Queued, it waits for the send thread, its 4-chunk bursts with 50 ms pauses
++                // and the congestion window (an acknowledgement, a round trip): measured up to 76 ms on a clean
++                // network. Such a message is never resent, so holding it back only makes it late. It's still tracked
++                // (acknowledgements, FORWARD TSN), and its few bytes barely count against the window.
++                if (unordered && maxRetransmits == 0 && dataCount <= _defaultMTU && _receiverWindow > 0 && _sendDataChunk != null)
++                {
++                    byte[] userData = new byte[dataCount];
++                    Buffer.BlockCopy(data, offset, userData, 0, dataCount);
++                    var now = new SctpDataChunk(true, true, true, TSN, streamID, 0, ppid, userData)
++                    {
++                        MaxRetransmits = 0,
++                        LastSentAt = DateTime.Now,
++                        SendCount = 1,
++                    };
++                    TSN = (TSN == UInt32.MaxValue) ? 0 : TSN + 1;
++                    _unconfirmedChunks.TryAdd(now.TSN, now);
++                    SctpSendDelay.RecordImmediate();
++                    _sendDataChunk(now);
++                    return;
++                }
++
                  ushort seqnum = 0;
  
 -                if (_streamSeqnums.ContainsKey(streamID))
@@ -440,7 +664,7 @@ index a37cef7..31fbc34 100644
                  {
                      unchecked
                      {
-@@ -340,7 +374,7 @@ namespace SIPSorcery.Net
+@@ -340,7 +396,7 @@ namespace SIPSorcery.Net
                      bool isEnd = ((chunkOffset + payloadLength) >= dataCount) ? true : false;
  
                      SctpDataChunk dataChunk = new SctpDataChunk(
@@ -449,15 +673,16 @@ index a37cef7..31fbc34 100644
                          isBegining,
                          isEnd,
                          TSN,
-@@ -349,6 +383,7 @@ namespace SIPSorcery.Net
+@@ -349,6 +405,8 @@ namespace SIPSorcery.Net
                          ppid,
                          payload);
  
 +                    dataChunk.MaxRetransmits = maxRetransmits;
++                    dataChunk.QueuedAtTicks = System.Diagnostics.Stopwatch.GetTimestamp();
                      _sendQueue.Enqueue(dataChunk);
  
                      TSN = (TSN == UInt32.MaxValue) ? 0 : TSN + 1;
-@@ -553,6 +588,11 @@ namespace SIPSorcery.Net
+@@ -553,6 +611,11 @@ namespace SIPSorcery.Net
  
                  //logger.LogTrace($"SCTP sender burst size {burstSize}, in retransmit mode {_inRetransmitMode}, cwnd {_congestionWindow}, arwnd {_receiverWindow}.");
  
@@ -469,7 +694,21 @@ index a37cef7..31fbc34 100644
                  // Missing chunks from a SACK gap report take priority.
                  if (_missingChunks.Count > 0)
                  {
-@@ -648,7 +688,12 @@ namespace SIPSorcery.Net
+@@ -627,11 +690,13 @@ namespace SIPSorcery.Net
+                         logger.LogTrace("SCTP resending missing data chunk for TSN {TSN}, data length {UserDataLength}, flags {ChunkFlags:X2}, send count {SendCount}.", dataChunk.TSN, dataChunk.UserData.Length, dataChunk.ChunkFlags, dataChunk.SendCount);
+ 
+                         _unconfirmedChunks.TryAdd(dataChunk.TSN, dataChunk);
++                        SctpSendDelay.Record(dataChunk);
+                         _sendDataChunk(dataChunk);
+                         chunksSent++;
+                     }
+                 }
+ 
++                SctpSendDelay.Unacknowledged = _unconfirmedChunks.Count;
+                 int wait = GetSendWaitMilliseconds();
+                 //logger.LogTrace($"SCTP sender wait period {wait}ms, arwnd {_receiverWindow}, cwnd {_congestionWindow} " +
+                 //    $"outstanding bytes {_outstandingBytes}, send queue {_sendQueue.Count}, missing {_missingChunks.Count} "
+@@ -648,7 +713,12 @@ namespace SIPSorcery.Net
          /// </summary>
          private int GetSendWaitMilliseconds()
          {
@@ -483,7 +722,7 @@ index a37cef7..31fbc34 100644
              {
                  if (_receiverWindow > 0 && _congestionWindow > _outstandingBytes)
                  {
-@@ -670,6 +715,120 @@ namespace SIPSorcery.Net
+@@ -670,6 +740,120 @@ namespace SIPSorcery.Net
          }
  
  
@@ -604,8 +843,45 @@ index a37cef7..31fbc34 100644
          /// <summary>
          /// Updates the round trip time. 
          /// See https://datatracker.ietf.org/doc/html/rfc4960#section-6.3.1
+@@ -765,4 +949,36 @@ namespace SIPSorcery.Net
+             }
+         }
+     }
++
++    /// <summary>Vexel: how long data chunks waited between the application sending them and the wire (all associations).</summary>
++    public static class SctpSendDelay
++    {
++        private static long _count, _maxTicks, _over1ms, _over5ms, _over20ms;
++        public static long Count => Interlocked.Read(ref _count);
++        public static double MaxMs => Interlocked.Read(ref _maxTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
++        public static long Over1Ms => Interlocked.Read(ref _over1ms);
++        public static long Over5Ms => Interlocked.Read(ref _over5ms);
++        public static long Over20Ms => Interlocked.Read(ref _over20ms);
++
++        internal static void Record(SctpDataChunk c)
++        {
++            if (c.QueuedAtTicks == 0) return;
++            long d = System.Diagnostics.Stopwatch.GetTimestamp() - c.QueuedAtTicks;
++            c.QueuedAtTicks = 0;
++            Interlocked.Increment(ref _count);
++            long f = System.Diagnostics.Stopwatch.Frequency;
++            if (d > f / 1000) Interlocked.Increment(ref _over1ms);
++            if (d > f / 200) Interlocked.Increment(ref _over5ms);
++            if (d > f / 50) Interlocked.Increment(ref _over20ms);
++            long m;
++            while (d > (m = Interlocked.Read(ref _maxTicks)) && Interlocked.CompareExchange(ref _maxTicks, d, m) != m) { }
++        }
++
++        internal static void RecordImmediate() => Interlocked.Increment(ref _count);
++
++        /// <summary>Chunks sent but not yet acknowledged (or skipped) by the peer, as of the send loop's last pass.</summary>
++        public static int Unacknowledged { get; internal set; }
++
++        public static void Reset() { _count = 0; _maxTicks = 0; _over1ms = 0; _over5ms = 0; _over20ms = 0; }
++    }
+ }
 diff --git a/src/SIPSorcery/net/WebRTC/RTCDataChannel.cs b/src/SIPSorcery/net/WebRTC/RTCDataChannel.cs
-index 261373d..50832f3 100644
+index 261373d1..50832f3d 100644
 --- a/src/SIPSorcery/net/WebRTC/RTCDataChannel.cs
 +++ b/src/SIPSorcery/net/WebRTC/RTCDataChannel.cs
 @@ -152,9 +152,10 @@ namespace SIPSorcery.Net
@@ -678,10 +954,27 @@ index 261373d..50832f3 100644
                  Protocol = protocol,
              };
 diff --git a/src/SIPSorcery/net/WebRTC/RTCPeerConnection.cs b/src/SIPSorcery/net/WebRTC/RTCPeerConnection.cs
-index fa05311..b56035c 100644
+index fa053113..a4c27a94 100644
 --- a/src/SIPSorcery/net/WebRTC/RTCPeerConnection.cs
 +++ b/src/SIPSorcery/net/WebRTC/RTCPeerConnection.cs
-@@ -2059,14 +2059,20 @@ namespace SIPSorcery.Net
+@@ -255,6 +255,16 @@ namespace SIPSorcery.Net
+         /// </summary>
+         private volatile DtlsSrtpTransport _dtlsHandle;
+ 
++        /// <summary>
++        /// Vexel: the master key and salt the remote peer protects its SRTP/SRTCP with, once DTLS has completed, for
++        /// an SRTP implementation outside this library. <paramref name="protectionProfile"/> is RFC 5764's number.
++        /// </summary>
++        public bool TryGetRemoteSrtpMasterKey(out int protectionProfile, out byte[] masterKey, out byte[] masterSalt)
++        {
++            protectionProfile = -1; masterKey = null; masterSalt = null;
++            return _dtlsHandle?.TryGetRemoteSrtpMasterKey(out protectionProfile, out masterKey, out masterSalt) == true;
++        }
++
+         /// <summary>
+         /// The lock protecting the creation of <seealso cref="_dtlsHandle"/>, which can be
+         /// attempted from the signalling thread (setting the remote description) and the ICE
+@@ -2059,14 +2069,20 @@ namespace SIPSorcery.Net
              logger.LogInformation("WebRTC new data channel opened by remote peer for stream ID {StreamID}, type {Type}, priority {Priority}, reliability {Reliability}, label {Label}, protocol {Protocol}.",
                  streamID, type, priority, reliability, label, protocol);
  

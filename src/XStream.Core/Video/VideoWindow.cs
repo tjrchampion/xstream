@@ -97,6 +97,7 @@ public sealed unsafe class VideoWindow : IDisposable
     private const uint InitVideo = 0x20;
     private const uint WindowHidden = 0x8;
     private const uint WindowShown = 0x4, WindowResizable = 0x20, WindowFullscreenDesktop = 0x1001, WindowAllowHighDpi = 0x2000;
+    private const uint WindowMetal = 0x20000000;
     private const uint RendererAccelerated = 0x2, RendererPresentVsync = 0x4;
     private const int TextureStreaming = 1;
     private const uint PixelFormatNv12 = 0x3231564E, PixelFormatIyuv = 0x56555949;
@@ -157,6 +158,8 @@ public sealed unsafe class VideoWindow : IDisposable
     private readonly object _statLock = new();
 
     private D3D11Renderer? _d3d;
+    // Our own GPU renderer: Direct3D 11 on Windows, Metal on macOS (null = SDL's renderer).
+    private IVideoRenderer? _gpu;
     private bool _hidden;
 
     /// <summary>Raised once, on the window's thread, right after the first picture was presented.</summary>
@@ -228,7 +231,11 @@ public sealed unsafe class VideoWindow : IDisposable
         // shifts reds and greens; Automatic picks BT.709 for anything taller than 576 lines.
         SDL_SetYUVConversionMode(3);
 
-        uint flags = (o.StartHidden ? WindowHidden : WindowShown) | WindowAllowHighDpi | (o.Fullscreen ? WindowFullscreenDesktop : WindowResizable);
+        // macOS: our own Metal renderer unless SDL's was asked for (Renderer "sdl"/"metal", or XSTREAM_RENDERER=sdl).
+        bool ownMetal = OperatingSystem.IsMacOS() && o.Renderer is null or "xstream" or "vexel"
+                        && Environment.GetEnvironmentVariable("XSTREAM_RENDERER") is not "sdl";
+        uint flags = (o.StartHidden ? WindowHidden : WindowShown) | WindowAllowHighDpi | (o.Fullscreen ? WindowFullscreenDesktop : WindowResizable)
+                     | (ownMetal ? WindowMetal : 0);
         _hidden = o.StartHidden;
         _win = SDL_CreateWindow(o.Title, WindowPosCentered, WindowPosCentered, o.Width, o.Height, flags);
         if (_win == IntPtr.Zero) throw new InvalidOperationException("Could not create window: " + Err());
@@ -239,10 +246,14 @@ public sealed unsafe class VideoWindow : IDisposable
         string? d3dError = null;
         if (OperatingSystem.IsWindows() && o.Renderer is null or "d3d11" or "xstream" && Hwnd() is var hwnd && hwnd != IntPtr.Zero)
             _d3d = D3D11Renderer.TryCreate(hwnd, o.VSync, out d3dError);
-        if (_d3d is not null)
+        string? metalError = null;
+        if (ownMetal && _d3d is null)
+            _gpu = MetalRenderer.TryCreate(_win, o.VSync, out metalError);
+        _gpu ??= _d3d;
+        if (_gpu is not null)
         {
-            RendererName = _d3d.Name;
-            _d3d.Render(0, VideoScaling.Fit, null, null, null, Fit); // black until the first picture
+            RendererName = _gpu.Name;
+            _gpu.Render(0, VideoScaling.Fit, null, null, null, Fit); // black until the first picture
         }
         else
         {
@@ -250,7 +261,8 @@ public sealed unsafe class VideoWindow : IDisposable
             if (_ren == IntPtr.Zero) _ren = SDL_CreateRenderer(_win, -1, 0); // software fallback
             if (_ren == IntPtr.Zero) throw new InvalidOperationException("Could not create renderer: " + Err());
             SDL_GetRendererInfo(_ren, out var info);
-            RendererName = (Marshal.PtrToStringUTF8(info.Name) ?? "unknown") + (d3dError is null ? "" : $" (Vexel renderer unavailable: {d3dError})");
+            string? why = d3dError ?? metalError;
+            RendererName = (Marshal.PtrToStringUTF8(info.Name) ?? "unknown") + (why is null ? "" : $" (Vexel renderer unavailable: {why})");
             SDL_SetRenderDrawColor(_ren, 0, 0, 0, 255);
             SDL_RenderClear(_ren);
             SDL_RenderPresent(_ren);
@@ -276,7 +288,7 @@ public sealed unsafe class VideoWindow : IDisposable
 
     private (int W, int H) OutputSize()
     {
-        if (_d3d is not null) return _d3d.OutputSize;
+        if (_gpu is not null) return _gpu.OutputSize;
         SDL_GetRendererOutputSize(_ren, out int w, out int h);
         return (w, h);
     }
@@ -288,6 +300,8 @@ public sealed unsafe class VideoWindow : IDisposable
     }
 
     /// <summary>Handle window events and present a new picture if one arrived within <paramref name="waitMs"/>.</summary>
+    private static readonly bool NoRender = Environment.GetEnvironmentVariable("XSTREAM_NO_RENDER") is "1";
+
     public void PumpOnce(int waitMs)
     {
         byte* ev = stackalloc byte[64];
@@ -320,16 +334,34 @@ public sealed unsafe class VideoWindow : IDisposable
         if (!_mailbox.Wait(redraw ? 0 : waitMs))
         {
             if (redraw) Present(null); // menu or scaling changed but no new picture: redraw the last one
+            // Tried: showing the last picture again so a ProMotion display runs at 120 Hz. It did (117 Hz), but the
+            // repeat took the drawable the next real frame needed: net->screen went from ~3 to ~30 ms.
             return;
         }
         using var p = _mailbox.Take();
         if (p is null || p.Layout == PlaneLayout.Unsupported) return;
+        if (NoRender) return; // XSTREAM_NO_RENDER=1 (testing): decode but don't draw
         Present(p);
+    }
+
+    private double _sharpenMs, _uploadMs, _presentMs;
+    private long _sharpened, _uploads;
+
+    /// <summary>Render-thread costs per picture (SDL path): sharpen, texture upload, draw + present.</summary>
+    public string RenderSummary
+    {
+        get
+        {
+            long n = Math.Max(1, _sharpened + _uploads);
+            return $"Render: sharpen {(_sharpened > 0 ? _sharpenMs / _sharpened : 0):F2} ms, upload {_uploadMs / n:F2} ms, " +
+                   $"draw + present {_presentMs / n:F2} ms per picture ({n} pictures)" +
+                   (_gpu is MetalRenderer m ? "\n" + m.PresentSummary : _gpu is D3D11Renderer d ? "\n" + d.PresentSummary : "");
+        }
     }
 
     private void Present(DecodedPicture? p)
     {
-        if (_d3d is not null) { PresentD3D(p); return; }
+        if (_gpu is not null) { PresentGpu(p); return; }
         if (p is null)
         {
             SDL_RenderClear(_ren);
@@ -355,16 +387,27 @@ public sealed unsafe class VideoWindow : IDisposable
             if (_luma.Length < need) _luma = new byte[need];
             fixed (byte* dst = _luma)
             {
+                double s0 = _clock();
                 Video.Sharpen.Apply(y, yPitch, dst, p.Width, p.Width, p.Height, level);
+                double s1 = _clock();
                 Upload(p, dst, p.Width);
+                double s2 = _clock();
+                _sharpenMs += s1 - s0; _uploadMs += s2 - s1; _sharpened++;
             }
         }
-        else Upload(p, y, yPitch);
+        else
+        {
+            double u0 = _clock();
+            Upload(p, y, yPitch);
+            _uploadMs += _clock() - u0; _uploads++;
+        }
+        double r0 = _clock();
         SDL_RenderClear(_ren);
         DrawVideo();
         if (_screenshot is not null) Capture();
         DrawOverlay();
         SDL_RenderPresent(_ren);
+        _presentMs += _clock() - r0;
 
         double now = _clock();
         lock (_statLock)
@@ -378,17 +421,21 @@ public sealed unsafe class VideoWindow : IDisposable
         AfterPresent();
     }
 
-    /// <summary>Our Direct3D 11 path: GPU copy (or upload), clarity in the shader, overlay, present.</summary>
-    private void PresentD3D(DecodedPicture? p)
+    /// <summary>Our GPU path (Direct3D 11 / Metal): GPU copy or zero-copy, clarity in the shader, overlay, present.</summary>
+    private void PresentGpu(DecodedPicture? p)
     {
         if (p is not null)
         {
-            _d3d!.Upload(p);
+            double u0 = _clock();
+            _gpu!.Upload(p);
+            _uploadMs += _clock() - u0; _uploads++;
             _texW = p.Width; _texH = p.Height; _texLayout = p.Layout;
         }
         _rescaled = false;
-        var shot = _screenshot is not null && _d3d!.HasPicture ? Interlocked.Exchange(ref _screenshot, null) : null;
-        _d3d!.Render(_sharpen, (VideoScaling)_scaling, Overlay, OverlayPixels, shot, Fit);
+        var shot = _screenshot is not null && _gpu!.HasPicture ? Interlocked.Exchange(ref _screenshot, null) : null;
+        double r0 = _clock();
+        _gpu!.Render(_sharpen, (VideoScaling)_scaling, Overlay, OverlayPixels, shot, Fit);
+        if (p is not null) _presentMs += _clock() - r0;
         if (p is null) return;
         double now = _clock();
         lock (_statLock)
@@ -536,7 +583,7 @@ public sealed unsafe class VideoWindow : IDisposable
 
     public void Dispose()
     {
-        _d3d?.Dispose(); _d3d = null;
+        _gpu?.Dispose(); _gpu = null; _d3d = null;
         if (_ovTex != IntPtr.Zero) { SDL_DestroyTexture(_ovTex); _ovTex = IntPtr.Zero; }
         if (_tex != IntPtr.Zero) { SDL_DestroyTexture(_tex); _tex = IntPtr.Zero; }
         if (_ren != IntPtr.Zero) { SDL_DestroyRenderer(_ren); _ren = IntPtr.Zero; }

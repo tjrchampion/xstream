@@ -32,8 +32,24 @@ public sealed class Scenario
 
     public static IReadOnlyList<Scenario> All(int seed) => new[]
     {
-        Wired(seed), BusyWifi(seed), Upload(seed), Dropouts(seed), Handheld(seed),
+        Wired(seed), WiredHiccup(seed), LossBursts(seed), BusyWifi(seed), Upload(seed), Dropouts(seed), Handheld(seed),
     };
+
+    // Seen live on a wired Series X session: one heavy loss burst 3 s in, then a clean link. The cap was cut
+    // to ~4 Mbps and took ~14 s to climb back, with nothing wrong on the network.
+    private static Scenario WiredHiccup(int seed)
+    {
+        var r = new Random(seed * 31 + 5);
+        var s = new Scenario
+        {
+            Id = "hiccup", Name = "Wired, two short hiccups",
+            Description = "Ethernet with one heavy loss burst early in the session and another later. The link is clean otherwise, so the picture should be back to full quality within a few seconds.",
+            Baseline = new(60_000, 0.0001, 1, false), BaseOwdMs = 2,
+        };
+        foreach (double at in new[] { 3_000 + r.NextDouble() * 1_000, 90_000 + r.NextDouble() * 20_000 })
+            s.AddEvent(at, 300 + r.NextDouble() * 300, (_, l) => l with { CapacityKbps = 3_000, LossP = 0.5, JitterMs = 20 });
+        return s;
+    }
 
     private static Scenario Wired(int seed) => new()
     {
@@ -41,6 +57,25 @@ public sealed class Scenario
         Description = "Console and player both on Ethernet. The control case: nothing should get worse.",
         Baseline = new(60_000, 0.0001, 1, false), BaseOwdMs = 2,
     };
+
+    // Loss without congestion: the path drops packets in short bursts (a flaky switch port, powerline adapter,
+    // brief interference) but its capacity never changes. Cutting deep here only slows the recovery keyframe.
+    private static Scenario LossBursts(int seed)
+    {
+        var r = new Random(seed * 31 + 6);
+        var s = new Scenario
+        {
+            Id = "bursts", Name = "Loss bursts, no congestion",
+            Description = "Full-speed link that drops 40-80% of packets for 200-500 ms every 20-40 s, then is fine again.",
+            Baseline = new(60_000, 0.0001, 1, false), BaseOwdMs = 3,
+        };
+        for (double t = 8_000 + r.NextDouble() * 5_000; t < s.DurationMs; t += 20_000 + r.NextDouble() * 20_000)
+        {
+            double dur = 200 + r.NextDouble() * 300, loss = 0.4 + r.NextDouble() * 0.4;
+            s.AddEvent(t, dur, (_, l) => l with { LossP = loss, JitterMs = 2 });
+        }
+        return s;
+    }
 
     private static Scenario BusyWifi(int seed)
     {

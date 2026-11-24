@@ -18,10 +18,10 @@ foreach (bool caps in new[] { true, false })
         foreach (var sc in Scenario.All(seed))
         {
             jobs.Add((sc, () => new BaselineBrain(), seed, caps));
-            foreach (var p in profiles) jobs.Add((sc, () => new EngineBrain(new StabilityOptions { Profile = p }), seed, caps));
+            foreach (var p in profiles) jobs.Add((sc, () => new EngineBrain(new StabilityOptions { Profile = p, FastClimb = Environment.GetEnvironmentVariable("SIM_SLOW_CLIMB") != "1" /* A/B: old steady climb */ }), seed, caps));
         }
 
-Console.WriteLine($"Running {jobs.Count} simulations ({seeds} seeds x 5 scenarios x 4 receivers x 2 console behaviours)...");
+Console.WriteLine($"Running {jobs.Count} simulations ({seeds} seeds x {Scenario.All(0).Count} scenarios x 4 receivers x 2 console behaviours)...");
 var sw = System.Diagnostics.Stopwatch.StartNew();
 var results = new RunResult[jobs.Count];
 Parallel.For(0, jobs.Count, i => results[i] = new Simulation(jobs[i].sc, jobs[i].brain(), jobs[i].seed, jobs[i].caps).Run());
@@ -33,7 +33,7 @@ var summary = results
     {
         scenario = g.Key.Scenario, receiver = g.Key.Receiver, capsHonoured = g.Key.CapsHonoured,
         frozenSec = g.Average(r => r.FrozenSec), freezes = g.Average(r => r.Freezes), stutters = g.Average(r => r.Stutters),
-        avgMbps = g.Average(r => r.AvgKbps) / 1000, qualitySwingPct = g.Average(r => r.QualitySwing) * 100,
+        avgMbps = g.Average(r => r.AvgKbps) / 1000, qualitySwingPct = g.Average(r => r.QualitySwing) * 100, lowQualitySec = g.Average(r => r.LowQualitySec),
         avgLatencyMs = g.Average(r => r.AvgLatencyMs), p95LatencyMs = g.Average(r => r.P95LatencyMs),
         sessionDrops = g.Average(r => r.SessionDrops), keyframeRequests = g.Average(r => r.KeyframeRequests),
     }).ToList();
@@ -44,9 +44,9 @@ foreach (bool caps in new[] { true, false })
     foreach (var sc in Scenario.All(0))
     {
         Console.WriteLine($"\n{sc.Name}");
-        Console.WriteLine($"  {"Receiver",-28}{"Frozen s",9}{"Freezes",9}{"Stutter",9}{"Mbps",7}{"Swing%",8}{"Lat ms",8}{"p95",7}{"Drops",7}");
+        Console.WriteLine($"  {"Receiver",-28}{"Frozen s",9}{"Freezes",9}{"Stutter",9}{"Mbps",7}{"Swing%",8}{"Lat ms",8}{"p95",7}{"Drops",7}{"Soft s",8}");
         foreach (var r in summary.Where(x => x.scenario == sc.Id && x.capsHonoured == caps))
-            Console.WriteLine($"  {r.receiver,-28}{r.frozenSec,9:F1}{r.freezes,9:F1}{r.stutters,9:F1}{r.avgMbps,7:F1}{r.qualitySwingPct,8:F0}{r.avgLatencyMs,8:F0}{r.p95LatencyMs,7:F0}{r.sessionDrops,7:F1}");
+            Console.WriteLine($"  {r.receiver,-28}{r.frozenSec,9:F1}{r.freezes,9:F1}{r.stutters,9:F1}{r.avgMbps,7:F1}{r.qualitySwingPct,8:F0}{r.avgLatencyMs,8:F0}{r.p95LatencyMs,7:F0}{r.sessionDrops,7:F1}{r.lowQualitySec,8:F1}");
     }
     Console.WriteLine();
 }

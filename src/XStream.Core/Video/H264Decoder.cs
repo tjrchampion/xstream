@@ -7,10 +7,16 @@ namespace XStream.Core.Video;
 /// <summary>Nv12 / Yuv420p: planes in system memory. D3D11: still on the GPU (a slice of the decoder's texture array).</summary>
 public enum PlaneLayout { Nv12, Yuv420p, D3D11, Unsupported }
 
-/// <summary>A decoded picture in system memory. Owns its FFmpeg frame; dispose when shown or replaced.</summary>
+/// <summary>
+/// A decoded picture. Owns its FFmpeg frame or VideoToolbox pixel buffer; dispose when shown or replaced.
+/// </summary>
 public sealed unsafe class DecodedPicture : IDisposable
 {
     private IntPtr _frame;
+    // VideoToolbox: the CVPixelBuffer (an IOSurface, shared CPU/GPU memory on Apple Silicon), locked for reading.
+    private IntPtr _pixelBuffer;
+    private readonly byte* _p0, _p1;
+    private readonly int _s0, _s1;
     public int Width { get; }
     public int Height { get; }
     public PlaneLayout Layout { get; }
@@ -39,14 +45,31 @@ public sealed unsafe class DecodedPicture : IDisposable
         DecodedMs = decodedMs;
     }
 
-    public byte* Plane(int i) => FF.FrameData(_frame)[i];
+    internal DecodedPicture(IntPtr pixelBuffer, int width, int height, byte* luma, int lumaPitch, byte* chroma, int chromaPitch,
+        AccessUnit au, double decodedMs)
+    {
+        _pixelBuffer = pixelBuffer;
+        Width = width; Height = height; Layout = PlaneLayout.Nv12;
+        _p0 = luma; _s0 = lumaPitch; _p1 = chroma; _s1 = chromaPitch;
+        RtpTimestamp = au.RtpTimestamp;
+        IsKeyframe = au.IsKeyframe;
+        ArrivalMs = au.CompletedAtMs;
+        DecodedMs = decodedMs;
+    }
+
+    /// <summary>The VideoToolbox CVPixelBuffer behind this picture (IntPtr.Zero for FFmpeg pictures).</summary>
+    public IntPtr PixelBuffer => _pixelBuffer;
+
+    public byte* Plane(int i) => _pixelBuffer != IntPtr.Zero ? (i == 0 ? _p0 : _p1) : FF.FrameData(_frame)[i];
     /// <summary>D3D11 frames: the ID3D11Texture2D (texture array) and the slice holding this picture.</summary>
     public (IntPtr Texture, int Slice) D3D11Surface => ((IntPtr)FF.FrameData(_frame)[0], (int)(nint)FF.FrameData(_frame)[1]);
-    public int Pitch(int i) => FF.FrameLinesize(_frame)[i];
+    public int Pitch(int i) => _pixelBuffer != IntPtr.Zero ? (i == 0 ? _s0 : _s1) : FF.FrameLinesize(_frame)[i];
 
     public void Dispose()
     {
         if (_frame != IntPtr.Zero) FF.av_frame_free(ref _frame);
+        var pb = Interlocked.Exchange(ref _pixelBuffer, IntPtr.Zero);
+        if (pb != IntPtr.Zero) VideoToolboxDecoder.ReleasePicture(pb);
     }
 }
 
@@ -55,28 +78,16 @@ public sealed unsafe class DecodedPicture : IDisposable
 /// VideoToolbox on Mac) and falls back to software. Configured to never hold frames back:
 /// low-delay mode, no frame threading, one output per input.
 /// </summary>
-public sealed unsafe class H264Decoder : IDisposable
+public sealed unsafe class H264Decoder : VideoDecoder
 {
     private IntPtr _ctx, _pkt, _hwFrame, _device;
     private readonly IntPtr _sharedD3D11;
-    private readonly Stopwatch _sw = Stopwatch.StartNew();
-
-    /// <summary>Clock for <see cref="DecodedPicture.DecodedMs"/>; set it to the network clock so latencies line up.</summary>
-    public Func<double> Clock { get; set; }
-
-    public string Backend { get; private set; }
-    public bool Hardware { get; private set; }
-    /// <summary>Decoded pictures stay on the GPU (shared D3D11 device with the window): no copy to system memory and back.</summary>
-    public bool ZeroCopy { get; private set; }
-    /// <summary>Set when the hardware decoder produced nothing and we switched to software (see Decode).</summary>
-    public string? FallbackReason { get; private set; }
     private readonly IntPtr _codec;
     private int _packetsWithoutPicture;
-    public double LastDecodeMs { get; private set; }
-    public long Decoded { get; private set; }
-    public long Errors { get; private set; }
 
-    public static string Version
+    public override string Version => LibVersion;
+
+    public static string LibVersion
     {
         get
         {
@@ -90,7 +101,6 @@ public sealed unsafe class H264Decoder : IDisposable
     public H264Decoder(bool preferHardware = true, string? forceDevice = null, IntPtr d3d11Device = default)
     {
         _sharedD3D11 = d3d11Device;
-        Clock = () => _sw.Elapsed.TotalMilliseconds;
         FF.av_log_set_level(16); // errors only
         var codec = FF.avcodec_find_decoder_by_name("h264");
         if (codec == IntPtr.Zero) throw new InvalidOperationException("FFmpeg has no H.264 decoder");
@@ -151,19 +161,26 @@ public sealed unsafe class H264Decoder : IDisposable
     }
 
     /// <summary>Decode one access unit. Returns the picture it produced, or null (not decodable yet / error).</summary>
-    public DecodedPicture? Decode(AccessUnit au)
+    public override DecodedPicture? Decode(AccessUnit au)
     {
         double t0 = Clock();
-        if (FF.av_new_packet(_pkt, au.Data.Length) < 0) return null;
-        fixed (byte* src = au.Data) Buffer.MemoryCopy(src, *FF.PacketData(_pkt), au.Data.Length, au.Data.Length);
+        var bytes = au.Data;
+        if (FF.av_new_packet(_pkt, bytes.Length) < 0) { au.Release(); return null; }
+        fixed (byte* src = bytes) Buffer.MemoryCopy(src, *FF.PacketData(_pkt), bytes.Length, bytes.Length);
+        au.Release(); // copied into FFmpeg's packet: the buffer can be reused for a later frame
+        double ts = Clock();
         int r = FF.avcodec_send_packet(_ctx, _pkt);
+        SendMsTotal += Clock() - ts;
         FF.av_packet_unref(_pkt);
         if (r < 0) { Errors++; return null; }
 
         DecodedPicture? newest = null;
+        int produced = 0;
         while (true)
         {
+            double tr = Clock();
             r = FF.avcodec_receive_frame(_ctx, _hwFrame);
+            ReceiveMsTotal += Clock() - tr;
             if (r < 0) break; // EAGAIN (needs more input) or error
             var output = FF.av_frame_alloc();
             bool ok;
@@ -174,7 +191,11 @@ public sealed unsafe class H264Decoder : IDisposable
                 FF.av_frame_move_ref(output, _hwFrame); // keep it on the GPU; the window copies it to its own texture
             }
             else if (Hardware && fmt is not ("nv12" or "yuv420p" or "yuvj420p"))
+            {
+                double tt = Clock();
                 ok = FF.av_hwframe_transfer_data(output, _hwFrame, 0) >= 0; // GPU -> NV12 in system memory
+                TransferMsTotal += Clock() - tt;
+            }
             else
             {
                 // Software frame: take ownership by swapping into a fresh frame.
@@ -185,9 +206,12 @@ public sealed unsafe class H264Decoder : IDisposable
             if (!ok) { FF.av_frame_free(ref output); Errors++; continue; }
             newest?.Dispose(); // only the newest picture matters for display
             Decoded++;
+            produced++;
             newest = new DecodedPicture(output, au, Clock());
         }
         LastDecodeMs = Clock() - t0;
+        if (produced == 0 && Decoded > 0) HeldBack++;
+        else if (produced > 1) Bunched++;
 
         // A hardware decoder can open fine and then fail to create its surfaces (odd drivers, remote desktop,
         // Wine): FFmpeg then decodes nothing, forever. After ~1 s of packets with no picture, go software.
@@ -216,7 +240,7 @@ public sealed unsafe class H264Decoder : IDisposable
         if (_device != IntPtr.Zero) FF.av_buffer_unref(ref _device);
     }
 
-    public void Dispose()
+    public override void Dispose()
     {
         Close();
         if (_pkt != IntPtr.Zero) FF.av_packet_free(ref _pkt);

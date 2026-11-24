@@ -84,7 +84,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] public partial int ScalingIndex { get; set; }
     public string[] ScalingModes { get; } = ["Fit (whole picture, bars)", "Fill (trim edges, no bars)", "Stretch (no bars, slightly stretched)"];
     partial void OnScalingIndexChanged(int value) => Save(s => s with { Scaling = (XStream.Core.Video.VideoScaling)Math.Clamp(value, 0, 2) });
-    public string[] Resolutions { get; } = ["Maximum (1440p / 4K where offered)", "1080p", "720p (low bandwidth)"];
+    public string[] Resolutions { get; } = ["Maximum (1440p / 4K where offered)", "1080p", "720p (lowest delay, low bandwidth)"];
     [ObservableProperty] public partial bool HideLauncherWhileStreaming { get; set; }
     [ObservableProperty] public partial bool ControllerNavigation { get; set; }
     [ObservableProperty] public partial bool LauncherFullscreen { get; set; }

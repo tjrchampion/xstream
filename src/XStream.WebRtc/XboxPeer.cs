@@ -31,6 +31,13 @@ public sealed class XboxPeer : IAsyncDisposable
     private uint _inputSeq;
     private uint _remoteVideoSsrc;
     private StreamSession? _session;
+#if XS_PATCHED_SIPSORCERY
+    private MediaReceiver? _rx;
+    private readonly bool _rttFromNacksOnly = Environment.GetEnvironmentVariable("XSTREAM_RTT") == "nack"; // A/B: the old estimate
+#endif
+
+    /// <summary>Which code receives and decrypts the media (ours, or SIPSorcery's as the fallback), once connected.</summary>
+    public string ReceivePath { get; private set; } = "not connected";
 
     public RtpReceiveMonitor Monitor { get; } = new();
     public StabilityEngine Engine { get; }
@@ -175,7 +182,9 @@ public sealed class XboxPeer : IAsyncDisposable
         if (!await WaitConnectedAsync(TimeSpan.FromSeconds(20), ct))
             throw new ConsoleUnreachableException();
         Route = DescribeRoute();
-        Log?.Invoke("Route: " + Route);
+        Log?.Invoke("Route: " + Route + (_pc?.DtlsTransportInfo.SrtpProtectionProfile is { } srtp ? $"; encryption {srtp}" : ""));
+        StartOwnReceivePath();
+        StartFakeInputIfAsked();
 
         _tick = new Timer(_ => Tick(), null, 100, 100);
         _fastTick = new Timer(_ => FastTick(), null, 10, 10);
@@ -213,24 +222,103 @@ public sealed class XboxPeer : IAsyncDisposable
         return b[0] == 10 || (b[0] == 172 && b[1] is >= 16 and <= 31) || (b[0] == 192 && b[1] == 168) || (b[0] == 100 && b[1] is >= 64 and <= 127);
     }
 
+    /// <summary>Profiling: called per media packet with the ticks spent in our own handling of it.</summary>
+    public Action<PacketCost>? PacketTimed { get; set; }
+
+    /// <summary>
+    /// What one received packet cost: time in our handler, bytes our handler allocated, and bytes the receive
+    /// thread allocated since our previous packet on it (the WebRTC library's receive path, socket to RTP packet).
+    /// </summary>
+    public readonly record struct PacketCost(long Ticks, long OurBytes, long LibraryBytes);
+
+    [ThreadStatic] private static long t_allocAfterLast;
+
     private void OnRtp(IPEndPoint ep, SDPMediaTypesEnum media, RTPPacket pkt)
     {
-        if (media == SDPMediaTypesEnum.audio) { AudioRtp?.Invoke(pkt.Payload, pkt.Header.SequenceNumber); return; }
-        if (media != SDPMediaTypesEnum.video) return;
-        _remoteVideoSsrc = pkt.Header.SyncSource;
+        long a0 = GC.GetAllocatedBytesForCurrentThread(), t0 = Stopwatch.GetTimestamp();
+        try { HandleRtp(media, pkt); }
+        finally
+        {
+            long t1 = Stopwatch.GetTimestamp(), a1 = GC.GetAllocatedBytesForCurrentThread();
+            long lib = t_allocAfterLast > 0 ? a0 - t_allocAfterLast : 0;
+            t_allocAfterLast = a1;
+            PacketTimed?.Invoke(new PacketCost(t1 - t0, a1 - a0, lib));
+        }
+    }
+
+    private void HandleRtp(SDPMediaTypesEnum media, RTPPacket pkt)
+    {
+        if (media is not (SDPMediaTypesEnum.audio or SDPMediaTypesEnum.video)) return;
+        var h = pkt.Header;
+        HandleRtp(media == SDPMediaTypesEnum.audio, h.SyncSource, h.SequenceNumber, h.Timestamp, h.MarkerBit == 1, pkt.Payload);
+    }
+
+    /// <summary>One RTP media packet, from whichever receive path is active.</summary>
+    private void HandleRtp(bool audio, uint ssrc, ushort seq, uint timestamp, bool marker, ReadOnlySpan<byte> payload)
+    {
+        if (audio) { AudioRtp?.Invoke(payload.ToArray(), seq); return; } // 50 a second: a copy is fine
+        _remoteVideoSsrc = ssrc;
         double now = NowMs;
         lock (_rxLock)
         {
-            Monitor.OnPacket(pkt.Header.SequenceNumber, pkt.Header.Timestamp, pkt.Header.MarkerBit == 1,
-                pkt.Payload.Length, now, H264.IsKeyframeStart(pkt.Payload));
-            Nacks.OnPacket(pkt.Header.SequenceNumber, now);
-            foreach (var au in Depacketizer.Push(pkt.Header.SequenceNumber, pkt.Header.Timestamp, pkt.Header.MarkerBit == 1, pkt.Payload, now))
+            Monitor.OnPacket(seq, timestamp, marker, payload.Length, now, H264.IsKeyframeStart(payload));
+            Nacks.OnPacket(seq, now);
+            foreach (var au in Depacketizer.Push(seq, timestamp, marker, payload, now))
             {
                 Frames.Enqueue(au, au.RtpTimestamp, now);
                 FrameQueued?.Invoke();
             }
+            // Ask for a lost packet as soon as its reorder wait is over (packets arrive every ~0.3 ms), not at the next
+            // 10 ms tick: the resend, and the frame waiting on it, arrive up to 10 ms sooner.
+            if (NackNegotiated && Nacks.HasGaps && _pc is not null)
+            {
+                var lost = Nacks.Poll(now, Monitor.RttMs);
+                if (lost.Count > 0)
+                    _pc.SendRtcpRaw(SDPMediaTypesEnum.video, NackGenerator.BuildNack(_pc.VideoLocalTrack?.Ssrc ?? 1u, ssrc, lost));
+            }
         }
     }
+
+    /// <summary>
+    /// Switch media receiving to our own path (<see cref="MediaReceiver"/>) once DTLS has the keys. SIPSorcery's stays
+    /// as the fallback: unpatched builds, XSTREAM_RECEIVE=sipsorcery (for A/B comparisons), or if ours can't start.
+    /// </summary>
+    private void StartOwnReceivePath()
+    {
+#if XS_PATCHED_SIPSORCERY
+        if (_pc is null || _rx is not null) return;
+        if (Environment.GetEnvironmentVariable("XSTREAM_RECEIVE") is "sipsorcery")
+            ReceivePath = "SIPSorcery (XSTREAM_RECEIVE=sipsorcery)";
+        else
+        {
+            _rx = MediaReceiver.TryStart(_pc, OnOwnRtp, out var why);
+            if (_rx is not null) _rx.Log += m => Log?.Invoke(m);
+            ReceivePath = _rx is null ? $"SIPSorcery ({why})" : why;
+        }
+#else
+        ReceivePath = "SIPSorcery (unpatched build)";
+#endif
+        Log?.Invoke("Receive path: " + ReceivePath);
+    }
+
+#if XS_PATCHED_SIPSORCERY
+    private void OnOwnRtp(bool audio, uint ssrc, ushort seq, uint timestamp, bool marker, ReadOnlySpan<byte> payload)
+    {
+        long a0 = GC.GetAllocatedBytesForCurrentThread(), t0 = Stopwatch.GetTimestamp();
+        try { HandleRtp(audio, ssrc, seq, timestamp, marker, payload); }
+        finally
+        {
+            long t1 = Stopwatch.GetTimestamp(), a1 = GC.GetAllocatedBytesForCurrentThread();
+            long lib = t_allocAfterLast > 0 ? a0 - t_allocAfterLast : 0;
+            t_allocAfterLast = a1;
+            PacketTimed?.Invoke(new PacketCost(t1 - t0, a1 - a0, lib));
+        }
+    }
+
+    /// <summary>Packets our receive path decrypted / rejected (authentication) / handed back to SIPSorcery.</summary>
+    public (long packets, long authFailures, long replays, long handedBack) ReceiveCounters =>
+        _rx is null ? default : (_rx.Packets, _rx.Srtp.AuthFailures, _rx.Srtp.Replays, _rx.HandedBack);
+#endif
 
     /// <summary>Every 10 ms: ask for lost packets, give up on frames that can't be completed in time.</summary>
     private void FastTick()
@@ -256,7 +344,9 @@ public sealed class XboxPeer : IAsyncDisposable
         bool decoderError;
         lock (_rxLock)
         {
-            if (!double.IsNaN(Nacks.RttEstimateMs)) Monitor.RttMs = Nacks.RttEstimateMs;
+            // Measured round trip (our STUN checks) when we have it; the NACK -> resend estimate otherwise.
+            if (_rx is not null && !double.IsNaN(_rx.RttMs) && !_rttFromNacksOnly) Monitor.RttMs = _rx.RttMs;
+            else if (!double.IsNaN(Nacks.RttEstimateMs)) Monitor.RttMs = Nacks.RttEstimateMs;
             sample = Monitor.TakeSample(NowMs);
             decoderError = Depacketizer.TakeDecoderError();
             double since = double.IsNaN(Depacketizer.LastDeliveredMs) ? sample.MsSinceLastFrame : NowMs - Depacketizer.LastDeliveredMs;
@@ -352,6 +442,30 @@ public sealed class XboxPeer : IAsyncDisposable
         _input!.send(InputPacket.Gamepad(Interlocked.Increment(ref _inputSeq), NowMs, pads));
     }
 
+    /// <summary>
+    /// XSTREAM_FAKE_INPUT=hz (testing): send an idle controller (nothing pressed, sticks centred) that often, so the
+    /// input path's delays can be measured without a controller in hand. Harmless to the console.
+    /// </summary>
+    private void StartFakeInputIfAsked()
+    {
+        if (!int.TryParse(Environment.GetEnvironmentVariable("XSTREAM_FAKE_INPUT"), out int hz) || hz <= 0) return;
+        Log?.Invoke($"Test mode: sending an idle controller {hz} times a second");
+#if XS_PATCHED_SIPSORCERY
+        SctpSendDelay.Reset();
+#endif
+        var idle = new[] { new GamepadState(0, GamepadButtons.None, 0, 0, 0, 0, 0, 0) };
+        new Thread(() =>
+        {
+            var sw = Stopwatch.StartNew(); long n = 0;
+            while (_pc is not null && _pc.connectionState != RTCPeerConnectionState.closed)
+            {
+                SendGamepad(idle);
+                n++;
+                while (sw.Elapsed.TotalSeconds * hz < n) Thread.Sleep(1);
+            }
+        }) { IsBackground = true, Name = "fake-input" }.Start();
+    }
+
     /// <summary>Tell the console a controller was plugged in or removed.</summary>
     public void PadConnectionChanged(int index, bool added)
     {
@@ -384,6 +498,21 @@ public sealed class XboxPeer : IAsyncDisposable
         _tick?.Dispose();
         _fastTick?.Dispose();
         _pc?.close();
+#if XS_PATCHED_SIPSORCERY
+        if (SctpSendDelay.Count > 0)
+            Log?.Invoke($"Data channel send delay: {SctpSendDelay.Count} messages, {SctpSendDelay.Over1Ms} waited >1 ms, " +
+                        $"{SctpSendDelay.Over5Ms} >5 ms, {SctpSendDelay.Over20Ms} >20 ms, worst {SctpSendDelay.MaxMs:F1} ms; {SctpSendDelay.Unacknowledged} unacknowledged at the end");
+        if (_rx is not null)
+        {
+            var (n, auth, dup, back) = ReceiveCounters;
+            Log?.Invoke($"Own receive path: {n} media packets, {auth} failed authentication, {dup} duplicates dropped, " +
+                        $"{back} other packets handed to SIPSorcery" + (_rx.Stopped is { } why ? $"; stopped early: {why}" : ""));
+            Log?.Invoke(_rx.RttAnswers > 0
+                ? $"Round trip (STUN checks): {_rx.RttAnswers}/{_rx.RttProbes} answered, smoothed {_rx.RttMs:F2} ms, min {_rx.RttMinMs:F2} ms, max {_rx.RttMaxMs:F2} ms"
+                : $"Round trip (STUN checks): no answers to {_rx.RttProbes} probes; using the NACK estimate");
+            _rx.Dispose();
+        }
+#endif
         if (_session is not null) { try { await _session.StopAsync(); } catch { /* best effort */ } }
     }
 }

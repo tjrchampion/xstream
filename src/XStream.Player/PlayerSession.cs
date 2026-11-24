@@ -159,6 +159,11 @@ public sealed class PlayerSession
             using var _mmcss = XStream.Core.Native.WindowsStreaming.GameThread();
             var logPath = Path.Combine(AppPaths.Logs, $"{DateTime.Now:yyyyMMdd-HHmmss}-{profile.ToString().ToLowerInvariant()}.csv");
             var logger = new SessionLogger(logPath, profile.ToString());
+            // The session's text log (connection, decoder, renderer and timing lines) next to its .csv, so a diagnostics
+            // export carries it. These lines never contain sign-in tokens.
+            var textLog = new StreamWriter(Path.ChangeExtension(logPath, ".log"), append: false) { AutoFlush = true };
+            Action<string> toFile = m => { lock (textLog) { try { textLog.WriteLine($"{DateTime.Now:HH:mm:ss.fff} {m}"); } catch { } } };
+            Log += toFile;
             // Settings that can change mid-stream (in-stream menu, or the launcher's Settings page).
             AppSettings live = o.Settings ?? AppSettings.Load();
             // Set once shutdown starts. Timer and network threads can still fire for a moment after that, so
@@ -194,6 +199,14 @@ public sealed class PlayerSession
                     overlay.MoreSettingsRequested += () => MoreSettingsRequested?.Invoke();
                     overlay.CameBack += () => ReturnedToGame?.Invoke();
                     var win = window; var ov0 = overlay;
+                    // XSTREAM_SCREENSHOT=file.png;seconds (testing): capture what the renderer shows, to check it.
+                    if (Environment.GetEnvironmentVariable("XSTREAM_SCREENSHOT")?.Split(';') is [var shotPath, var shotAt])
+                        _ = Task.Delay(TimeSpan.FromSeconds(double.Parse(shotAt, System.Globalization.CultureInfo.InvariantCulture)))
+                            .ContinueWith(_ => win.RequestScreenshot((px, w, h) =>
+                            {
+                                Screenshots.SaveTo(px, w, h, shotPath);
+                                Log?.Invoke($"Screenshot {w}x{h}: {shotPath}");
+                            }));
                     overlay.ScreenshotRequested += () => win.RequestScreenshot((px, w, h) => Task.Run(() =>
                     {
                         try
@@ -374,6 +387,11 @@ public sealed class PlayerSession
 
             int tick = 0;
             bool fallbackLogged = false;
+            // What the stream costs this device (allocations, GC pauses, CPU, per-packet time); summary at the end.
+            var profiler = new StreamProfiler();
+            string? profileMode = Environment.GetEnvironmentVariable("XSTREAM_PROFILE");
+            bool profileEachSecond = profileMode is "1" or "true" or "alloc";
+            if (profileMode == "alloc") profiler.TrackAllocationTypes();
             var health = new StreamHealth();
             int batteryWarned = 101; // lowest level already announced (20, 10, 5)
             AppSettings Settings() => live;
@@ -389,6 +407,10 @@ public sealed class PlayerSession
                     lastLink = s.Link;
                 }
                 if (tick++ % 10 != 0) return; // once a second
+                var prof = profiler.Tick();
+                if (profileEachSecond)
+                    Log?.Invoke($"profile {prof.TimeS:F0}s: alloc {prof.AllocMBps:F1} MB/s, GC {prof.Gen0}/{prof.Gen1}/{prof.Gen2} pause {prof.GcPauseMsPerS:F2} ms, " +
+                                $"CPU {prof.CpuPct:F1}%, {prof.PacketsPerS:F0} pkt/s, ours {prof.OurUsPerPacket:F1} us/pkt");
                 if (video?.Decoder.FallbackReason is { } why && !fallbackLogged) { fallbackLogged = true; Log?.Invoke("Video: " + why); }
                 var live = new LiveStats
                 {
@@ -410,6 +432,7 @@ public sealed class PlayerSession
                     {
                         Fps = d.Fps, NetToScreenP50Ms = d.ArrivalToPresentP50Ms, NetToScreenP99Ms = d.ArrivalToPresentP99Ms,
                         DecodeMs = video.DecodeP50Ms, VideoWidth = vw, VideoHeight = vh,
+                        AudioQueuedMs = audio?.QueuedMs ?? 0,
                     };
                     overlay?.UpdateStats(live, (vw, vh));
                 }
@@ -441,12 +464,18 @@ public sealed class PlayerSession
 
             void Connect(StreamSession s)
             {
-                var p = new XboxPeer(o.Stability, live.IceServers);
+                var p = new XboxPeer(o.Stability, live.IceServers) { PacketTimed = profiler.Packet };
                 var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
                 VideoPipeline? v = null;
                 if (window is not null && mailbox is not null)
                 {
-                    v = new VideoPipeline(p.Frames, new H264Decoder(preferHardware: o.HardwareDecode, d3d11Device: window.D3D11Device), mailbox, () => p.NowMs);
+                    v = new VideoPipeline(p.Frames, VideoDecoder.Create(o.HardwareDecode, window.D3D11Device), mailbox, () => p.NowMs);
+                    if (int.TryParse(Environment.GetEnvironmentVariable("XSTREAM_LATENCY_TEST"), out int presses) && presses > 0)
+                    {
+                        var probe = new LatencyProbe(() => p.NowMs, p.SendGamepad, presses);
+                        v.PictureDecoded = probe.OnPicture;
+                        probe.Start(m => Log?.Invoke(m));
+                    }
                     p.FrameQueued += () => { if (!ending && p == cur) v.Notify(); };
                     p.DecoderErrorSource = v.TakeDecodeError;
                 }
@@ -511,10 +540,10 @@ public sealed class PlayerSession
                 v?.Start();
                 Info?.Invoke(new SessionInfo
                 {
-                    Decoder = v is null ? "none" : $"{v.Decoder.Backend} ({H264Decoder.Version})",
+                    Decoder = v is null ? "none" : $"{v.Decoder.Backend} ({v.Decoder.Version})",
                     Renderer = window?.RendererName ?? "none",
                     Controller = backend?.Name ?? "none",
-                    Audio = audio?.DeviceInfo ?? "off",
+                    Audio = audio is null ? "off" : $"{audio.DeviceInfo}, {audio.Decoder}",
                     LowLatencyInput = XboxPeer.UnreliableInputSupported,
                     Remb = p.RembNegotiated, Nack = p.NackNegotiated, LogPath = logPath, Route = p.Route,
                 });
@@ -526,6 +555,8 @@ public sealed class PlayerSession
             {
                 var p = cur; var v = video; var cts = connCts;
                 cur = null; video = null; connCts = null;
+                if (v is not null) Log?.Invoke(v.Summary);
+                if (v is not null && window is not null) Log?.Invoke(window.RenderSummary);
                 try { cts?.Cancel(); } catch { }
                 if (p is not null)
                 {
@@ -669,10 +700,17 @@ public sealed class PlayerSession
             Disconnect(); // also tells the service to end the session
             Finish();
             mic?.Dispose();
+            Log?.Invoke(profiler.Summary());
+            if (profiler.TopAllocations() is { } top) Log?.Invoke(top);
+            if (audio is not null)
+                Log?.Invoke($"Audio: {audio.PacketsDecoded} packets played; lost packets {audio.PacketsRecovered} rebuilt (FEC), {audio.PacketsConcealed} concealed, {audio.PacketsSkipped} skipped; " +
+                             $"{audio.CaughtUpMs:F0} ms of built-up lag removed, {audio.Resyncs} resets");
             audio?.Dispose();
             window?.Dispose();
             backend?.Dispose();
             AppDomain.CurrentDomain.UnhandledException -= onCrash;
+            Log -= toFile;
+            lock (textLog) textLog.Dispose();
             if (failedToReconnect)
             {
                 SetStage(PlayerStage.Failed, $"Lost the connection to {o.ConsoleName} and couldn't get it back after {ReconnectAttempts} tries. Check the network, then stream again.");

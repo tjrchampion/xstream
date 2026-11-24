@@ -67,6 +67,15 @@ try
             Console.WriteLine($"Cloud gaming: {ct2.CloudOffering} via {ct2.CloudHost}");
             var all = await cc.GetCloudTitlesAsync();
             var recent = await cc.GetCloudTitlesAsync(recent: true);
+            if (args.Contains("--regions"))
+            {
+                // Which xCloud regions this account is offered, and how far each is (TCP connect time to its API host).
+                var t0 = store.Load()!;
+                var raw = await auth.GetStreamingTokenAsync(t0, "xgpuweb");
+                foreach (var r in auth.LastRegions)
+                    Console.WriteLine($"  {r.Name,-16} {(r.IsDefault ? "default" : "       ")} {await XStream.Core.Xbox.CloudRegions.MeasureMsAsync(r.BaseUri),6:F0} ms  {r.BaseUri}");
+                break;
+            }
             if (args.Contains("--ids")) { foreach (var t in all.Take(5)) Console.WriteLine($"  {t.TitleId} {t.ProductId} entitled={t.Entitled}"); Console.WriteLine($"{all.Count} titles"); break; }
             var games = await XboxLibrary.ResolveCloudGamesAsync(http, all, settings.Locale);
             Console.WriteLine($"{all.Count} titles, {all.Count(t => t.Entitled)} playable, {recent.Count} recently played");
@@ -90,6 +99,15 @@ try
             var profile = pos.Length > 2 ? Enum.Parse<StreamProfile>(pos[2], ignoreCase: true) : settings.Profile;
             double maxMbps = pos.Length > 3 ? double.Parse(pos[3]) : settings.MaxMbps;
             settings = settings with { Profile = profile, MaxMbps = maxMbps };
+            // --latency-test=N: press D-pad right/left N times on the dashboard and time press -> changed picture.
+            if (args.FirstOrDefault(a => a.StartsWith("--latency-test=")) is { } lt)
+                Environment.SetEnvironmentVariable("XSTREAM_LATENCY_TEST", lt["--latency-test=".Length..]);
+            // --resolution=max|1080|720 overrides the saved setting for this session.
+            if (args.FirstOrDefault(a => a.StartsWith("--resolution=")) is { } res)
+                settings = settings with { Resolution = res["--resolution=".Length..].ToLowerInvariant() switch
+                {
+                    "1080" or "1080p" => StreamResolution.R1080, "720" or "720p" => StreamResolution.R720, _ => StreamResolution.Max,
+                } };
             // "cloud:<titleId>" streams that game from Xbox Cloud Gaming (see `xstream cloud` for title ids).
             string? cloudTitle = pos[1].StartsWith(PlayerHost.CloudPrefix) ? pos[1][PlayerHost.CloudPrefix.Length..] : null;
             var (client, tokens) = cloudTitle is null
@@ -99,7 +117,8 @@ try
             {
                 CloudTitleId = cloudTitle,
                 Fullscreen = args.Contains("--windowed") ? false : settings.Fullscreen,
-                VSync = args.Contains("--vsync") || settings.VSync,
+                VSync = args.Contains("--no-vsync") ? false : args.Contains("--vsync") || settings.VSync,
+                Sharpen = args.FirstOrDefault(a => a.StartsWith("--clarity=")) is { } c ? int.Parse(c["--clarity=".Length..]) : (int)settings.Clarity,
                 HardwareDecode = !args.Contains("--software") && settings.HardwareDecode,
                 Headless = args.Contains("--headless"),
             };
@@ -116,7 +135,7 @@ try
             };
             player.Stats += s => Console.WriteLine(
                 $"{s.TimeS,6:F1}s  {s.Mbps,5:F1} Mbps (cap {s.CapMbps,4:F1})  loss {s.LossPct,4:F1}%  ping {s.PingMs,3:F0}ms  jitter {s.JitterMs,4:F1}ms  " +
-                $"buffer {s.BufferMs,3:F0}ms  {s.VideoHeight}p {s.Fps,3:F0}fps net->screen {s.NetToScreenP50Ms:F1}/{s.NetToScreenP99Ms:F1}ms decode {s.DecodeMs:F1}ms  " +
+                $"buffer {s.BufferMs,3:F0}ms  {s.VideoHeight}p {s.Fps,3:F0}fps net->screen {s.NetToScreenP50Ms:F1}/{s.NetToScreenP99Ms:F1}ms decode {s.DecodeMs:F1}ms audio {s.AudioQueuedMs:F0}ms  " +
                 $"{s.Link}  pad {s.Pads} @{s.PadHz:F0}Hz p99 {s.PadP99Us:F0}us  {s.Verdict}");
             player.Ended += (sum, path) => PrintSummary(sum, path);
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; player.Stop(); };
@@ -136,7 +155,7 @@ try
             window.FirstPicture += () => Console.WriteLine($"First picture shown after {Now():F0} ms (window {(args.Contains("--hidden") ? "was hidden until now" : "was already visible")})");
             var buffer = new PlayoutBuffer<AccessUnit> { TargetDelayMs = 0 };
             using var pipe = new VideoPipeline(buffer, new H264Decoder(!args.Contains("--software")), mailbox, Now);
-            Console.WriteLine($"Decoder: {pipe.Decoder.Backend} ({H264Decoder.Version}). Renderer: {window.RendererName}. Esc to quit.");
+            Console.WriteLine($"Decoder: {pipe.Decoder.Backend} ({H264Decoder.LibVersion}). Renderer: {window.RendererName}. Esc to quit.");
             pipe.Start();
             var packets = H264Packetizer.Packetize(H264Packetizer.AccessUnits(stream)).ToList();
             var depack = new H264Depacketizer();

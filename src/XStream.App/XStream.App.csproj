@@ -14,7 +14,7 @@
     <!-- Exe icon on Windows: Explorer, taskbar, and the SDL video window (same exe). -->
     <ApplicationIcon>Assets/xstream.ico</ApplicationIcon>
     <Product>XStream</Product>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <Description>Xbox remote play client built around stream stability</Description>
   </PropertyGroup>
   <!-- Release publish (scripts/publish-windows.sh passes XsTrim=true): drop framework code XStream never uses.
@@ -45,4 +45,16 @@
     <ProjectReference Include="../XStream.Core/XStream.Core.csproj" />
     <ProjectReference Include="../XStream.Player/XStream.Player.csproj" />
   </ItemGroup>
+
+  <!-- Release builds: use the code-signed copy of Avalonia's ANGLE DLL (scripts/prepare-natives.sh gathers it, the
+       release signs it) instead of the unsigned one from NuGet, before .NET packs it into the single-file exe.
+       Smart App Control won't load an unsigned DLL. -->
+  <Target Name="XsUseSignedAngle" AfterTargets="ComputeResolvedFilesToPublishList" Condition="'$(XsAngleDll)' != '' And Exists('$(XsAngleDll)')">
+    <ItemGroup>
+      <_XsAngle Include="@(ResolvedFileToPublish)" Condition="'%(Filename)%(Extension)' == 'av_libglesv2.dll'" />
+      <ResolvedFileToPublish Remove="@(_XsAngle)" />
+      <ResolvedFileToPublish Include="$(XsAngleDll)" RelativePath="%(_XsAngle.RelativePath)" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+    <Message Importance="high" Text="Using ANGLE DLL from the native bundle (signed if signing is set up): $(XsAngleDll)" Condition="'@(_XsAngle)' != ''" />
+  </Target>
 </Project>

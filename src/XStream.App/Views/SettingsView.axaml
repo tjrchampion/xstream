@@ -110,7 +110,7 @@
           <Grid Classes="row" ColumnDefinitions="*,Auto">
             <StackPanel>
               <TextBlock FontWeight="SemiBold" Text="Full screen" />
-              <TextBlock Classes="caption" Text="Borderless full screen. Also what AMD Fluid Motion Frames needs on the ROG Ally X." />
+              <TextBlock Classes="caption" Text="Borderless full screen, and the lowest delay: on a Mac a window adds about 15 ms before each frame reaches the display. Also what AMD Fluid Motion Frames needs on the ROG Ally X." />
             </StackPanel>
             <ToggleSwitch Grid.Column="1" IsChecked="{Binding Fullscreen}" />
           </Grid>
@@ -134,7 +134,7 @@
           <Grid Classes="row" ColumnDefinitions="*,Auto">
             <StackPanel>
               <TextBlock FontWeight="SemiBold" Text="Resolution" />
-              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Maximum lets the console send its highest tier; it needs a strong network and a high maximum bitrate (30+ Mbps)." />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Maximum lets the console send its highest tier; it needs a strong network and a high maximum bitrate (30+ Mbps). 720p is the lowest-delay choice: about 10 ms less from button to picture (the console encodes and we decode a smaller picture), but noticeably softer. Consoles streaming at home may ignore 1080p and send their top tier." />
             </StackPanel>
             <ComboBox Grid.Column="1" MinWidth="250" VerticalAlignment="Center" ItemsSource="{Binding Resolutions}" SelectedIndex="{Binding ResolutionIndex}" />
           </Grid>

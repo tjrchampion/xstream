@@ -53,9 +53,16 @@ public sealed class NackGenerator
         }
     }
 
-    /// <summary>Sequence numbers to request now. Call every 5-20 ms.</summary>
+    /// <summary>
+    /// True if a gap is being tracked (cheap: call on every packet, then <see cref="Poll"/> only when it's true, so a
+    /// loss is reported as soon as the reorder wait is over rather than at the next timer tick).
+    /// </summary>
+    public bool HasGaps => _missing.Count > 0;
+
+    /// <summary>Sequence numbers to request now. Call every 5-20 ms, and on packet arrival while <see cref="HasGaps"/>.</summary>
     public IReadOnlyList<ushort> Poll(double nowMs, double rttMs)
     {
+        if (_missing.Count == 0) return [];
         var due = new List<ushort>();
         var drop = new List<long>();
         double retryAfter = Math.Max(20, rttMs * 1.5);

@@ -20,6 +20,8 @@ public sealed record LiveStats
     public double NetToScreenP50Ms { get; init; }
     public double NetToScreenP99Ms { get; init; }
     public double DecodeMs { get; init; }
+    /// <summary>Game audio waiting to play (how far the sound runs behind what arrived).</summary>
+    public double AudioQueuedMs { get; init; }
     public string Link { get; init; } = "";
     public string Caps { get; init; } = "";
     public string Verdict { get; init; } = "";

@@ -31,7 +31,9 @@ public sealed class XboxStreamingClient
     /// </summary>
     public StreamResolution Resolution { get; init; } = StreamResolution.Max;
     /// <summary>XSTREAM_DEBUG=1 prints every streaming API call and its response to stderr.</summary>
-    private static readonly bool Debug = Environment.GetEnvironmentVariable("XSTREAM_DEBUG") is "1" or "true";
+    private static readonly bool Debug = Environment.GetEnvironmentVariable("XSTREAM_DEBUG") is "1" or "true" or "full";
+    /// <summary>XSTREAM_DEBUG=full prints whole responses (e.g. the console's SDP answer) instead of the first 600 characters.</summary>
+    private static readonly bool DebugFull = Environment.GetEnvironmentVariable("XSTREAM_DEBUG") is "full";
 
     public XboxStreamingClient(HttpClient http, string streamHost, string gsToken)
     {
@@ -122,7 +124,7 @@ public sealed class XboxStreamingClient
         using var res = await _http.SendAsync(req, ct);
         var text = await res.Content.ReadAsStringAsync(ct);
         if (Debug)
-            Console.Error.WriteLine($"[api] {method} {path} -> {(int)res.StatusCode} {(text.Length > 600 ? text[..600] + "…" : text)}");
+            Console.Error.WriteLine($"[api] {method} {path} -> {(int)res.StatusCode} {(text.Length > 600 && !DebugFull ? text[..600] + "…" : text)}");
         if (!res.IsSuccessStatusCode)
             throw new XboxApiException($"{method} {path}: HTTP {(int)res.StatusCode} {text}", (int)res.StatusCode);
         JsonNode node;

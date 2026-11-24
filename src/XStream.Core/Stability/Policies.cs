@@ -81,6 +81,11 @@ public sealed class KeyframeRecovery
             return Fire(now);
         if (_awaiting && broken && now - _lastRequestMs > Math.Max(250, s.RttMs * 3))
             return Fire(now); // still broken: the request or the keyframe itself got lost
+        // No complete keyframe yet. Once a loss is declared every later frame is held back until one arrives, and
+        // those frames arrive intact, so "broken" never fires again: if the keyframe itself was lost the picture
+        // stayed frozen for good (live: 24 s, to the end of the session, after a 400 ms loss burst). Keep asking.
+        if (_awaiting && now - _lastRequestMs > Math.Max(500, s.RttMs * 4))
+            return Fire(now);
         return false;
     }
 

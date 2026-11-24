@@ -12,7 +12,7 @@ namespace XStream.Core.Video;
 /// lives) are barely touched. Chroma is left alone: the eye judges sharpness from luma.
 ///
 /// Runs with 128-bit SIMD (NEON on Apple Silicon, SSE on x86) across row bands in parallel: about 1 ms for
-/// a 1080p frame. Writes to a separate buffer, never into the decoder's frame (that's a reference picture).
+/// a 1080p frame, 1.5 ms at 1440p. Writes to a separate buffer, never into the decoder's frame (that's a reference picture).
 /// </summary>
 public static unsafe class Sharpen
 {
@@ -31,15 +31,66 @@ public static unsafe class Sharpen
         Buffer.MemoryCopy(src, dst, width, width);
         Buffer.MemoryCopy(src + (height - 1) * srcPitch, dst + (height - 1) * dstPitch, width, width);
 
-        int bands = Math.Clamp(Environment.ProcessorCount / 2, 1, 6);
         int rows = height - 2;
-        if (bands == 1 || rows < 64) { Rows(src, srcPitch, dst, dstPitch, width, 1, height - 1, k); return; }
-        nint s = (nint)src, d = (nint)dst;
-        Parallel.For(0, bands, b =>
+        if (Bands.Count == 1 || rows < 64) { Rows(src, srcPitch, dst, dstPitch, width, 1, height - 1, k); return; }
+        Bands.Run(src, srcPitch, dst, dstPitch, width, rows, k);
+    }
+
+    private static readonly BandWorkers Bands = new(Math.Clamp(Environment.ProcessorCount / 2, 1, 6));
+
+    /// <summary>
+    /// Dedicated threads, one per row band (the caller does the first band). Unlike Parallel.For, which has to
+    /// get thread-pool threads going for every frame (measured: 1 frame in 20 waited up to 11 ms, enough to miss
+    /// the display's refresh), these are always there and start within microseconds.
+    /// </summary>
+    private sealed class BandWorkers
+    {
+        public readonly int Count;
+        private readonly SemaphoreSlim[] _go;
+        private readonly ManualResetEventSlim _done = new(false, spinCount: 2000);
+        private int _remaining;
+        // The current job (set before the workers are released, read after).
+        private byte* _src, _dst;
+        private int _sp, _dp, _width, _rows, _k;
+
+        public BandWorkers(int count)
         {
-            int y0 = 1 + rows * b / bands, y1 = 1 + rows * (b + 1) / bands;
-            Rows((byte*)s, srcPitch, (byte*)d, dstPitch, width, y0, y1, k);
-        });
+            Count = count;
+            _go = new SemaphoreSlim[count];
+            for (int i = 1; i < count; i++)
+            {
+                _go[i] = new SemaphoreSlim(0);
+                int band = i;
+                new Thread(() => Work(band)) { IsBackground = true, Name = $"vexel-sharpen-{i}", Priority = ThreadPriority.AboveNormal }.Start();
+            }
+        }
+
+        public void Run(byte* src, int sp, byte* dst, int dp, int width, int rows, int k)
+        {
+            _src = src; _sp = sp; _dst = dst; _dp = dp; _width = width; _rows = rows; _k = k;
+            _done.Reset();
+            Volatile.Write(ref _remaining, Count - 1);
+            for (int i = 1; i < Count; i++) _go[i].Release();
+            Band(0);
+            _done.Wait();
+        }
+
+        private void Work(int band)
+        {
+            using var _games = XStream.Core.Native.WindowsStreaming.GameThread();
+            while (true)
+            {
+                _go[band].Wait();
+                Band(band);
+                if (Interlocked.Decrement(ref _remaining) == 0) _done.Set();
+            }
+        }
+
+        private void Band(int b)
+        {
+            int y0 = 1 + _rows * b / Count, y1 = 1 + _rows * (b + 1) / Count;
+            Rows(_src, _sp, _dst, _dp, _width, y0, y1, _k);
+        }
     }
 
     private static void Rows(byte* src, int sp, byte* dst, int dp, int width, int y0, int y1, int k)

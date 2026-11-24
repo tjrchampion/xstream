@@ -47,6 +47,7 @@ public static class NativeLibs
         {
             "SDL2" => Sdl2(asm, path),
             "avcodec" or "avutil" => FFmpeg(name),
+            "opus" => Opus(),
             _ => IntPtr.Zero,
         };
     }
@@ -60,6 +61,21 @@ public static class NativeLibs
             candidates.AddRange(new[] { Path.Combine(d, "libSDL2.dylib"), Path.Combine(d, "SDL2.dll"), Path.Combine(d, "libSDL2-2.0.so.0") });
         foreach (var c in candidates)
             if (NativeLibrary.TryLoad(c, asm, path, out var h) || NativeLibrary.TryLoad(c, out h)) return h;
+        return IntPtr.Zero;
+    }
+
+    /// <summary>libopus (optional: audio falls back to the managed Concentus decoder without it).</summary>
+    private static IntPtr Opus()
+    {
+        if (Environment.GetEnvironmentVariable("XSTREAM_OPUS") is "managed") return IntPtr.Zero;
+        string[] names = ["opus.dll", "libopus-0.dll", "libopus.dylib", "libopus.0.dylib", "libopus.so.0", "libopus.so"];
+        foreach (var d in Dirs())
+            foreach (var n in names)
+            {
+                var f = Path.Combine(d, n);
+                if (File.Exists(f) && NativeLibrary.TryLoad(f, out var h)) return h;
+            }
+        foreach (var n in names) if (NativeLibrary.TryLoad(n, out var h)) return h;
         return IntPtr.Zero;
     }
 

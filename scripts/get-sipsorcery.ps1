@@ -9,5 +9,5 @@ if (-not (Test-Path "$Dir/.git")) {
 git -C $Dir fetch --depth 1 origin $Commit
 git -C $Dir checkout -q --force $Commit
 git -C $Dir clean -fdq -- src/SIPSorcery
-git -C $Dir apply (Resolve-Path "patches/sipsorcery-pr-sctp.patch")
+git -C $Dir apply (Resolve-Path "patches/sipsorcery-vexel.patch")
 Write-Host "SIPSorcery $Commit patched in $Dir. Rebuild XStream to use it."

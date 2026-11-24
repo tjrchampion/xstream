@@ -18,7 +18,7 @@ namespace XStream.Core.Video;
 /// Flip-model swap chain, at most one queued frame. All calls on the window's (main) thread, except that
 /// the decoder uses the same device from its own thread (the device is multithread-protected).
 /// </summary>
-internal sealed unsafe class D3D11Renderer : IDisposable
+internal sealed unsafe class D3D11Renderer : IVideoRenderer
 {
     private const string Shaders = """
         Texture2D<float>  texY  : register(t0);
@@ -99,6 +99,9 @@ internal sealed unsafe class D3D11Renderer : IDisposable
     private ID3D11Device _device = null!;
     private ID3D11DeviceContext _ctx = null!;
     private IDXGISwapChain1 _swap = null!;
+    // With VSync off, show each frame the moment it's ready. Without this a flip-model swap chain still waits for the
+    // next refresh (half a refresh on average: ~8 ms at 60 Hz) even with a sync interval of 0.
+    private bool _tearing;
     private ID3D11RenderTargetView? _rtv;
     private ID3D11VertexShader _vs = null!;
     private ID3D11PixelShader _psNv12 = null!, _psI420 = null!, _psOverlay = null!;
@@ -176,10 +179,14 @@ internal sealed unsafe class D3D11Renderer : IDisposable
                 Scaling = Scaling.Stretch,
                 AlphaMode = AlphaMode.Ignore,
             };
+            using (var f5 = factory.QueryInterfaceOrNull<IDXGIFactory5>())
+                _tearing = !_vsync && f5 is not null && f5.PresentAllowTearing;
+            if (_tearing) desc.Flags = SwapChainFlags.AllowTearing;
             _swap = factory.CreateSwapChainForHwnd(_device, _hwnd, desc);
             factory.MakeWindowAssociation(_hwnd, WindowAssociationFlags.IgnoreAltEnter); // full screen is SDL's borderless window
             using var adapterDesc = adapter.QueryInterfaceOrNull<IDXGIAdapter1>();
             if (adapterDesc is not null) Name += " - " + adapterDesc.Description1.Description.Trim();
+            if (_tearing) Name += ", immediate present";
         }
         CreateTarget();
 
@@ -221,7 +228,7 @@ internal sealed unsafe class D3D11Renderer : IDisposable
         if (w == _outW && h == _outH) return;
         _ctx.OMSetRenderTargets((ID3D11RenderTargetView?)null);
         _rtv?.Dispose(); _rtv = null;
-        _swap.ResizeBuffers(0, (uint)w, (uint)h, Format.Unknown, SwapChainFlags.None).CheckError();
+        _swap.ResizeBuffers(0, (uint)w, (uint)h, Format.Unknown, _tearing ? SwapChainFlags.AllowTearing : SwapChainFlags.None).CheckError();
         CreateTarget();
     }
 
@@ -377,7 +384,58 @@ internal sealed unsafe class D3D11Renderer : IDisposable
             _ctx.Draw(3, 0);
         }
 
-        _swap.Present(_vsync ? 1u : 0u, PresentFlags.None);
+        _swap.Present(_vsync ? 1u : 0u, _tearing ? PresentFlags.AllowTearing : PresentFlags.None);
+        if (HasPicture) TrackPresent();
+    }
+
+    // ---- When frames actually reach the display ------------------------------------------------------
+    // Like the Metal renderer's "On screen" line: DXGI frame statistics give the QPC time of the refresh that showed
+    // a given present, on the same clock as Stopwatch. With tearing there's no refresh boundary to wait for, so the
+    // figure is the time to the next scan-out DXGI reports (an upper bound for the torn part of the frame).
+    private readonly Queue<(uint Count, long At)> _presents = new();
+    private readonly double[] _glassMs = new double[4096];
+    private long _glassCount, _statsFailures;
+    private uint _lastMatched;
+    private uint _lastSyncRefresh; private long _lastSyncQpc; private double _refreshSum; private long _refreshN;
+
+    private void TrackPresent()
+    {
+        try
+        {
+            _presents.Enqueue((_swap.LastPresentCount, System.Diagnostics.Stopwatch.GetTimestamp()));
+            while (_presents.Count > 32) _presents.Dequeue();
+            if (_swap.GetFrameStatistics(out var st).Failure) { _statsFailures++; return; }
+            if (st.PresentCount == _lastMatched) return;
+            _lastMatched = st.PresentCount;
+            foreach (var (count, at) in _presents)
+                if (count == st.PresentCount)
+                {
+                    double ms = (st.SyncQPCTime - at) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                    if (ms >= 0 && ms < 250) _glassMs[_glassCount++ % _glassMs.Length] = ms;
+                    break;
+                }
+            if (_lastSyncRefresh != 0 && st.SyncRefreshCount > _lastSyncRefresh)
+            {
+                _refreshSum += (st.SyncQPCTime - _lastSyncQpc) * 1000.0 / System.Diagnostics.Stopwatch.Frequency / (st.SyncRefreshCount - _lastSyncRefresh);
+                _refreshN++;
+            }
+            _lastSyncRefresh = st.SyncRefreshCount; _lastSyncQpc = st.SyncQPCTime;
+        }
+        catch { _statsFailures++; }
+    }
+
+    /// <summary>One line for the session log: hand-off to display, from DXGI frame statistics.</summary>
+    public string PresentSummary
+    {
+        get
+        {
+            int k = (int)Math.Min(_glassCount, _glassMs.Length);
+            if (k == 0) return $"On screen: no DXGI frame statistics ({_statsFailures} failed queries)";
+            var v = _glassMs.Take(k).OrderBy(x => x).ToArray();
+            string hz = _refreshN > 0 ? $"{1000 / (_refreshSum / _refreshN):F0} Hz" : "?";
+            return $"On screen: present -> display p50 {v[k / 2]:F2} ms, p90 {v[(int)(k * 0.9)]:F2} ms, p99 {v[Math.Min(k - 1, (int)(k * 0.99))]:F2} ms " +
+                   $"({k} frames sampled, display {hz}{(_tearing ? ", tearing" : "")}{(_vsync ? ", vsync" : "")})";
+        }
     }
 
     private void UploadOverlay(byte[] rgba)

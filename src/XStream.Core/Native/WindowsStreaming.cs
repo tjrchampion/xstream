@@ -85,12 +85,27 @@ public static class WindowsStreaming
     [DllImport("avrt.dll", CharSet = CharSet.Unicode)] private static extern IntPtr AvSetMmThreadCharacteristicsW(string task, ref uint index);
     [DllImport("avrt.dll")] private static extern bool AvRevertMmThreadCharacteristics(IntPtr handle);
 
+    [DllImport("libSystem.dylib")] private static extern int pthread_set_qos_class_self_np(uint qosClass, int relativePriority);
+    private const uint QosUserInteractive = 0x21, QosDefault = 0x15;
+
     /// <summary>
-    /// Register the calling thread with the Multimedia Class Scheduler as a "Games" thread, so Windows doesn't
-    /// let background work delay it (decode and present stay on time when the Ally is busy). Undo on the same thread.
+    /// Give the calling thread real-time-ish scheduling for the stream. Windows: register it with the Multimedia
+    /// Class Scheduler as a "Games" thread, so background work doesn't delay it (decode and present stay on time when
+    /// the Ally is busy). macOS: the user-interactive QoS class, which keeps it on the performance cores (a .NET
+    /// thread otherwise often runs on an efficiency core: the clarity filter measured 5.1 ms there vs 1.4 ms).
+    /// Undo on the same thread.
     /// </summary>
     public static IDisposable GameThread()
     {
+        if (OperatingSystem.IsMacOS())
+        {
+            try
+            {
+                return pthread_set_qos_class_self_np(QosUserInteractive, 0) == 0
+                    ? new Undo(() => pthread_set_qos_class_self_np(QosDefault, 0)) : new Undo(null);
+            }
+            catch { return new Undo(null); }
+        }
         if (!OperatingSystem.IsWindows()) return new Undo(null);
         try
         {

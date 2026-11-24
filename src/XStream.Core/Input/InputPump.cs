@@ -102,6 +102,7 @@ public sealed class InputPump : IDisposable
     {
         bool win = OperatingSystem.IsWindows();
         if (win) TimeBeginPeriod(1);
+        using var _games = XStream.Core.Native.WindowsStreaming.GameThread(); // MMCSS on Windows, P-cores on macOS
         try
         {
             double period = 1000.0 / Math.Clamp(_o.PollHz, 60, 8000);
@@ -168,6 +169,16 @@ public sealed class InputPump : IDisposable
         }
         else if (count > 0 && nowMs - _lastSendMs >= _o.HeartbeatMs) send = true;
 
+        // No controller connected: the console ends remote play after about a minute without input (measured: 58 s).
+        // Keep the session alive with an idle controller (nothing pressed) a few times a second, so it survives
+        // starting a stream before the controller is on, or just watching.
+        if (!send && count == 0 && nowMs - _lastSendMs >= IdleKeepaliveMs)
+        {
+            _send(IdlePad);
+            _lastSendMs = nowMs;
+            return;
+        }
+
         if (!send) return;
         var frame = new GamepadState[count];
         for (int i = 0, k = 0; i < 4; i++) if (_conn[i]) frame[k++] = _sent[i];
@@ -180,6 +191,10 @@ public sealed class InputPump : IDisposable
             lock (_statLock) { _lat[_latN++ % _lat.Length] = us; }
         }
     }
+
+    /// <summary>How often an idle controller is sent while none is connected (keeps the console's session alive).</summary>
+    public const double IdleKeepaliveMs = 250;
+    private static readonly GamepadState[] IdlePad = [new GamepadState(0, GamepadButtons.None, 0, 0, 0, 0, 0, 0)];
 
     private GamepadState Process(in GamepadState r, byte index, double nowMs)
     {

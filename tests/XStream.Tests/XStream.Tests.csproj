@@ -4,5 +4,6 @@
   <ItemGroup>
     <ProjectReference Include="../../src/XStream.Core/XStream.Core.csproj" />
     <ProjectReference Include="../../src/XStream.Player/XStream.Player.csproj" />
+    <ProjectReference Include="../../src/XStream.Net/XStream.Net.csproj" />
   </ItemGroup>
 </Project>

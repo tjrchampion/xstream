@@ -153,13 +153,13 @@ While the stream menu is open, the console gets no controller input, so you can 
 
 ## Building from source
 
-You need the [.NET 10 SDK](https://dotnet.microsoft.com/download), plus SDL2 and FFmpeg.
+You need the [.NET 10 SDK](https://dotnet.microsoft.com/download), plus SDL2 and FFmpeg. libopus is optional: game audio decodes faster with it, and falls back to a built-in decoder without it.
 
 - **macOS:**
   ```
-  brew install ffmpeg sdl2
+  brew install ffmpeg sdl2 opus
   ```
-- **Windows:** put `SDL2.dll` and the FFmpeg shared DLLs (`avcodec-*.dll`, `avutil-*.dll`, `swresample-*.dll`) next to the app, or set `XSTREAM_FFMPEG` to their folder.
+- **Windows:** put `SDL2.dll` and the FFmpeg shared DLLs (`avcodec-*.dll`, `avutil-*.dll`, `swresample-*.dll`) next to the app, or set `XSTREAM_FFMPEG` to their folder. Optionally add `opus.dll` (`./scripts/build-opus-windows.sh` builds it).
 
 ```bash
 ./scripts/get-sipsorcery.sh            # once: patched WebRTC library (Windows: scripts/get-sipsorcery.ps1)
@@ -167,7 +167,7 @@ dotnet run --project src/XStream.App   # the launcher
 dotnet run --project tests/XStream.Tests
 ```
 
-**Windows release build:** `./scripts/publish-windows.sh` makes `dist/Vexel.exe`, a single self-contained file. It runs on macOS, Linux or Git Bash. Run `./scripts/build-ffmpeg-windows.sh` first (it needs MinGW-w64 and nasm) for a minimal LGPL FFmpeg; that brings the exe down to about 30 MB. The full release process (GitHub build, code signing and signed update manifests) is in [docs/RELEASING.md](docs/RELEASING.md). The code-signing policy is in [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
+**Windows release build:** `./scripts/publish-windows.sh` makes `dist/Vexel.exe`, a single self-contained file. It runs on macOS, Linux or Git Bash. Run `./scripts/build-ffmpeg-windows.sh` first (it needs MinGW-w64 and nasm) for a minimal LGPL FFmpeg; that brings the exe down to about 30 MB. Run `./scripts/build-opus-windows.sh` too, for libopus. The full release process (GitHub build, code signing and signed update manifests) is in [docs/RELEASING.md](docs/RELEASING.md). The code-signing policy is in [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
 
 **Command-line client:** useful for testing without the UI:
 
@@ -249,6 +249,7 @@ Bug reports and pull requests are welcome. Please attach the diagnostics zip (**
   - [SDL2](https://www.libsdl.org/) (zlib)
   - [SkiaSharp](https://github.com/mono/SkiaSharp) (MIT)
   - [Vortice.Windows](https://github.com/amerkoleci/Vortice.Windows) (MIT)
+  - [libopus](https://opus-codec.org/) (BSD-3-Clause; `scripts/build-opus-windows.sh` builds the shipped DLL from the official release)
   - [Concentus](https://github.com/lostromb/concentus) (BSD-3-Clause)
   - [CommunityToolkit.Mvvm](https://github.com/CommunityToolkit/dotnet) (MIT)
 - Xbox is a trademark of Microsoft Corporation. ROG Ally is a trademark of ASUSTeK Computer Inc.

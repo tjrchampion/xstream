@@ -106,10 +106,26 @@ var tests = new List<(string name, Action body)>
     }),
     ("Severe loss does not spiral the cap down within one burst", () =>
     {
+        // Loss with the queue full (link overflowing): cut to 70% of what got through, once per burst.
         var abr = new AdaptiveBitrateController(new StabilityOptions { StartKbps = 15_000 });
         double t = 1_000;
-        for (int i = 0; i < 8; i++) abr.Update(S(t += 150, kbps: 10_000, loss: 0.2));
+        for (int i = 0; i < 8; i++) abr.Update(S(t += 150, kbps: 10_000, loss: 0.2, queue: 40));
         Near(7_000, abr.CapKbps, 1);
+        // Loss with no queue (interference / path burst): cut by half the loss from the pre-burst rate.
+        abr = new AdaptiveBitrateController(new StabilityOptions { StartKbps = 15_000 });
+        t = 1_000;
+        for (int i = 0; i < 8; i++) abr.Update(S(t += 150, kbps: 10_000, loss: 0.2));
+        Near(13_500, abr.CapKbps, 1);
+    }),
+    ("A heavy loss burst with no queue cuts at most by half", () =>
+    {
+        // Live: 77% of packets lost for 400 ms on wired. Only 23% got through, so a throughput-based cut
+        // went to 2.5 Mbps and the console paced its recovery keyframe at that rate.
+        var abr = new AdaptiveBitrateController(new StabilityOptions { StartKbps = 40_000, MaxKbps = 40_000 });
+        double t = 0;
+        for (; t < 3_000; t += 100) abr.Update(S(t, kbps: 28_000));
+        for (int i = 0; i < 4; i++) abr.Update(S(t += 100, kbps: 6_000, loss: 0.77, queue: 5));
+        True(abr.CapKbps >= 20_000, $"cap {abr.CapKbps}");
     }),
     ("Repeated congestion episodes set a stability ceiling", () =>
     {
@@ -123,6 +139,90 @@ var tests = new List<(string name, Action body)>
         True(abr.CeilingActive(t), "ceiling active");
         for (int i = 0; i < 150; i++) abr.Update(S(t += 100, kbps: abr.CapKbps));
         True(abr.CapKbps <= abr.Ceiling + 1, $"cap {abr.CapKbps} stays under ceiling {abr.Ceiling}");
+    }),
+    ("A lost recovery keyframe is asked for again", () =>
+    {
+        // Frames after a declared loss arrive intact but are held back, so "broken" doesn't repeat: without a
+        // retry the picture stayed frozen for good when the keyframe itself was lost.
+        var k = new KeyframeRecovery();
+        True(k.Update(S(1_000, kbps: 20_000), decoderError: true), "first request");
+        int extra = 0;
+        for (double t = 1_100; t <= 3_000; t += 100) if (k.Update(S(t, kbps: 20_000))) extra++;
+        True(extra >= 2, $"retries {extra}");
+        k.Update(S(3_100, kbps: 20_000) with { KeyframeSeen = true });
+        for (double t = 3_200; t <= 5_000; t += 100) False(k.Update(S(t, kbps: 20_000)), "no requests once a keyframe arrived");
+    }),
+    ("Resent packets don't read as queueing delay", () =>
+    {
+        // After a loss burst the console resends the lost packets with their original (older) timestamps.
+        // Live this showed as a 1.6 s "queue" and pinned the cap at the minimum.
+        var m = new RtpReceiveMonitor();
+        ushort seq = 0; double t = 0;
+        for (int f = 0; f < 120; f++, t += 16.7)
+            for (int i = 0; i < 5; i++) m.OnPacket(seq++, (uint)(f * 1503), i == 4, 1200, t + i * 0.1);
+        m.TakeSample(t);
+        ushort resend = (ushort)(seq - 400);
+        for (int f = 120; f < 180; f++, t += 16.7)
+            for (int i = 0; i < 5; i++)
+            {
+                m.OnPacket(seq++, (uint)(f * 1503), i == 4, 1200, t + i * 0.1);
+                m.OnPacket(resend++, (uint)(40 * 1503), false, 1200, t + i * 0.1 + 0.05); // resend of a frame from 1.3 s ago
+            }
+        var s = m.TakeSample(t);
+        True(s.QueueDelayMs < 5, $"queue {s.QueueDelayMs:F1} ms");
+    }),
+    ("After a one-off hiccup on a clean link the cap is back within seconds", () =>
+    {
+        // Replays a wired Series X session: ~28 Mbps content, one 77% loss burst 3 s in, then nothing wrong.
+        // The console follows the cap. Before the fast climb this took ~14 s to get back to 28 Mbps.
+        static double Recover(bool fast)
+        {
+            var abr = new AdaptiveBitrateController(new StabilityOptions { StartKbps = 40_000, MaxKbps = 40_000, FastClimb = fast });
+            double t = 0;
+            for (; t < 3_000; t += 100) abr.Update(S(t, kbps: Math.Min(abr.CapKbps, 28_000)));
+            for (int i = 0; i < 3; i++) abr.Update(S(t += 100, kbps: 6_000, loss: 0.77, queue: 60, trend: 10));
+            double burstEnd = t;
+            while (t - burstEnd < 60_000)
+            {
+                abr.Update(S(t += 100, kbps: Math.Min(abr.CapKbps * 0.98, 29_000), queue: 2));
+                if (abr.CapKbps >= 28_000) return (t - burstEnd) / 1000;
+            }
+            return double.PositiveInfinity;
+        }
+        double slow = Recover(false), fast = Recover(true);
+        Console.WriteLine($"      back to 28 Mbps after {slow:F1} s (steady climb) vs {fast:F1} s (fast climb)");
+        True(fast <= 9, $"fast climb took {fast:F1} s");
+        True(slow > fast * 1.5, $"steady {slow:F1} s vs fast {fast:F1} s");
+    }),
+    ("On a flaky link the cap keeps the steady climb", () =>
+    {
+        // Two congestion episodes inside 40 s: climbing fast would just reach the next collapse sooner,
+        // so the climb stays at the steady rate (at most the 20%/s recovery rate, ~2% per 100 ms tick).
+        var abr = new AdaptiveBitrateController(new StabilityOptions { StartKbps = 20_000, MaxKbps = 40_000 });
+        double t = 0;
+        for (int ep = 0; ep < 2; ep++)
+        {
+            for (int i = 0; i < 50; i++) abr.Update(S(t += 100, kbps: abr.CapKbps));
+            abr.Update(S(t += 100, kbps: abr.CapKbps * 0.5, loss: 0.2));
+        }
+        double maxStep = 0;
+        for (int i = 0; i < 150; i++)
+        {
+            double before = abr.CapKbps;
+            abr.Update(S(t += 100, kbps: abr.CapKbps * 0.98, queue: 2));
+            maxStep = Math.Max(maxStep, abr.CapKbps / before - 1);
+        }
+        True(maxStep <= 0.0201, $"largest step {maxStep:P2}");
+    }),
+    ("Queueing stops the fast climb straight away", () =>
+    {
+        var abr = new AdaptiveBitrateController(new StabilityOptions { StartKbps = 5_000, MaxKbps = 40_000 });
+        double t = 0;
+        for (int i = 0; i < 80; i++) abr.Update(S(t += 100, kbps: abr.CapKbps * 0.98, queue: 2)); // 8 s quiet: climbing fast
+        double before = abr.CapKbps;
+        abr.Update(S(t += 100, kbps: abr.CapKbps * 0.98, queue: 12)); // queue starting to build (not congestion yet)
+        double step = abr.CapKbps / before - 1;
+        True(step < 0.01, $"step with a building queue {step:P1}");
     }),
     ("Cap always stays within user min/max", () =>
     {
@@ -279,7 +379,7 @@ var tests = new List<(string name, Action body)>
         Eq(0, d.Push(2, 900, false, fuStart, 1).Count);
         var f = d.Push(3, 900, true, fuEnd, 2).Single();
         True(f.IsKeyframe, "keyframe");
-        Eq("00-00-00-01-67-42-00-00-00-01-68-CE-00-00-00-01-65-AA-BB", BitConverter.ToString(f.Data));
+        Eq("00-00-00-01-67-42-00-00-00-01-68-CE-00-00-00-01-65-AA-BB", BitConverter.ToString(f.Data.ToArray()));
     }),
     ("Retransmitted packet completes the frame; no loss counted", () =>
     {
@@ -333,6 +433,18 @@ var tests = new List<(string name, Action body)>
         n = 0;
         for (int t = 1; t <= 16; t++) { pad.Set(0, new GamepadState(0, 0, 0.5f + (t % 2) * 0.001f, 0, 0, 0, 0, 0)); p.Step(t); }
         Eq(2, n); // heartbeats at 8 and 16 ms only
+    }),
+    ("Controller: with none connected, an idle controller keeps the console's session alive", () =>
+    {
+        var pad = new FakePad(); var sent = new List<GamepadState[]>();
+        var p = new InputPump(pad, new InputOptions(), f => sent.Add(f));
+        for (int t = 0; t <= 1000; t++) p.Step(t);
+        True(sent.Count is >= 4 and <= 5, $"about 4 a second, got {sent.Count}");
+        True(sent.All(f => f.Length == 1 && f[0].Buttons == GamepadButtons.None && f[0].LeftX == 0), "idle: nothing pressed");
+        sent.Clear();
+        pad.Set(0, new GamepadState(0, 0, 0, 0, 0, 0, 0, 0));
+        for (int t = 1001; t <= 1100; t++) p.Step(t);
+        True(sent.Count > 10, "a real controller takes over (8 ms heartbeat)");
     }),
     ("Controller: radial deadzone keeps direction and full range", () =>
     {
@@ -415,7 +527,7 @@ var tests = new List<(string name, Action body)>
         var d = new H264Depacketizer(); var got = new List<AccessUnit>();
         foreach (var p in pk) got.AddRange(d.Push(p.Seq, p.Timestamp, p.Marker, p.Payload, 0));
         Eq(30, got.Count); Eq(3, got.Count(a => a.IsKeyframe));
-        var rebuilt = got.SelectMany(a => a.Data).ToArray();
+        var rebuilt = got.SelectMany(a => a.Data.ToArray()).ToArray();
         True(rebuilt.SequenceEqual(stream), "frame assembler rebuilds the exact Annex-B stream");
     }),
     ("Video: real FFmpeg decode through the frame assembler (needs FFmpeg)", () =>
@@ -436,11 +548,35 @@ var tests = new List<(string name, Action body)>
                     last?.Dispose(); last = pic;
                 }
         }
-        Console.WriteLine($"        {H264Decoder.Version}, decoder {dec.Backend}, {pictures} pictures, {last?.Width}x{last?.Height} {last?.Layout}");
+        Console.WriteLine($"        {H264Decoder.LibVersion}, decoder {dec.Backend}, {pictures} pictures, {last?.Width}x{last?.Height} {last?.Layout}");
         Eq(60, pictures);
         True(last!.Width == 320 && last.Height == 240 && last.Layout == PlaneLayout.Yuv420p, "picture size/format");
         Eq(3, lumas.Count); // one solid colour per keyframe
         last.Dispose();
+    }),
+    ("Video: Vexel's VideoToolbox decoder gives the same pictures as FFmpeg, none held back (macOS)", () =>
+    {
+        if (!OperatingSystem.IsMacOS()) { Console.WriteLine("        skipped: macOS only"); return; }
+        var stream = TestPattern.Stream(20, 15, 60, 20);
+        using var vt = new VideoToolboxDecoder();
+        var d = new H264Depacketizer();
+        int pictures = 0; var lumas = new HashSet<byte>(); int w = 0, h = 0;
+        unsafe
+        {
+            foreach (var p in H264Packetizer.Packetize(H264Packetizer.AccessUnits(stream)))
+                foreach (var au in d.Push(p.Seq, p.Timestamp, p.Marker, p.Payload, 0))
+                {
+                    using var pic = vt.Decode(au);
+                    if (pic is null) continue;
+                    pictures++; lumas.Add(pic.Plane(0)[pic.Pitch(0) * 100 + 100]); w = pic.Width; h = pic.Height;
+                    True(pic.Layout == PlaneLayout.Nv12, "NV12");
+                }
+        }
+        Console.WriteLine($"        {vt.Backend}: {pictures} pictures {w}x{h}, held back {vt.HeldBack}, errors {vt.Errors}");
+        Eq(60, pictures);
+        Eq(0L, vt.HeldBack);
+        True(w == 320 && h == 240, "picture size");
+        Eq(3, lumas.Count); // one solid colour per keyframe, as with FFmpeg
     }),
     ("Video: lost P-frame packet freezes until the next keyframe, then recovers (needs FFmpeg)", () =>
     {
@@ -622,6 +758,51 @@ var tests = new List<(string name, Action body)>
         // 16:9 stream on a 16:9 screen (ROG Ally X): no bars, no crop.
         Eq((0, 0, 1920, 1080), R(1920, 1080, 1920, 1080));
     }),
+    ("Cloud region: nearest wins, but Microsoft's default is kept when it's nearly as close", () =>
+    {
+        CloudRegion R(string n, bool def = false) => new(n, "https://" + n + ".example", def);
+        var (pick, _) = CloudRegions.Choose([(R("UKSOUTH", def: true), 21), (R("WESTEUROPE"), 22), (R("EASTUS"), 104)]);
+        Eq("UKSOUTH", pick!.Name);                                      // default within 8 ms of the best: keep it
+        (pick, _) = CloudRegions.Choose([(R("EASTUS", def: true), 104), (R("UKSOUTH"), 21)]);
+        Eq("UKSOUTH", pick!.Name);                                      // default far away: nearest wins
+        (pick, _) = CloudRegions.Choose([(R("A", def: true), double.PositiveInfinity), (R("B"), 40)]);
+        Eq("B", pick!.Name);                                            // default unreachable
+        (pick, _) = CloudRegions.Choose([(R("A", def: true), double.PositiveInfinity), (R("B"), double.PositiveInfinity)]);
+        Eq("A", pick!.Name);                                            // nothing measurable: fall back to the default
+    }),
+    ("Audio: a lost Opus packet is rebuilt from the next one's FEC, longer gaps are concealed, late ones dropped", () =>
+    {
+        var enc = new Concentus.Structs.OpusEncoder(48000, 2, Concentus.Enums.OpusApplication.OPUS_APPLICATION_AUDIO)
+            { Bitrate = 128000, UseInbandFEC = true, PacketLossPercent = 10 };
+        // 30 packets (0.6 s) of a 440 Hz stereo tone.
+        var packets = new List<byte[]>();
+        var pcm = new short[960 * 2]; var buf = new byte[1500];
+        for (int f = 0; f < 30; f++)
+        {
+            for (int i = 0; i < 960; i++) { short v = (short)(Math.Sin(2 * Math.PI * 440 * (f * 960 + i) / 48000.0) * 9000); pcm[2 * i] = v; pcm[2 * i + 1] = v; }
+            int n = enc.Encode(pcm, 0, 960, buf, 0, buf.Length);
+            packets.Add(buf.AsSpan(0, n).ToArray());
+        }
+        // Lose packet 10 (one), and 20-22 (three in a row); deliver 5 again late.
+        var dec = new XStream.Core.Audio.OpusLossDecoder();
+        long samples = 0; double energyAt10 = 0; int chunk = 0;
+        for (int f = 0; f < 30; f++)
+        {
+            if (f == 10 || f is >= 20 and <= 22) continue;
+            dec.Push(packets[f], f, (p, n) =>
+            {
+                samples += n; chunk++;
+                if (f == 11 && chunk > 0 && energyAt10 == 0) for (int i = 0; i < n; i++) energyAt10 += Math.Abs((int)p[2 * i]);
+            });
+            if (f == 15) dec.Push(packets[5], 5, (_, _) => throw new Exception("late packet should be dropped"));
+        }
+        Eq(26L, dec.Decoded);
+        Eq(2L, dec.Recovered);        // 10 (from 11's FEC) and 22 (from 23's FEC)
+        Eq(2L, dec.Concealed);        // 20 and 21
+        Eq(1L, dec.Dropped);
+        Eq(30L * 960, samples);       // no hole: every 20 ms of the 0.6 s is filled
+        True(energyAt10 / 960 > 2000, $"rebuilt packet carries the tone (mean level {energyAt10 / 960:F0})");
+    }),
     ("Cloud search: forgiving matching, every word must match, best matches first, genre filter and sort", () =>
     {
         CloudGame G(string name, string pub = "", string[]? genres = null, int year = 2020) =>
@@ -754,6 +935,51 @@ var tests = new List<(string name, Action body)>
         Eq("https://x/box", XboxLibrary.Sized("https://x/box", 1920));
     }),
 };
+tests.Add(("Audio catch-up: quiet frames detected, loud ones shortened smoothly by 4%", () =>
+{
+    float g = 1f / 32768;
+    var quiet = new float[1920]; for (int i = 0; i < quiet.Length; i++) quiet[i] = (float)(Math.Sin(i * 0.1) * 50 * g);
+    True(XStream.Core.Audio.AudioCatchUp.IsQuiet(quiet, g), "near-silence is quiet");
+    var tone = new float[1920]; for (int i = 0; i < 960; i++) tone[2 * i] = tone[2 * i + 1] = (float)(Math.Sin(i * 2 * Math.PI * 440 / 48000) * 8000 * g);
+    False(XStream.Core.Audio.AudioCatchUp.IsQuiet(tone, g), "a tone is not quiet");
+    var copy = (float[])tone.Clone();
+    int m = XStream.Core.Audio.AudioCatchUp.Shorten(copy, 960, 2);
+    Eq(922, m);
+    Near(tone[0], copy[0], 1e-6); Near(tone[2 * 959], copy[2 * (m - 1)], 1e-6); // same start and end
+    double maxStep = 0; for (int j = 1; j < m; j++) maxStep = Math.Max(maxStep, Math.Abs(copy[2 * j] - copy[2 * j - 2]));
+    True(maxStep < 0.02, "no clicks (smooth waveform)");
+}));
+tests.Add(("Opus: libopus and the managed fallback decode the same audio", () =>
+{
+    var enc = new Concentus.Structs.OpusEncoder(48000, 2, Concentus.Enums.OpusApplication.OPUS_APPLICATION_AUDIO);
+    var pcm = new short[1920]; var pkt = new byte[1500];
+    var native = new XStream.Core.Audio.OpusLossDecoder();
+    Environment.SetEnvironmentVariable("XSTREAM_OPUS", "managed");
+    var managed = new XStream.Core.Audio.OpusLossDecoder();
+    Environment.SetEnvironmentVariable("XSTREAM_OPUS", null);
+    if (!native.DecoderName.Contains("libopus")) { Console.WriteLine("    (libopus not installed: managed only)"); return; }
+    double worst = 0;
+    for (int f = 0; f < 100; f++)
+    {
+        for (int i = 0; i < 960; i++) pcm[2 * i] = pcm[2 * i + 1] = (short)(Math.Sin((f * 960 + i) * 2 * Math.PI * 330 / 48000) * 9000);
+#pragma warning disable CS0618
+        int n = enc.Encode(pcm, 0, 960, pkt, 0, pkt.Length);
+#pragma warning restore CS0618
+        var data = pkt[..n];
+        short[]? a = null, b = null;
+        if (f == 50) continue; // a lost packet: both rebuild it from the next one's FEC data / conceal it
+        native.Push(data, f, (p, k) => a = p[..(k * 2)]);
+        managed.Push(data, f, (p, k) => b = p[..(k * 2)]);
+        double fw = 0; for (int i = 0; i < Math.Min(a!.Length, b!.Length); i++) fw = Math.Max(fw, Math.Abs(a[i] - b[i]));
+        if (Environment.GetEnvironmentVariable("XS_DEBUG_OPUS") is "1") Console.WriteLine($"    frame {f}: {fw}");
+        // Around a loss the two conceal differently (libopus 1.5's concealment is newer); elsewhere only rounding differs.
+        if (f < 50 || f > 60) worst = Math.Max(worst, fw);
+    }
+    True(worst < 32, $"outputs match away from the loss (worst sample difference {worst})");
+    Eq(native.Decoded, managed.Decoded);
+}));
+tests.AddRange(SrtpTests.All);
+tests.AddRange(StunTests.All);
 
 int failed = 0;
 foreach (var (name, body) in tests)
@@ -766,7 +992,7 @@ return failed == 0 ? 0 : 1;
 
 static bool FfmpegAvailable(out string why)
 {
-    try { why = ""; _ = H264Decoder.Version; return true; }
+    try { why = ""; _ = H264Decoder.LibVersion; return true; }
     catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException or TypeInitializationException) { why = "FFmpeg libraries not found (set XSTREAM_FFMPEG)"; return false; }
 }
 

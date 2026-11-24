@@ -6,36 +6,26 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SDL_URL="https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10-win32-x64.zip"
-FFMPEG_URL="https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-lgpl-shared-9.0.zip"
 OUT="dist/.publish-win-x64"
 CACHE=".cache/win-x64"
-
 mkdir -p "$CACHE"
-fetch() { # url file
-  if [ ! -s "$CACHE/$2" ]; then
-    echo "Downloading $2..."
-    curl -fL --retry 3 -o "$CACHE/$2.part" "$1" && mv "$CACHE/$2.part" "$CACHE/$2"
-  fi
-}
-fetch "$SDL_URL" sdl2.zip
-fetch "$FFMPEG_URL" ffmpeg.zip
 
-echo "Packing native libraries..."
-rm -rf "$CACHE/x" && mkdir -p "$CACHE/x/natives"
-unzip -q -o "$CACHE/sdl2.zip" SDL2.dll -d "$CACHE/x/natives"
-# FFmpeg: the minimal build (H.264 + Opus only, ~3 MB) when scripts/build-ffmpeg-windows.sh has been run,
-# otherwise the general-purpose LGPL build (~100 MB, every codec).
-if ls "$CACHE"/ffmpeg-min/bin/avcodec-*.dll >/dev/null 2>&1; then
-  echo "Using minimal FFmpeg from $CACHE/ffmpeg-min"
-  cp "$CACHE"/ffmpeg-min/bin/{avcodec,avutil,swresample}-*.dll "$CACHE/x/natives/"
+# ---- Native DLLs: gathered, then code-signed BEFORE they're packed (Smart App Control checks every DLL) ----------
+# XS_NATIVES_DIR: an already-signed folder from prepare-natives.sh (the release workflow signs it with SignPath).
+# Otherwise they're gathered here and signed with SIGN_PFX / AZURE_SIGNING_* if set (scripts/sign-files.sh).
+if [ -n "${XS_NATIVES_DIR:-}" ]; then
+  NATIVES_DIR="$(cd "$XS_NATIVES_DIR" && pwd)"
+  echo "Using prepared native DLLs from $NATIVES_DIR"
 else
-  if [ -n "${XS_REQUIRE_MIN_FFMPEG:-}" ]; then echo "Minimal FFmpeg missing: run scripts/build-ffmpeg-windows.sh" >&2; exit 1; fi
-  echo "Using the full FFmpeg build (run scripts/build-ffmpeg-windows.sh for a much smaller exe)"
-  unzip -q -j -o "$CACHE/ffmpeg.zip" '*/bin/avcodec-*.dll' '*/bin/avutil-*.dll' '*/bin/swresample-*.dll' -d "$CACHE/x/natives"
+  NATIVES_DIR="$PWD/$CACHE/natives"
+  scripts/prepare-natives.sh "$NATIVES_DIR"
+  scripts/sign-files.sh "$NATIVES_DIR"/*.dll
 fi
+echo "Packing native libraries..."
+rm -rf "$CACHE/x" && mkdir -p "$CACHE/x"
 NATIVES="$PWD/$CACHE/x/natives.zip"
-(cd "$CACHE/x/natives" && zip -q -9 "$NATIVES" *.dll)
+# SDL2 + FFmpeg (+ libopus) ride along as natives.zip (unpacked on first launch); ANGLE goes into .NET's own bundle (below).
+(cd "$NATIVES_DIR" && zip -q -9 "$NATIVES" SDL2.dll avcodec-*.dll avutil-*.dll swresample-*.dll $(ls opus.dll 2>/dev/null))
 
 # Version: from XS_VERSION (the release workflow sets it from the git tag), else the csproj.
 VERSION="${XS_VERSION:-$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' src/XStream.App/XStream.App.csproj | head -1)}"
@@ -45,32 +35,20 @@ rm -rf "$OUT" dist/XStream.exe dist/Vexel.exe
 # unpacked on first launch with a progress window (src/XStream.App/Services/NativeBundle.cs).
 dotnet publish src/XStream.App/XStream.App.csproj -c Release -r win-x64 --self-contained true \
   -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true \
-  -p:DebugType=none -p:AllowedReferenceRelatedFileExtensions=none -p:XsTrim=true -p:Version="$VERSION" -p:XsNativeBundle="$NATIVES" -o "$OUT" | grep -E "error|->" || true
+  -p:DebugType=none -p:AllowedReferenceRelatedFileExtensions=none -p:XsTrim=true -p:Version="$VERSION" -p:XsNativeBundle="$NATIVES" -p:XsAngleDll="$NATIVES_DIR/av_libglesv2.dll" -o "$OUT" | grep -E "error|->|Using ANGLE DLL" || true
 [ -f "$OUT/XStream.exe" ] || { echo "Publish failed: no XStream.exe"; exit 1; }
 EXTRA=$(ls "$OUT" | grep -v '^XStream.exe$' || true)
 [ -z "$EXTRA" ] || echo "Note: extra files next to the exe: $EXTRA"
 # The projects keep their XStream code names; the app is published as Vexel.exe.
 cp "$OUT/XStream.exe" dist/Vexel.exe
 
-# ---- Code signing (optional; removes the "Windows protected your PC" SmartScreen warning) --------------------
-# Either a certificate file:            SIGN_PFX=cert.pfx SIGN_PFX_PASSWORD=...         (needs osslsigncode, or signtool on Windows)
-# or Azure Trusted Signing:             AZURE_SIGNING_ENDPOINT=https://eus.codesigning.azure.net
-#                                       AZURE_SIGNING_ACCOUNT=... AZURE_SIGNING_PROFILE=...  (needs jsign + az login)
-TSA="http://timestamp.digicert.com"
-if [ -n "${SIGN_PFX:-}" ]; then
-  echo "Signing with $SIGN_PFX..."
-  osslsigncode sign -pkcs12 "$SIGN_PFX" -pass "${SIGN_PFX_PASSWORD:-}" -n "Vexel" -h sha256 -t "$TSA" \
-    -in dist/Vexel.exe -out dist/Vexel.signed.exe >/dev/null
-  mv dist/Vexel.signed.exe dist/Vexel.exe
-  osslsigncode verify -in dist/Vexel.exe 2>&1 | grep -E "Signature verification|Subject:" | head -3 || true
-elif [ -n "${AZURE_SIGNING_ENDPOINT:-}" ]; then
-  echo "Signing with Azure Trusted Signing ($AZURE_SIGNING_ACCOUNT/$AZURE_SIGNING_PROFILE)..."
-  TOKEN=$(az account get-access-token --resource https://codesigning.azure.net --query accessToken -o tsv)
-  jsign --storetype TRUSTEDSIGNING --keystore "$AZURE_SIGNING_ENDPOINT" --storepass "$TOKEN" \
-    --alias "$AZURE_SIGNING_ACCOUNT/$AZURE_SIGNING_PROFILE" --tsaurl http://timestamp.acs.microsoft.com --tsmode RFC3161 \
-    --name Vexel dist/Vexel.exe
+# ---- Code signing of the exe (optional; SIGN_PFX or AZURE_SIGNING_*, see scripts/sign-files.sh) ---------------
+if [ -n "${SIGN_PFX:-}${AZURE_SIGNING_ENDPOINT:-}" ]; then
+  echo "Signing Vexel.exe..."
+  scripts/sign-files.sh dist/Vexel.exe
+  command -v osslsigncode >/dev/null && osslsigncode verify -in dist/Vexel.exe 2>&1 | grep -E "Signature verification|Subject:" | head -2 || true
 else
-  echo "Not code-signed (set SIGN_PFX or AZURE_SIGNING_* to sign; see README)."
+  echo "Not code-signed (set SIGN_PFX or AZURE_SIGNING_* to sign; GitHub releases use SignPath)."
 fi
 
 # ---- Update manifest (local releases): dist/latest.json, signed with the release key ---------------------
