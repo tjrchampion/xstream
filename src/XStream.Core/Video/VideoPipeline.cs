@@ -80,7 +80,12 @@ public sealed class VideoPipeline : IDisposable
                 if (_decoder.Errors > errorsBefore) _decodeError = true;
                 if (pic is not null) { PictureDecoded?.Invoke(pic); _mailbox.Post(pic); }
             }
-            if (!any) _wake.WaitOne(1); // woken by Notify(), else re-check due times every 1 ms
+            if (any) continue;
+            // Sleep until Notify() (a frame was queued) or the next queued frame is due. Was a 1 ms poll: a thousand
+            // wake-ups a second with nothing to do, which costs battery on handhelds.
+            double next = _source.NextDueMs;
+            int waitMs = double.IsNaN(next) ? 50 : (int)Math.Clamp(Math.Ceiling(next - _clock()), 1, 50);
+            _wake.WaitOne(waitMs);
         }
     }
 

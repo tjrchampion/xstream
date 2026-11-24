@@ -31,7 +31,7 @@ public sealed class StabilityEngine
     private AdaptiveBitrateController _abr;
     private BufferPolicy _buffer;
     private readonly object _gate = new();
-    private readonly KeyframeRecovery _keyframes = new();
+    private readonly KeyframeRecovery _keyframes;
     private readonly ReconnectSupervisor _reconnect;
 
     private double _lastRembMs = double.NegativeInfinity;
@@ -52,6 +52,7 @@ public sealed class StabilityEngine
         _abr = new AdaptiveBitrateController(_o);
         _buffer = new BufferPolicy(_o.Tuning);
         _reconnect = new ReconnectSupervisor(_o);
+        _keyframes = new KeyframeRecovery { RetryMs = _o.KeyframeRetryMs, KeepAskingMs = _o.KeyframeKeepAskingMs };
     }
 
     /// <summary>
@@ -71,6 +72,15 @@ public sealed class StabilityEngine
             var extra = _buffer.ExtraBaseMs;
             _buffer = new BufferPolicy(_o.Tuning) { ExtraBaseMs = extra };
         }
+    }
+
+    /// <summary>
+    /// A frame was just given up on or failed to decode: true if a keyframe should be asked for right now (same
+    /// rate limits as the tick). Lets the receive path ask at once instead of waiting up to 100 ms for <see cref="Update"/>.
+    /// </summary>
+    public bool OnPictureLost(double nowMs, double rttMs)
+    {
+        lock (_gate) return _keyframes.OnPictureLost(nowMs, rttMs);
     }
 
     public StabilityDecision Update(in NetworkSample s, bool decoderError = false)

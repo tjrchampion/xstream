@@ -1,3 +1,4 @@
+using XStream.Core.Rtp;
 using System.Text.Json;
 using XStream.Core.Stability;
 using XStream.Sim;
@@ -9,6 +10,60 @@ for (int i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--seeds") seeds = int.Parse(args[i + 1]);
     if (args[i] == "--out") outPath = args[i + 1];
+}
+
+// --packets: packet-level A/B of loss recovery (0.4.0 settings vs current), on the real receive path.
+if (args.Contains("--packets"))
+{
+    var cur = new RecoveryOptions();
+    var bal = new StabilityOptions { Profile = StreamProfile.Balanced };
+    // 0.4.0 = the recovery settings it shipped with (engine's keyframe re-ask every 500 ms included).
+    var recoveries = new List<(string name, RecoveryOptions o, StabilityOptions e)>
+    {
+        ("0.4.0", RecoveryOptions.Legacy, bal with { KeyframeKeepAskingMs = 500 }), ("current", cur, bal),
+    };
+    if (args.Contains("--variants"))
+        recoveries.AddRange(new (string, RecoveryOptions, StabilityOptions)[]
+        {
+            ("backoff", cur with { NackBackoff = true }, bal),
+            ("3 tries", cur with { NackMaxTries = 3 }, bal),
+            ("keep 500", cur, bal with { KeyframeKeepAskingMs = 500 }),
+            ("keep 150", cur, bal with { KeyframeKeepAskingMs = 150 }),
+            ("slow-key", cur with { FastKeyframe = false }, bal),
+            ("wait>=60", cur with { MinWaitMs = 60 }, bal),
+            ("old-broken", cur with { CountOnlyLostFrames = false }, bal),
+        });
+    string? only = args.SkipWhile(a => a != "--pattern").Skip(1).FirstOrDefault();
+    var patterns = PacketSimulation.Patterns().Select((p, i) => (p, i)).Where(x => only is null || only.Split(',').Contains(x.p.Id)).Select(x => x.i).ToList();
+    var pjobs = new List<(int pattern, int r, int seed)>();
+    int patternCount = patterns.Count;
+    for (int seed = 0; seed < seeds; seed++)
+        foreach (int pi in patterns)
+            for (int ri = 0; ri < recoveries.Count; ri++) pjobs.Add((pi, ri, seed));
+    Console.WriteLine($"Packet simulation: {pjobs.Count} runs of 60 s ({seeds} seeds x {patternCount} loss patterns x {recoveries.Count} recovery settings)...");
+    var psw = System.Diagnostics.Stopwatch.StartNew();
+    var pres = new PacketRunResult[pjobs.Count];
+    Parallel.For(0, pjobs.Count, i =>
+    {
+        var (pi, ri, seed) = pjobs[i];
+        var pattern = PacketSimulation.Patterns()[pi]; // fresh per run: bursty patterns keep state
+        pres[i] = new PacketSimulation(pattern, recoveries[ri].o, recoveries[ri].name, seed, engineOptions: recoveries[ri].e).Run();
+    });
+    Console.WriteLine($"Done in {psw.Elapsed.TotalSeconds:F1} s (averages per 60 s session)\n");
+    foreach (var pattern in PacketSimulation.Patterns().Where((_, i) => patterns.Contains(i)))
+    {
+        Console.WriteLine(pattern.Name);
+        Console.WriteLine($"  {"Recovery",-10}{"Frozen ms",10}{">100ms",8}{"Worst ms",10}{"Keyfr",7}{"Lost fr",8}{"NACKs",8}{"Resends",9}{"Lat ms",8}{"Order!",7}");
+        foreach (var (name, _, _) in recoveries)
+        {
+            var g = pres.Where(r => r.Pattern == pattern.Id && r.Recovery == name).ToList();
+            Console.WriteLine($"  {name,-10}{g.Average(r => r.FrozenMs),10:F0}{g.Average(r => r.Freezes100),8:F1}{g.Average(r => r.WorstFreezeMs),10:F0}" +
+                              $"{g.Average(r => r.KeyframeRequests),7:F1}{g.Average(r => r.FramesLost),8:F1}{g.Average(r => r.NacksSent),8:F0}" +
+                              $"{g.Average(r => r.Resends),9:F0}{g.Average(r => r.AvgLatencyMs),8:F1}{g.Sum(r => r.OutOfOrder),7}");
+        }
+        Console.WriteLine();
+    }
+    return;
 }
 
 var profiles = new[] { StreamProfile.Competitive, StreamProfile.Balanced, StreamProfile.Smooth };

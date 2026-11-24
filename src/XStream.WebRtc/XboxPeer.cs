@@ -39,11 +39,13 @@ public sealed class XboxPeer : IAsyncDisposable
     /// <summary>Which code receives and decrypts the media (ours, or SIPSorcery's as the fallback), once connected.</summary>
     public string ReceivePath { get; private set; } = "not connected";
 
-    public RtpReceiveMonitor Monitor { get; } = new();
     public StabilityEngine Engine { get; }
-    public H264Depacketizer Depacketizer { get; } = new();
-    public NackGenerator Nacks { get; } = new();
-    public PlayoutBuffer<AccessUnit> Frames { get; } = new();
+    /// <summary>Video receive logic: measurements, NACKs, frame assembly, playout buffer (WebRTC-library independent).</summary>
+    public VideoReceiver Video { get; }
+    public RtpReceiveMonitor Monitor => Video.Monitor;
+    public H264Depacketizer Depacketizer => Video.Depacketizer;
+    public NackGenerator Nacks => Video.Nacks;
+    public PlayoutBuffer<AccessUnit> Frames => Video.Frames;
     public bool RembNegotiated { get; private set; }
     public bool NackNegotiated { get; private set; }
     /// <summary>
@@ -57,14 +59,13 @@ public sealed class XboxPeer : IAsyncDisposable
 
     /// <summary>True once the console has accepted input (message handshake done, input channel open).</summary>
     public bool InputReady => _input?.readyState == RTCDataChannelState.open && _messages.HandshakeDone;
-    private readonly object _rxLock = new();
     private Timer? _fastTick;
 
     public event Action<StabilitySnapshot>? Stats;
     /// <summary>A complete frame was queued in <see cref="Frames"/> (wake the decoder).</summary>
-    public event Action? FrameQueued;
-    /// <summary>Optional extra decoder-error source (the real decoder), checked every tick.</summary>
-    public Func<bool>? DecoderErrorSource { get; set; }
+    public event Action? FrameQueued { add => Video.FrameQueued += value; remove => Video.FrameQueued -= value; }
+    /// <summary>Optional extra decoder-error source (the real decoder), checked every 10 ms.</summary>
+    public Func<bool>? DecoderErrorSource { get => Video.DecoderErrorSource; set => Video.DecoderErrorSource = value; }
     /// <summary>Every engine tick: raw sample, engine snapshot, picture stats (for <see cref="SessionLogger"/>).</summary>
     public event Action<NetworkSample, StabilitySnapshot, PictureTick>? Sampled;
     public event Action<RecoveryAction>? RecoveryNeeded;   // app decides how to renegotiate / restart
@@ -89,6 +90,11 @@ public sealed class XboxPeer : IAsyncDisposable
     {
         _options = options ?? new StabilityOptions();
         Engine = new StabilityEngine(_options);
+        Video = new VideoReceiver(Engine, RecoveryOptions.FromEnvironment())
+        {
+            SendRtcp = rtcp => _pc?.SendRtcpRaw(SDPMediaTypesEnum.video, rtcp),
+            KeyframeNeeded = RequestKeyframe,
+        };
         _iceServers = iceServers is { Count: > 0 } ? iceServers : DefaultIceServers;
     }
 
@@ -148,6 +154,7 @@ public sealed class XboxPeer : IAsyncDisposable
         var answer = await session.ExchangeSdpAsync(offer.sdp, ct);
         RembNegotiated = SdpTools.AnswerSupportsRemb(answer);
         NackNegotiated = SdpTools.AnswerSupportsNack(answer);
+        Video.NackEnabled = NackNegotiated;
         var result = _pc.setRemoteDescription(new RTCSessionDescriptionInit { type = RTCSdpType.answer, sdp = answer });
         if (result != SetDescriptionResultEnum.OK) throw new InvalidOperationException("Console SDP answer rejected: " + result);
 
@@ -183,6 +190,8 @@ public sealed class XboxPeer : IAsyncDisposable
             throw new ConsoleUnreachableException();
         Route = DescribeRoute();
         Log?.Invoke("Route: " + Route + (_pc?.DtlsTransportInfo.SrtpProtectionProfile is { } srtp ? $"; encryption {srtp}" : ""));
+        Video.LocalSsrc = _pc?.VideoLocalTrack?.Ssrc ?? 1u;
+        if (Video.Options != new RecoveryOptions()) Log?.Invoke("Loss recovery: " + Video.Options);
         StartOwnReceivePath();
         StartFakeInputIfAsked();
 
@@ -258,25 +267,7 @@ public sealed class XboxPeer : IAsyncDisposable
     {
         if (audio) { AudioRtp?.Invoke(payload.ToArray(), seq); return; } // 50 a second: a copy is fine
         _remoteVideoSsrc = ssrc;
-        double now = NowMs;
-        lock (_rxLock)
-        {
-            Monitor.OnPacket(seq, timestamp, marker, payload.Length, now, H264.IsKeyframeStart(payload));
-            Nacks.OnPacket(seq, now);
-            foreach (var au in Depacketizer.Push(seq, timestamp, marker, payload, now))
-            {
-                Frames.Enqueue(au, au.RtpTimestamp, now);
-                FrameQueued?.Invoke();
-            }
-            // Ask for a lost packet as soon as its reorder wait is over (packets arrive every ~0.3 ms), not at the next
-            // 10 ms tick: the resend, and the frame waiting on it, arrive up to 10 ms sooner.
-            if (NackNegotiated && Nacks.HasGaps && _pc is not null)
-            {
-                var lost = Nacks.Poll(now, Monitor.RttMs);
-                if (lost.Count > 0)
-                    _pc.SendRtcpRaw(SDPMediaTypesEnum.video, NackGenerator.BuildNack(_pc.VideoLocalTrack?.Ssrc ?? 1u, ssrc, lost));
-            }
-        }
+        Video.OnPacket(ssrc, seq, timestamp, marker, payload, NowMs);
     }
 
     /// <summary>
@@ -324,38 +315,19 @@ public sealed class XboxPeer : IAsyncDisposable
     private void FastTick()
     {
         if (_pc is null) return;
-        double now = NowMs;
-        IReadOnlyList<ushort> lost;
-        lock (_rxLock)
-        {
-            foreach (var au in Depacketizer.Tick(now)) { Frames.Enqueue(au, au.RtpTimestamp, now); FrameQueued?.Invoke(); }
-            lost = NackNegotiated ? Nacks.Poll(now, Monitor.RttMs) : Array.Empty<ushort>();
-        }
-        if (lost.Count > 0 && _remoteVideoSsrc != 0)
-            _pc.SendRtcpRaw(SDPMediaTypesEnum.video, NackGenerator.BuildNack(_pc.VideoLocalTrack?.Ssrc ?? 1u, _remoteVideoSsrc, lost));
+        Video.FastTick(NowMs);
     }
 
     /// <summary>Called every 100 ms: measure, decide, act.</summary>
     private void Tick()
     {
         if (_pc is null) return;
-        NetworkSample sample;
-        PictureTick pic;
-        bool decoderError;
-        lock (_rxLock)
-        {
-            // Measured round trip (our STUN checks) when we have it; the NACK -> resend estimate otherwise.
-            if (_rx is not null && !double.IsNaN(_rx.RttMs) && !_rttFromNacksOnly) Monitor.RttMs = _rx.RttMs;
-            else if (!double.IsNaN(Nacks.RttEstimateMs)) Monitor.RttMs = Nacks.RttEstimateMs;
-            sample = Monitor.TakeSample(NowMs);
-            decoderError = Depacketizer.TakeDecoderError();
-            double since = double.IsNaN(Depacketizer.LastDeliveredMs) ? sample.MsSinceLastFrame : NowMs - Depacketizer.LastDeliveredMs;
-            pic = new PictureTick(Depacketizer.FramesDelivered, Depacketizer.FramesLost, Depacketizer.PictureBroken, since,
-                Nacks.Requested, Nacks.Recovered);
-            // Wait for retransmissions roughly one round trip, never less than 60 ms.
-            Depacketizer.MaxWaitMs = Math.Clamp(Monitor.RttMs * 2 + 20, 60, 250);
-        }
-        if (DecoderErrorSource?.Invoke() == true) decoderError = true;
+        // Measured round trip (our STUN checks) when we have it; the NACK -> resend estimate otherwise.
+        double rtt = double.NaN;
+#if XS_PATCHED_SIPSORCERY
+        if (_rx is not null && !_rttFromNacksOnly) rtt = _rx.RttMs;
+#endif
+        var (sample, pic, decoderError) = Video.Sample(NowMs, rtt);
         var d = Engine.Update(sample, decoderError);
 
         if (d.SendRemb && RembNegotiated && _remoteVideoSsrc != 0)
@@ -498,6 +470,11 @@ public sealed class XboxPeer : IAsyncDisposable
         _tick?.Dispose();
         _fastTick?.Dispose();
         _pc?.close();
+        if (Depacketizer.FramesDelivered > 0)
+            Log?.Invoke($"Loss recovery: {Depacketizer.FramesLost} frames lost, {Depacketizer.FramesSkipped} lost non-reference frames skipped " +
+                        $"without a freeze, {Video.FastKeyframeRequests} keyframes asked for at once; NACKs: {Nacks.Requested} asked, " +
+                        $"{Nacks.Recovered} recovered, {Nacks.GivenUp} given up, {Nacks.Abandoned} dropped with their frame; " +
+                        $"resend round trip {Nacks.RttEstimateMs:F1} ms");
 #if XS_PATCHED_SIPSORCERY
         if (SctpSendDelay.Count > 0)
             Log?.Invoke($"Data channel send delay: {SctpSendDelay.Count} messages, {SctpSendDelay.Over1Ms} waited >1 ms, " +

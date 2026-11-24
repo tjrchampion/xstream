@@ -65,6 +65,10 @@ public sealed class KeyframeRecovery
 
     public int Requests { get; private set; }
     public bool Awaiting => _awaiting;
+    /// <summary>Re-ask this soon (at least 3 round trips) when the picture breaks again while waiting.</summary>
+    public double RetryMs { get; init; } = 250;
+    /// <summary>Re-ask this soon (at least 4 round trips) while still waiting, even if nothing new broke.</summary>
+    public double KeepAskingMs { get; init; } = 500;
 
     /// <param name="decoderError">Set by the decoder when it can't decode (reference frame missing).</param>
     public bool Update(in NetworkSample s, bool decoderError = false)
@@ -75,17 +79,26 @@ public sealed class KeyframeRecovery
         // Decoder errors are authoritative. Packet-level gaps alone are often repaired by retransmission,
         // so only act on them when several frames in a row arrive broken.
         bool broken = decoderError || s.BrokenFrames >= 3;
-        double minGap = Math.Max(150, s.RttMs * 2.5);
-
-        if (broken && !_awaiting && now - _lastRequestMs > minGap)
-            return Fire(now);
-        if (_awaiting && broken && now - _lastRequestMs > Math.Max(250, s.RttMs * 3))
-            return Fire(now); // still broken: the request or the keyframe itself got lost
+        if (broken && OnPictureLost(now, s.RttMs)) return true;
         // No complete keyframe yet. Once a loss is declared every later frame is held back until one arrives, and
         // those frames arrive intact, so "broken" never fires again: if the keyframe itself was lost the picture
         // stayed frozen for good (live: 24 s, to the end of the session, after a 400 ms loss burst). Keep asking.
-        if (_awaiting && now - _lastRequestMs > Math.Max(500, s.RttMs * 4))
+        if (_awaiting && now - _lastRequestMs > Math.Max(KeepAskingMs, s.RttMs * 4))
             return Fire(now);
+        return false;
+    }
+
+    /// <summary>
+    /// The picture just broke (a frame was given up on, or the decoder failed): ask for a keyframe now if the rate
+    /// limits allow. Called the moment it happens rather than on the next 100 ms tick, which added 0-100 ms (50 on
+    /// average) to every freeze.
+    /// </summary>
+    public bool OnPictureLost(double nowMs, double rttMs)
+    {
+        if (!_awaiting && nowMs - _lastRequestMs > Math.Max(150, rttMs * 2.5))
+            return Fire(nowMs);
+        if (_awaiting && nowMs - _lastRequestMs > Math.Max(RetryMs, rttMs * 3))
+            return Fire(nowMs); // still broken: the request or the keyframe itself got lost
         return false;
     }
 

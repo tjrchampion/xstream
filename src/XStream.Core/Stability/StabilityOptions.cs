@@ -38,6 +38,19 @@ public sealed record StabilityOptions
     /// steady climb; kept for A/B in the simulator.</summary>
     public bool FastClimb { get; init; } = true;
 
+    /// <summary>
+    /// While waiting for a recovery keyframe and the picture breaks again (the request or the keyframe itself was
+    /// lost), ask again after this long (at least 3 round trips). 250 ms suited the 30 ms round trip that used to be
+    /// assumed; a measured 4-5 ms home link gets a keyframe back in ~40 ms.
+    /// </summary>
+    public double KeyframeRetryMs { get; init; } = 250;
+    /// <summary>
+    /// Still no keyframe (and nothing new broke): ask again after this long (at least 4 round trips). Was 500 ms:
+    /// when the recovery keyframe was lost in a loss burst, the frames after the burst arrived intact but held
+    /// back, nothing else re-asked, and the picture stayed frozen that much longer.
+    /// </summary>
+    public double KeyframeKeepAskingMs { get; init; } = 250;
+
     /// <summary>Profile-specific tuning, derived from <see cref="Profile"/>.</summary>
     public ProfileTuning Tuning => Profile switch
     {

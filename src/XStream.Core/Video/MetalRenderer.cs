@@ -332,6 +332,8 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
             }
 
             ObjC.Call(enc, S.endEncoding);
+            // Also tried a 120 Hz display link (own run-loop thread; panel ran ~120 Hz): present -> display stayed
+            // 5.9 ms and press -> frame was unchanged, so that time is a fixed macOS cost, not refresh wait.
             // Tried presentDrawable:afterMinimumDuration: (1/120) and presentDrawable:atTime: (now): neither got the
             // display past 60 Hz, and both had most frames replaced before they were shown (judder). Plain present wins.
             ObjC.Void(cb, S.presentDrawable, drawable);

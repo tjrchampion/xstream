@@ -632,6 +632,149 @@ var tests = new List<(string name, Action body)>
         True(st.Presented + st.Dropped >= 118, "every frame shown or superseded by a newer one");
         True(st.ArrivalToPresentP50Ms < 8, $"network->screen p50 {st.ArrivalToPresentP50Ms:F2} ms");
     }),
+    ("Playout buffer keeps decode order when frames are released together", () =>
+    {
+        // A resend completes a stalled frame and the frames behind it come out of one drain, all late (due = now).
+        // The old priority queue shuffled equal due times: 1,4,3,2.
+        var b = new PlayoutBuffer<int>();
+        b.Enqueue(0, 0, 100); b.TryDequeue(1e9, out _);
+        double now = 100 + 16.7 * 4 + 40;
+        for (int f = 1; f <= 6; f++) b.Enqueue(f, (uint)(f * 1500), now);
+        var order = new List<int>(); while (b.TryDequeue(now, out var x)) order.Add(x);
+        Eq("1,2,3,4,5,6", string.Join(",", order));
+        // Due times never go backwards, even when the target delay drops between frames.
+        var c = new PlayoutBuffer<int> { TargetDelayMs = 30 };
+        c.Enqueue(1, 0, 0);
+        c.TargetDelayMs = 0;
+        c.Enqueue(2, 1500, 1);           // would be due at 16.7, before frame 1 (30)
+        False(c.TryDequeue(29, out _), "frame 1 not due yet");
+        True(c.TryDequeue(30, out var a) && a == 1, "frame 1 first");
+        True(c.TryDequeue(30, out var d2) && d2 == 2, "then frame 2");
+        Near(double.NaN, c.NextDueMs, 0);
+    }),
+    ("Lost non-reference frame is skipped without freezing the picture", () =>
+    {
+        var d = new H264Depacketizer { MaxWaitMs = 30 };
+        d.Push(1, 0, true, new byte[] { 0x65, 1 }, 0);                         // IDR
+        d.Push(2, 1500, false, new byte[] { 0x01, 1 }, 17);                    // non-ref P (NRI 0), first half
+        // seq 3 (its second half, with the marker) lost; next frame starts at 4 but 3 is missing so its start is unsure
+        d.Push(4, 3000, true, new byte[] { 0x41, 3 }, 34);
+        Eq(0, d.Tick(100).Count);
+        Eq(1L, d.FramesLost); // can't be sure 4 starts a frame (the gap could hold its first packet): normal loss
+
+        var e = new H264Depacketizer { MaxWaitMs = 30 };
+        e.Push(1, 0, true, new byte[] { 0x65, 1 }, 0);
+        e.Push(2, 1500, false, new byte[] { 0x01, 1 }, 17);                    // non-ref, packet 1 of 3
+        e.Push(4, 1500, true, new byte[] { 0x01, 3 }, 18);                     // packet 3 (marker): 3 lost
+        var after = e.Push(5, 3000, true, new byte[] { 0x41, 4 }, 34);         // reference P frame
+        Eq(0, after.Count);
+        var outp = e.Tick(60);
+        Eq(1, outp.Count); Eq(3000u, outp[0].RtpTimestamp);
+        Eq(0L, e.FramesLost); Eq(1L, e.FramesSkipped);
+        False(e.PictureBroken, "picture carries on"); False(e.TakeDecoderError(), "no keyframe needed");
+
+        // Same, but the frame is a reference one (NRI 2): freeze and ask for a keyframe as before.
+        var f = new H264Depacketizer { MaxWaitMs = 30 };
+        f.Push(1, 0, true, new byte[] { 0x65, 1 }, 0);
+        f.Push(2, 1500, false, new byte[] { 0x41, 1 }, 17);
+        f.Push(4, 1500, true, new byte[] { 0x41, 3 }, 18);
+        f.Push(5, 3000, true, new byte[] { 0x41, 4 }, 34);
+        Eq(0, f.Tick(60).Count);
+        Eq(1L, f.FramesLost); True(f.TakeDecoderError(), "keyframe needed");
+
+        // Only an AUD (NRI 0, not a slice) held: can't tell, so it's a loss.
+        var g = new H264Depacketizer { MaxWaitMs = 30 };
+        g.Push(1, 0, true, new byte[] { 0x65, 1 }, 0);
+        g.Push(2, 1500, false, new byte[] { 0x09, 0xF0 }, 17);                 // AUD
+        g.Push(4, 1500, true, new byte[] { 0x7C, 0x41, 3 }, 18);              // FU-A end of a reference slice
+        g.Push(5, 3000, true, new byte[] { 0x41, 4 }, 34);
+        g.Tick(60);
+        Eq(1L, g.FramesLost);
+    }),
+    ("Frame assembler reports what it gave up on; NACKs for it stop", () =>
+    {
+        var d = new H264Depacketizer { MaxWaitMs = 30 };
+        var n = new NackGenerator();
+        void Push(ushort seq, uint ts, bool m, byte[] pl, double t) { n.OnPacket(seq, t); d.Push(seq, ts, m, pl, t); }
+        Push(1, 0, true, new byte[] { 0x65, 1 }, 0);
+        Push(3, 1500, true, new byte[] { 0x41, 2 }, 17);   // 2 lost
+        Push(6, 3000, true, new byte[] { 0x41, 3 }, 34);   // 4, 5 lost (frame 3000 starts at 4)
+        Eq("2,4,5", string.Join(",", n.Poll(40, 4)));
+        False(d.TakeAbandoned(out _), "nothing given up yet");
+        d.Tick(60);
+        True(d.TakeAbandoned(out var through), "gave up");
+        True(through >= 2, $"through {through}");
+        n.ForgetThrough(through);
+        True(n.Abandoned >= 1, "dropped");
+        var still = n.Poll(80, 4);
+        False(still.Contains((ushort)2), "no more asks for seq 2");
+    }),
+    ("NACK retries follow the measured round trip", () =>
+    {
+        var n = new NackGenerator();
+        n.OnPacket(10, 0); n.OnPacket(12, 1);
+        Eq(1, n.Poll(5, 4).Count);               // first ask
+        Eq(0, n.Poll(10, 4).Count);              // 5 ms later: too soon (retry after 8 ms on a 4 ms link)
+        Eq(1, n.Poll(13.5, 4).Count);            // 8.5 ms later: asked again (was 20 ms)
+        n.OnPacket(11, 15);                      // the resend answers one of the two asks: not an RTT sample
+        True(double.IsNaN(n.RttEstimateMs), "no sample after a retry");
+        n.OnPacket(14, 20);                      // 13 missing
+        n.Poll(25, 4);
+        n.OnPacket(13, 31);                      // one ask, answered 6 ms later
+        Near(6, n.RttEstimateMs, 0.01);
+        Near(4 + 3 * (6 * 1.5 + 2), n.GiveUpAfterMs(4), 0.01); // resend RTT is the longer one: retries follow it
+    }),
+    ("Frame assembler survives sequence wrap-around, reordering and duplicates", () =>
+    {
+        var stream = TestPattern.Stream(20, 15, 90, 30);
+        var pk = H264Packetizer.Packetize(H264Packetizer.AccessUnits(stream)).ToList();
+        var rng = new Random(3);
+        var order = new List<int>();
+        for (int i = 0; i < pk.Count; i++) order.Add(i);
+        for (int i = 0; i + 1 < order.Count; i += 3) if (rng.Next(2) == 0) (order[i], order[i + 1]) = (order[i + 1], order[i]); // swaps
+        var d = new H264Depacketizer(); var got = new List<AccessUnit>();
+        double t = 0;
+        foreach (int i in order)
+        {
+            var p = pk[i];
+            ushort seq = (ushort)(p.Seq + 65_000); // wraps mid-stream
+            got.AddRange(d.Push(seq, p.Timestamp, p.Marker, p.Payload, t));
+            if (rng.Next(10) == 0) got.AddRange(d.Push(seq, p.Timestamp, p.Marker, p.Payload, t)); // duplicate
+            t += 0.3;
+        }
+        Eq(90, got.Count);
+        True(got.SelectMany(a => a.Data.ToArray()).SequenceEqual(stream), "exact Annex-B stream");
+        Eq(0L, d.FramesLost);
+    }),
+    ("Receive path asks for a keyframe the moment a frame is lost, not on the next tick", () =>
+    {
+        foreach (bool fast in new[] { true, false })
+        {
+            var engine = new StabilityEngine();
+            var r = new VideoReceiver(engine, fast ? new RecoveryOptions() : RecoveryOptions.Legacy) { NackEnabled = true };
+            int keyframes = 0; double askedAt = double.NaN; double now = 0;
+            r.KeyframeNeeded = () => { keyframes++; askedAt = now; };
+            r.Sample(0, 4); // 4 ms round trip: sets how long frames wait for resends
+            r.OnPacket(1, 1, 0, true, new byte[] { 0x65, 1 }, now);
+            r.OnPacket(1, 3, 1500, true, new byte[] { 0x41, 2 }, now = 17); // seq 2 lost for good
+            for (now = 20; now <= 300; now += 10) r.FastTick(now);
+            // Lost at 17 + 46 ms (4 tries 8 ms apart + margin), asked on that 10 ms tick. 0.4.0: 60+ ms wait, then up to 100 ms more.
+            if (fast) { Eq(1, keyframes); True(askedAt <= 17 + 46 + 10, $"asked at {askedAt} ms"); }
+            else Eq(0, keyframes); // legacy: left to the engine's 100 ms tick
+            var (_, _, lost) = r.Sample(300, 4);
+            True(lost, "the tick hears about it too");
+        }
+    }),
+    ("A keyframe repaired by a resend counts as received", () =>
+    {
+        var engine = new StabilityEngine();
+        var r = new VideoReceiver(engine) { NackEnabled = true };
+        r.OnPacket(1, 1, 0, false, new byte[] { 0x7C, 0x85, 1 }, 0);  // IDR FU-A start
+        r.OnPacket(1, 3, 0, true, new byte[] { 0x7C, 0x45, 3 }, 1);   // end; 2 missing
+        r.OnPacket(1, 2, 0, false, new byte[] { 0x7C, 0x05, 2 }, 9);  // resend
+        var (s, _, _) = r.Sample(100, 4);
+        True(s.KeyframeSeen, "keyframe seen although the monitor saw it arrive with a gap");
+    }),
     ("Session logger counts freezes and round-trips through CSV", () =>
     {
         var path = Path.Combine(Path.GetTempPath(), $"xs-test-{Guid.NewGuid():N}.csv");
