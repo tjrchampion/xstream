@@ -140,6 +140,9 @@ try
             player.Ended += (sum, path) => PrintSummary(sum, path);
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; player.Stop(); };
             new Thread(() => { Console.ReadLine(); player.Stop(); }) { IsBackground = true }.Start();
+            // --seconds=N: stop by itself after N seconds of streaming (tests).
+            if (args.FirstOrDefault(a => a.StartsWith("--seconds=")) is { } secs)
+                _ = Task.Delay(TimeSpan.FromSeconds(double.Parse(secs["--seconds=".Length..], System.Globalization.CultureInfo.InvariantCulture))).ContinueWith(_ => player.Stop());
             return player.Run(options, client, () => auth.GetTransferTokenAsync(tokens));
         }
         case "video-test":

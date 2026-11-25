@@ -48,6 +48,13 @@ public sealed class XboxStreamingClient
     /// can still send less). Android is offered 720p; Windows gets 1080p and up.
     /// </summary>
     public StreamResolution Resolution { get; init; } = StreamResolution.Max;
+
+    /// <summary>
+    /// The OS the service is told this client runs on (it picks encoder settings per client type). XSTREAM_OS_NAME
+    /// overrides it for testing (windows, tizen, android).
+    /// </summary>
+    private string OsName => Environment.GetEnvironmentVariable("XSTREAM_OS_NAME") is { Length: > 0 } os ? os
+        : Resolution == StreamResolution.R720 ? "android" : "windows";
     /// <summary>XSTREAM_DEBUG=1 prints every streaming API call and its response to stderr.</summary>
     private static readonly bool Debug = Environment.GetEnvironmentVariable("XSTREAM_DEBUG") is "1" or "true" or "full";
     /// <summary>XSTREAM_DEBUG=full prints whole responses (e.g. the console's SDP answer) instead of the first 600 characters.</summary>
@@ -94,7 +101,7 @@ public sealed class XboxStreamingClient
                 ["useIceConnection"] = false,
                 ["timezoneOffsetMinutes"] = (int)TimeZoneInfo.Local.GetUtcOffset(DateTime.Now).TotalMinutes,
                 ["sdkType"] = "web",
-                ["osName"] = "windows",
+                ["osName"] = OsName,
             },
             ["serverId"] = serverId,
             ["fallbackRegionNames"] = new JsonArray(),
@@ -167,10 +174,12 @@ public sealed class XboxStreamingClient
         ["dev"] = new JsonObject
         {
             ["hw"] = new JsonObject { ["make"] = "Microsoft", ["model"] = "unknown", ["sdktype"] = "web" },
-            ["os"] = new JsonObject { ["name"] = Resolution == StreamResolution.R720 ? "android" : "windows", ["ver"] = "22631.2715", ["platform"] = "desktop" },
+            ["os"] = new JsonObject { ["name"] = OsName, ["ver"] = "22631.2715", ["platform"] = "desktop" },
             ["displayInfo"] = new JsonObject
             {
-                ["dimensions"] = Resolution switch
+                ["dimensions"] = Environment.GetEnvironmentVariable("XSTREAM_DIMS")?.Split('x') is [var dw, var dh] // testing
+                    ? new JsonObject { ["widthInPixels"] = int.Parse(dw), ["heightInPixels"] = int.Parse(dh) }
+                    : Resolution switch
                 {
                     StreamResolution.Max => new JsonObject { ["widthInPixels"] = 3840, ["heightInPixels"] = 2160 },
                     StreamResolution.R720 => new JsonObject { ["widthInPixels"] = 1280, ["heightInPixels"] = 720 },

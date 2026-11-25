@@ -17,8 +17,9 @@ public sealed class MessageChannelProtocol
     public event Action? ServerDisconnected;
     public event Action<string, string>? Dialog;   // title, text (auto-accepted)
 
-    public int Width { get; init; } = 1920;
-    public int Height { get; init; } = 1080;
+    // XSTREAM_MSG_DIMS=WxH (testing): the screen size told to the console after connecting.
+    public int Width { get; init; } = Environment.GetEnvironmentVariable("XSTREAM_MSG_DIMS")?.Split('x') is [var w, _] ? int.Parse(w) : 1920;
+    public int Height { get; init; } = Environment.GetEnvironmentVariable("XSTREAM_MSG_DIMS")?.Split('x') is [_, var h] ? int.Parse(h) : 1080;
 
     public string Handshake() => new JsonObject
     {
@@ -68,7 +69,7 @@ public sealed class MessageChannelProtocol
         {
             ["horizontal"] = Width, ["vertical"] = Height, ["preferredWidth"] = Width, ["preferredHeight"] = Height,
             ["safeAreaLeft"] = 0, ["safeAreaTop"] = 0, ["safeAreaRight"] = Width, ["safeAreaBottom"] = Height,
-            ["supportsCustomResolution"] = true,
+            ["supportsCustomResolution"] = Environment.GetEnvironmentVariable("XSTREAM_CUSTOM_RES") != "0", // testing
         });
     }
 

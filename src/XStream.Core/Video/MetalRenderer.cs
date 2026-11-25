@@ -63,42 +63,69 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
             return float4(saturate(rgb), 1);
         }
 
-        // Shrinking the picture: average an n x n grid of taps over the area each screen pixel covers, instead of one
-        // tap that skips source pixels and breaks text into jagged bits. 1:1 and enlarging stay one tap.
-        static int taps(float f) { return f <= 1.02 ? 1 : f < 1.6 ? 2 : f < 2.6 ? 3 : 4; }
+        // Shrinking the picture (1440p on a 1080p screen): luma is resampled with a Catmull-Rom (bicubic) filter
+        // stretched over the area each screen pixel covers, reading the exact source pixels under it: crisp edges,
+        // no aliasing. Clarity boost then sharpens against a plain average, clamped (no halos). Chroma (half
+        // resolution) takes a few bilinear taps. 1:1 and enlarging stay one tap. Same as the Direct3D version.
+        static float catRom(float x)
+        {
+            x = abs(x);
+            return x < 1 ? (1.5 * x - 2.5) * x * x + 1 : x < 2 ? ((-0.5 * x + 2.5) * x - 4) * x + 2 : 0;
+        }
+
+        static float lumaShrink(texture2d<float> ty, float2 uv, float2 f, constant Params& p)
+        {
+            float2 size = 1.0 / p.texel;
+            float2 c0 = uv * size - 0.5;
+            int2 lo = int2(floor(c0 - 2 * f)) + 1, hi = int2(floor(c0 + 2 * f));
+            int2 maxp = int2(size) - 1;
+            float sum = 0, wsum = 0, box = 0, mn = 1, mx = 0; int n = 0;
+            for (int y = lo.y; y <= hi.y; y++)
+            {
+                float wy = catRom((y - c0.y) / f.y);
+                for (int x = lo.x; x <= hi.x; x++)
+                {
+                    float v = ty.read(uint2(clamp(int2(x, y), int2(0), maxp))).r;
+                    float w = wy * catRom((x - c0.x) / f.x);
+                    sum += w * v; wsum += w;
+                    if (abs(x - c0.x) <= f.x + 0.5 && abs(y - c0.y) <= f.y + 0.5) { box += v; n++; mn = min(mn, v); mx = max(mx, v); }
+                }
+            }
+            float c = sum / max(wsum, 1e-4);
+            if (p.sharpen <= 0 || n == 0) return saturate(c);
+            box /= n;
+            return clamp(c + p.sharpen * 4 * (c - box), min(mn, c), max(mx, c));
+        }
+
+        static bool shrinking(constant Params& p, thread float2& f) { f = p.foot / p.texel; return (f.x > 1.02 || f.y > 1.02) && f.x < 3 && f.y < 3; }
 
         fragment float4 fsNv12(VOut i [[stage_in]], texture2d<float> ty [[texture(0)]], texture2d<float> tuv [[texture(1)]],
                                constant Params& p [[buffer(0)]])
         {
             float2 uv = p.uvOffset + i.uv * p.uvScale;
-            int nx = taps(p.foot.x / p.texel.x), ny = taps(p.foot.y / p.texel.y);
-            if (nx == 1 && ny == 1) return toRgb(luma(ty, uv, p), tuv.sample(samp, uv, level(0)).rg, p);
-            float y = 0; float2 c = 0;
-            for (int a = 0; a < ny; a++)
-                for (int b = 0; b < nx; b++)
-                {
-                    float2 q = uv + p.foot * (float2((b + 0.5) / nx, (a + 0.5) / ny) - 0.5);
-                    y += luma(ty, q, p); c += tuv.sample(samp, q, level(0)).rg;
-                }
-            float n = nx * ny;
-            return toRgb(y / n, c / n, p);
+            float2 f;
+            if (!shrinking(p, f)) return toRgb(luma(ty, uv, p), tuv.sample(samp, uv, level(0)).rg, p);
+            float2 c = 0;
+            for (int a = 0; a < 2; a++)
+                for (int b = 0; b < 2; b++)
+                    c += tuv.sample(samp, uv + p.foot * (float2((b + 0.5) / 2, (a + 0.5) / 2) - 0.5), level(0)).rg;
+            return toRgb(lumaShrink(ty, uv, max(f, 1.0), p), c / 4, p);
         }
 
         fragment float4 fsI420(VOut i [[stage_in]], texture2d<float> ty [[texture(0)]], texture2d<float> tu [[texture(1)]],
                                texture2d<float> tv [[texture(2)]], constant Params& p [[buffer(0)]])
         {
             float2 uv = p.uvOffset + i.uv * p.uvScale;
-            int nx = taps(p.foot.x / p.texel.x), ny = taps(p.foot.y / p.texel.y);
-            if (nx == 1 && ny == 1) return toRgb(luma(ty, uv, p), float2(tu.sample(samp, uv, level(0)).r, tv.sample(samp, uv, level(0)).r), p);
-            float y = 0; float2 c = 0;
-            for (int a = 0; a < ny; a++)
-                for (int b = 0; b < nx; b++)
+            float2 f;
+            if (!shrinking(p, f)) return toRgb(luma(ty, uv, p), float2(tu.sample(samp, uv, level(0)).r, tv.sample(samp, uv, level(0)).r), p);
+            float2 c = 0;
+            for (int a = 0; a < 2; a++)
+                for (int b = 0; b < 2; b++)
                 {
-                    float2 q = uv + p.foot * (float2((b + 0.5) / nx, (a + 0.5) / ny) - 0.5);
-                    y += luma(ty, q, p); c += float2(tu.sample(samp, q, level(0)).r, tv.sample(samp, q, level(0)).r);
+                    float2 q = uv + p.foot * (float2((b + 0.5) / 2, (a + 0.5) / 2) - 0.5);
+                    c += float2(tu.sample(samp, q, level(0)).r, tv.sample(samp, q, level(0)).r);
                 }
-            float n = nx * ny;
-            return toRgb(y / n, c / n, p);
+            return toRgb(lumaShrink(ty, uv, max(f, 1.0), p), c / 4, p);
         }
 
         fragment float4 fsOverlay(VOut i [[stage_in]], texture2d<float> t [[texture(0)]]) { return t.sample(samp, i.uv); }

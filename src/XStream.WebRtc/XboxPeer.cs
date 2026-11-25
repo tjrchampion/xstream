@@ -114,7 +114,9 @@ public sealed class XboxPeer : IAsyncDisposable
             MediaStreamStatusEnum.SendRecv);
         var video = new MediaStreamTrack(new List<VideoFormat>
         {
-            new(VideoCodecsEnum.H264, 102, 90000, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=4d001f"),
+            // XSTREAM_PROFILE_LEVEL (testing): the first H.264 profile-level-id offered (default 4d001f, Main 3.1).
+            new(VideoCodecsEnum.H264, 102, 90000, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=" +
+                (Environment.GetEnvironmentVariable("XSTREAM_PROFILE_LEVEL") is { Length: 6 } pl ? pl : "4d001f")),
             new(VideoCodecsEnum.H264, 104, 90000, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"),
             new(VideoCodecsEnum.H264, 106, 90000, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"),
         }, MediaStreamStatusEnum.RecvOnly);

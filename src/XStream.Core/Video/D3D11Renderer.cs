@@ -78,41 +78,70 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
             return float4(saturate(rgb), 1);
         }
 
-        // Shrinking the picture (1440p on a 1080p screen): one bilinear tap per screen pixel skips source pixels
-        // and breaks thin lines and text into jagged bits. Average an n x n grid of taps spread over the area the
-        // screen pixel covers instead (n grows with the shrink); 1:1 and enlarging stay one tap.
-        int Taps(float f) { return f <= 1.02 ? 1 : f < 1.6 ? 2 : f < 2.6 ? 3 : 4; }
+        // Shrinking the picture (1440p on a 1080p screen). One bilinear tap per screen pixel skips source pixels
+        // and breaks text into jagged bits; averaging taps fixes that but softens. So luma is resampled properly:
+        // a Catmull-Rom (bicubic) filter stretched over the area each screen pixel covers, reading the exact
+        // source pixels under it. It keeps edges crisp (its small negative lobes) without aliasing. Clarity boost
+        // then sharpens the result against a plain average, clamped so it can't overshoot (no halos).
+        // Chroma is half resolution, so a few bilinear taps are plenty. 1:1 and enlarging stay one tap.
+        float CatRom(float x)
+        {
+            x = abs(x);
+            return x < 1 ? (1.5 * x - 2.5) * x * x + 1 : x < 2 ? ((-0.5 * x + 2.5) * x - 4) * x + 2 : 0;
+        }
+
+        float LumaShrink(float2 uv, float2 f)   // f: source pixels per screen pixel (> 1)
+        {
+            float2 size = 1.0 / texel;
+            float2 p = uv * size - 0.5;
+            int2 lo = (int2)floor(p - 2 * f) + 1, hi = (int2)floor(p + 2 * f);
+            int2 maxp = (int2)size - 1;
+            float sum = 0, wsum = 0, box = 0, mn = 1, mx = 0; int n = 0;
+            [loop] for (int y = lo.y; y <= hi.y; y++)
+            {
+                float wy = CatRom((y - p.y) / f.y);
+                [loop] for (int x = lo.x; x <= hi.x; x++)
+                {
+                    float v = texY.Load(int3(clamp(int2(x, y), 0, maxp), 0));
+                    float w = wy * CatRom((x - p.x) / f.x);
+                    sum += w * v; wsum += w;
+                    if (abs(x - p.x) <= f.x + 0.5 && abs(y - p.y) <= f.y + 0.5) { box += v; n++; mn = min(mn, v); mx = max(mx, v); }
+                }
+            }
+            float c = sum / max(wsum, 1e-4);
+            if (sharpen <= 0 || n == 0) return saturate(c);
+            box /= n;
+            return clamp(c + sharpen * 4 * (c - box), min(mn, c), max(mx, c));
+        }
+
+        float2 ChromaShrink(float2 uv, float2 footUv, int which)
+        {
+            float2 c = 0;
+            [unroll] for (int a = 0; a < 2; a++)
+                [unroll] for (int b = 0; b < 2; b++)
+                {
+                    float2 q = uv + footUv * (float2((b + 0.5) / 2, (a + 0.5) / 2) - 0.5);
+                    c += which == 0 ? texUV.SampleLevel(samp, q, 0) : float2(texU.SampleLevel(samp, q, 0), texV.SampleLevel(samp, q, 0));
+                }
+            return c / 4;
+        }
+
+        bool Shrinking(out float2 f) { f = foot / texel; return (f.x > 1.02 || f.y > 1.02) && f.x < 3 && f.y < 3; }
 
         float4 PSNv12(VSOut i) : SV_Target
         {
             float2 uv = uvOffset + i.uv * uvScale;
-            int nx = Taps(foot.x / texel.x), ny = Taps(foot.y / texel.y);
-            if (nx == 1 && ny == 1) return ToRgb(Luma(uv), texUV.SampleLevel(samp, uv, 0));
-            float y = 0; float2 c = 0;
-            for (int a = 0; a < ny; a++)
-                for (int b = 0; b < nx; b++)
-                {
-                    float2 q = uv + foot * (float2((b + 0.5) / nx, (a + 0.5) / ny) - 0.5);
-                    y += Luma(q); c += texUV.SampleLevel(samp, q, 0);
-                }
-            float n = nx * ny;
-            return ToRgb(y / n, c / n);
+            float2 f;
+            if (!Shrinking(f)) return ToRgb(Luma(uv), texUV.SampleLevel(samp, uv, 0));
+            return ToRgb(LumaShrink(uv, max(f, 1)), ChromaShrink(uv, foot, 0));
         }
 
         float4 PSI420(VSOut i) : SV_Target
         {
             float2 uv = uvOffset + i.uv * uvScale;
-            int nx = Taps(foot.x / texel.x), ny = Taps(foot.y / texel.y);
-            if (nx == 1 && ny == 1) return ToRgb(Luma(uv), float2(texU.SampleLevel(samp, uv, 0), texV.SampleLevel(samp, uv, 0)));
-            float y = 0; float2 c = 0;
-            for (int a = 0; a < ny; a++)
-                for (int b = 0; b < nx; b++)
-                {
-                    float2 q = uv + foot * (float2((b + 0.5) / nx, (a + 0.5) / ny) - 0.5);
-                    y += Luma(q); c += float2(texU.SampleLevel(samp, q, 0), texV.SampleLevel(samp, q, 0));
-                }
-            float n = nx * ny;
-            return ToRgb(y / n, c / n);
+            float2 f;
+            if (!Shrinking(f)) return ToRgb(Luma(uv), float2(texU.SampleLevel(samp, uv, 0), texV.SampleLevel(samp, uv, 0)));
+            return ToRgb(LumaShrink(uv, max(f, 1)), ChromaShrink(uv, foot, 1));
         }
 
         float4 PSOverlay(VSOut i) : SV_Target { return texOv.Sample(samp, i.uv); }
