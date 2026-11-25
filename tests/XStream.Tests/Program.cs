@@ -1195,6 +1195,7 @@ tests.Add(("Opus: libopus and the managed fallback decode the same audio", () =>
 }));
 tests.AddRange(SrtpTests.All);
 tests.AddRange(StunTests.All);
+tests.AddRange(FeatureTests.All);
 
 int failed = 0;
 foreach (var (name, body) in tests)

@@ -193,6 +193,52 @@
         </StackPanel>
       </Border>
 
+      <!-- Controller layout and gyro -->
+      <Border Classes="card">
+        <StackPanel>
+          <TextBlock Classes="h2" Text="Controller layout" Margin="0,0,0,6" />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Button layout" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Applies to the next stream. Back paddles need an Xbox Elite or DualSense Edge controller." />
+            </StackPanel>
+            <ComboBox Grid.Column="1" MinWidth="250" VerticalAlignment="Center" ItemsSource="{Binding MappingPresetNames}" SelectedIndex="{Binding MappingPresetIndex}" />
+          </Grid>
+          <Grid Classes="row" RowDefinitions="Auto,Auto,Auto">
+            <TextBlock Classes="caption" TextWrapping="Wrap"
+                       Text="Custom: From=To pairs, separated by commas. Buttons: A B X Y LB RB LS RS View Menu Xbox Up Down Left Right, Paddle1 to Paddle4, or None to turn one off." />
+            <TextBox Grid.Row="1" Classes="mono" Margin="0,8,0,0" Watermark="e.g. A=B, B=A, Paddle1=LS" Text="{Binding ButtonMapping}" />
+            <TextBlock Grid.Row="2" Classes="caption" Foreground="{StaticResource Warn}" Text="{Binding MappingProblem}" Margin="0,6,0,0"
+                       IsVisible="{Binding MappingProblem, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Gyro aiming" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Tilt the controller to aim: it moves the right stick, so it works in every game. Needs a controller with a gyro (DualSense, DualShock 4, Switch Pro). The ROG Ally's built-in gyro isn't readable by apps." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding GyroAim}" />
+          </Grid>
+          <Grid Classes="row" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" IsEnabled="{Binding GyroAim}">
+            <TextBlock FontWeight="SemiBold" Text="Gyro sensitivity" />
+            <TextBlock Grid.Column="1" Classes="mono" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Text="{Binding GyroSensitivityText}" />
+            <Slider Grid.Row="1" Grid.ColumnSpan="2" Minimum="0.25" Maximum="4" SmallChange="0.25" LargeChange="0.5" TickFrequency="0.25" IsSnapToTickEnabled="True" Value="{Binding GyroSensitivity}" />
+          </Grid>
+          <Grid Classes="row" ColumnDefinitions="*,Auto" IsEnabled="{Binding GyroAim}">
+            <TextBlock FontWeight="SemiBold" Text="Gyro on" VerticalAlignment="Center" />
+            <ComboBox Grid.Column="1" MinWidth="250" VerticalAlignment="Center" ItemsSource="{Binding GyroHoldNames}" SelectedIndex="{Binding GyroHoldIndex}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Instant replay" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Keeps the last 30 seconds so you can save a clip: F10, or Save last 30 seconds in the stream menu. Clips go to Videos › Vexel. Uses about 200 MB of memory, and the console sends a fresh keyframe every 10 seconds." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding InstantReplay}" />
+          </Grid>
+        </StackPanel>
+      </Border>
+
       <!-- Launcher -->
       <Border Classes="card">
         <StackPanel>
@@ -211,6 +257,21 @@
               <TextBlock Classes="caption" TextWrapping="Wrap" Text="Go straight into your last console when Vexel opens. Press B on the connecting screen to stay in the launcher." />
             </StackPanel>
             <ToggleSwitch Grid.Column="1" IsChecked="{Binding AutoConnect}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" RowDefinitions="Auto,Auto,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Shortcuts (Steam, Armoury Crate, Playnite)" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Add Vexel as a game in your launcher with these launch options to go straight into a stream. --stream uses your last console; --stream &quot;Name&quot; picks one; --game PRODUCTID starts a game on it first; --cloud TITLEID plays a cloud game." />
+            </StackPanel>
+            <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,8,0,0">
+              <TextBox Classes="mono" IsReadOnly="True" Text="{Binding ShortcutTarget, Mode=OneWay}" />
+              <Button Grid.Column="1" Classes="ghost" Margin="8,0,0,0" Content="Copy" Click="CopyTarget" />
+            </Grid>
+            <Grid Grid.Row="2" ColumnDefinitions="*,Auto" Margin="0,6,0,0">
+              <TextBox Classes="mono" IsReadOnly="True" Text="{Binding ShortcutOptions, Mode=OneWay}" />
+              <Button Grid.Column="1" Classes="ghost" Margin="8,0,0,0" Content="Copy" Click="CopyOptions" />
+            </Grid>
           </Grid>
           <Separator IsVisible="{Binding IsWindows}" />
           <Grid Classes="row" ColumnDefinitions="*,Auto" IsVisible="{Binding IsWindows}">

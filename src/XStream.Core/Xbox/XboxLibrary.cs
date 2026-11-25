@@ -3,7 +3,8 @@ using System.Text.Json.Nodes;
 namespace XStream.Core.Xbox;
 
 /// <summary>A console game from the account's play history, with its wide key art.</summary>
-public sealed record LibraryGame(string TitleId, string Name, string HeroUrl, string? LogoUrl, DateTimeOffset LastPlayed);
+/// <param name="ProductId">Microsoft Store product id (launches the game on a console), if the title history has one.</param>
+public sealed record LibraryGame(string TitleId, string Name, string HeroUrl, string? LogoUrl, DateTimeOffset LastPlayed, string? ProductId = null);
 
 /// <summary>A cloud game with its store name and art (catalog.gamepass.com).</summary>
 public sealed record CloudGame(string TitleId, string ProductId, string Name, string Publisher, string? TileUrl, string? PosterUrl,
@@ -64,12 +65,19 @@ public static class XboxLibrary
     public static async Task<IReadOnlyList<LibraryGame>> GetRecentAsync(HttpClient http, string authorization, string xuid,
         string locale, int max = 24, CancellationToken ct = default)
     {
-        using var req = new HttpRequestMessage(HttpMethod.Get,
-            $"https://titlehub.xboxlive.com/users/xuid({xuid})/titles/titlehistory/decoration/image?maxItems=60");
-        req.Headers.Add("Authorization", authorization);
-        req.Headers.Add("x-xbl-contract-version", "2");
-        req.Headers.Add("Accept-Language", locale);
-        var j = await XboxAuth.ReadJson(await http.SendAsync(req, ct), ct);
+        async Task<JsonNode> Get(string decoration)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get,
+                $"https://titlehub.xboxlive.com/users/xuid({xuid})/titles/titlehistory/decoration/{decoration}?maxItems=60");
+            req.Headers.Add("Authorization", authorization);
+            req.Headers.Add("x-xbl-contract-version", "2");
+            req.Headers.Add("Accept-Language", locale);
+            return await XboxAuth.ReadJson(await http.SendAsync(req, ct), ct);
+        }
+        // Product ids let Vexel start a game on the console; art matters more, so fall back if that decoration is refused.
+        JsonNode j;
+        try { j = await Get("image,productId"); }
+        catch (XboxApiException ex) when (ex.Status == 400) { j = await Get("image"); }
         return Parse(j, max);
     }
 
@@ -90,8 +98,11 @@ public static class XboxLibrary
             string? logo = images.FirstOrDefault(i => i.Type == "Logo").Url;
 
             DateTimeOffset.TryParse(t["titleHistory"]?["lastTimePlayed"]?.GetValue<string>(), out var played);
+            // productId: top level with the productId decoration; some titles only list it under productIds.
+            string? product = (t["productId"] as JsonValue)?.ToString() is { Length: > 0 } pid ? pid
+                : t["productIds"]?.AsArray().FirstOrDefault()?.ToString();
             games.Add(new LibraryGame(t["titleId"]?.ToString() ?? "", t["name"]?.GetValue<string>() ?? "", Https(hero),
-                logo is null ? null : Https(logo), played));
+                logo is null ? null : Https(logo), played, string.IsNullOrWhiteSpace(product) ? null : product));
         }
         return games.OrderByDescending(g => g.LastPlayed).Take(max).ToList();
     }

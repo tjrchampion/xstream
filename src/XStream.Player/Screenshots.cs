@@ -33,3 +33,24 @@ public static class Screenshots
         return path;
     }
 }
+
+/// <summary>Where instant-replay clips go: Videos/Vexel (Movies/Vexel on macOS).</summary>
+public static class Clips
+{
+    public static string Folder
+    {
+        get
+        {
+            var videos = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
+            if (string.IsNullOrEmpty(videos))
+                videos = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), OperatingSystem.IsMacOS() ? "Movies" : "Videos");
+            return Directory.CreateDirectory(Path.Combine(videos, "Vexel")).FullName;
+        }
+    }
+
+    public static string NewPath(string consoleName)
+    {
+        string safe = string.Concat(consoleName.Where(ch => char.IsLetterOrDigit(ch) || ch is ' ' or '-')).Trim();
+        return Path.Combine(Folder, $"Vexel {(safe.Length > 0 ? safe + " " : "")}{DateTime.Now:yyyy-MM-dd HH.mm.ss}.mp4");
+    }
+}

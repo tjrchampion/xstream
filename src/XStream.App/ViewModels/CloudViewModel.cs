@@ -188,6 +188,17 @@ public sealed partial class CloudViewModel : ObservableObject
 
     private bool CanStream(CloudGameViewModel? g) => !Stream.IsRunning;
 
+    /// <summary>Command line --cloud TITLEID: stream that cloud game (from the library if it's there).</summary>
+    public async Task<string?> StreamTitleAsync(string titleId)
+    {
+        if (_all.Count == 0) await RefreshAsync();
+        var g = _all.FirstOrDefault(x => x.Game.TitleId.Equals(titleId, StringComparison.OrdinalIgnoreCase)
+                                       || x.Game.ProductId.Equals(titleId, StringComparison.OrdinalIgnoreCase));
+        if (g is null) return $"No cloud game with the id {titleId} for this account";
+        if (StartStreamCommand.CanExecute(g)) await StartStreamCommand.ExecuteAsync(g);
+        return null;
+    }
+
     private void Apply(CloudLibrary.Snapshot snap)
     {
         var cmd = StartStreamCommand;

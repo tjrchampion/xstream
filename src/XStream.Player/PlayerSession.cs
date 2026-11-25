@@ -118,6 +118,11 @@ public sealed class PlayerSession
     private void Tick() { Interlocked.Increment(ref _mainTicks); InMainLoop = true; }
     private bool TickTrue() { Tick(); return true; }
 
+    /// <summary>Remote control of the streamed console (typing, Turn off); null for cloud or when unavailable.</summary>
+    public ConsoleRemote? Remote { get; set; }
+    /// <summary>"End and turn off Xbox" was chosen: the console is switched off after the stream closes.</summary>
+    public bool TurnOffAfter { get; private set; }
+
     public void Stop()
     {
         _stop.Set();
@@ -134,6 +139,19 @@ public sealed class PlayerSession
     /// </summary>
     public const int StartAttempts = 4;
     private static readonly int[] StartBackoffMs = [0, 2_000, 4_000, 6_000];
+
+    /// <summary>An interface other than loopback is up with an address (Wi-Fi has rejoined after sleep).</summary>
+    private static bool NetworkUp()
+    {
+        try
+        {
+            return System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces().Any(n =>
+                n.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up
+                && n.NetworkInterfaceType is not (System.Net.NetworkInformation.NetworkInterfaceType.Loopback or System.Net.NetworkInformation.NetworkInterfaceType.Tunnel)
+                && n.GetIPProperties().GatewayAddresses.Count > 0);
+        }
+        catch { return true; }
+    }
 
     /// <summary>Worth trying again: not a sign-in problem, and not the user cancelling.</summary>
     private bool Retryable(Exception ex) =>
@@ -224,6 +242,23 @@ public sealed class PlayerSession
             AppDomain.CurrentDomain.UnhandledException += onCrash;
             double Now() => cur?.NowMs ?? lastPeer?.NowMs ?? 0;
 
+            // Instant replay: the last 30 s as they arrived, for "Save last 30 seconds".
+            var replay = live.InstantReplay && !o.Headless ? new ReplayBuffer(Math.Clamp(live.ReplaySeconds, 10, 120)) : null;
+
+            // The device slept (power button, lid): the connection is gone even if it doesn't know yet. Reconnect
+            // on wake straight away, once the network is back, instead of waiting for it to time out.
+            bool woke = false;
+            new Thread(() =>
+            {
+                var sleep = new SuspendDetector();
+                while (!_stop.Wait(1000) && !ending)
+                {
+                    if (sleep.Observe(DateTime.UtcNow) is not { } away) continue;
+                    Log?.Invoke($"Device was asleep for {away.TotalSeconds:F0} s; reconnecting");
+                    if (cur is not null && !reconnecting) { woke = true; reconnectWhy ??= "the device was asleep"; }
+                }
+            }) { IsBackground = true, Name = "xstream-sleep" }.Start();
+
             // Video window and menu: created once, kept across reconnects (the last picture stays up).
             VideoWindow? window = null;
             FrameMailbox? mailbox = null;
@@ -241,7 +276,8 @@ public sealed class PlayerSession
                     });
                     window.Sharpen = o.Sharpen;
                     window.Scaling = o.Scaling;
-                    overlay = new StreamOverlay(o.ConsoleName, live, o.Fullscreen);
+                    var remote = o.IsCloud ? null : Remote;
+                    overlay = new StreamOverlay(o.ConsoleName, live, o.Fullscreen, consoleControl: remote is not null, clips: replay is not null);
                     window.Overlay = overlay;
                     window.KeyDown = overlay.OnKey;
                     window.Click = overlay.OnClick;
@@ -249,6 +285,33 @@ public sealed class PlayerSession
                     overlay.MoreSettingsRequested += () => MoreSettingsRequested?.Invoke();
                     overlay.CameBack += () => ReturnedToGame?.Invoke();
                     var win = window; var ov0 = overlay;
+                    window.TextInput = overlay.OnText;
+                    if (replay is not null)
+                        overlay.SaveClipRequested += () => Task.Run(() =>
+                        {
+                            try
+                            {
+                                var path = Clips.NewPath(o.ConsoleName);
+                                double secs = replay.SaveTo(path);
+                                if (secs <= 0) { File.Delete(path); ov0.ShowToast("Nothing to save yet", 2500, ToastKind.Warn); return; }
+                                ov0.ShowToast($"Saved the last {secs:F0} s to Videos › Vexel");
+                                Log?.Invoke($"Clip: {path} ({secs:F1} s, {new FileInfo(path).Length / 1e6:F1} MB)");
+                            }
+                            catch (Exception ex) { ov0.ShowToast("Couldn't save the clip", 3000, ToastKind.Bad); Log?.Invoke("Clip failed: " + ex.Message); }
+                        });
+                    if (remote is not null)
+                    {
+                        remote.Log += m => Log?.Invoke(m);
+                        remote.Problem += m => ov0.ShowToast(m, 5000, ToastKind.Bad);
+                        overlay.TextTyped += (text, done) =>
+                        {
+                            remote.Type(text);
+                            if (done) ov0.ShowToast("Sent to the console", 1500);
+                        };
+                        overlay.TouchKeyboardWanted += XStream.Core.Native.WindowsTouchKeyboard.Show;
+                        overlay.TurnOffRequested += () => { TurnOffAfter = true; Stop(); };
+                        _ = remote.IdAsync(); // look the console up now, so the first keystroke goes straight out
+                    }
                     // XSTREAM_SCREENSHOT=file.png;seconds (testing): capture what the renderer shows, to check it.
                     if (Environment.GetEnvironmentVariable("XSTREAM_SCREENSHOT")?.Split(';') is [var shotPath, var shotAt])
                         _ = Task.Delay(TimeSpan.FromSeconds(double.Parse(shotAt, System.Globalization.CultureInfo.InvariantCulture)))
@@ -283,7 +346,11 @@ public sealed class PlayerSession
             var padToastsFrom = DateTime.MaxValue; // set when the pump starts (+3 s: it reports the pads already plugged in)
             try
             {
-                backend = GamepadBackends.CreateDefault();
+                var mapping = ControllerMapping.Parse(live.ButtonMapping, out var mapProblems);
+                if (mapProblems.Count > 0) Log?.Invoke("Controller mapping: ignored " + string.Join(", ", mapProblems));
+                bool extras = live.GyroAim || live.ButtonMapping.Contains("Paddle", StringComparison.OrdinalIgnoreCase)
+                              || live.GyroHoldButton.StartsWith("Paddle", StringComparison.OrdinalIgnoreCase);
+                backend = GamepadBackends.CreateDefault(needExtras: extras);
                 // The stream menu sees the controller first; while it's open the console gets a neutral pad.
                 var ov = overlay;
                 GamepadState[] neutral = [];
@@ -333,7 +400,13 @@ public sealed class PlayerSession
                 }
                 // View + Menu is the stream menu's combo, so it isn't also turned into the Xbox button here (both
                 // fired at 0.5 s and the menu often lost). The menu has an "Xbox button" item instead.
-                pump = new InputPump(backend, new InputOptions { Redundancy = XboxPeer.UnreliableInputSupported ? 1 : 0, NexusComboMs = 0 }, Track, PadChanged);
+                pump = new InputPump(backend, new InputOptions
+                {
+                    Redundancy = XboxPeer.UnreliableInputSupported ? 1 : 0, NexusComboMs = 0,
+                    Mapping = mapping, Gyro = live.GyroAim ? new GyroAim(live.GyroSensitivity) : null, GyroHold = live.GyroHoldButton,
+                }, Track, PadChanged);
+                if (!mapping.IsIdentity || live.GyroAim)
+                    Log?.Invoke($"Controller: {backend.Name}{(mapping.IsIdentity ? "" : ", remapped (" + live.ButtonMapping + ")")}{(live.GyroAim ? $", gyro aim x{live.GyroSensitivity:0.##}" + (live.GyroHoldButton.Length > 0 ? " while " + live.GyroHoldButton + " is held" : "") : "")}");
                 if (ov is not null)
                     ov.XboxButtonRequested += () =>
                     {
@@ -520,6 +593,7 @@ public sealed class PlayerSession
                 if (window is not null && mailbox is not null)
                 {
                     v = new VideoPipeline(p.Frames, VideoDecoder.Create(o.HardwareDecode, window.D3D11Device), mailbox, () => p.NowMs);
+                    if (replay is not null) { replay.Clear(); v.Tap = au => replay.AddVideo(au.Data, au.IsKeyframe); }
                     if (int.TryParse(Environment.GetEnvironmentVariable("XSTREAM_LATENCY_TEST"), out int presses) && presses > 0)
                     {
                         var probe = new LatencyProbe(() => p.NowMs, p.SendGamepad, presses);
@@ -547,6 +621,7 @@ public sealed class PlayerSession
                     };
                 var a = audio;
                 if (a is not null) p.AudioRtp += (payload, seq) => { if (!ending && p == cur) a.Push(payload, seq); };
+                if (replay is not null) p.AudioRtp += (payload, _) => { if (!ending && p == cur) replay.AddAudio(payload); };
                 p.StateChanged += st =>
                 {
                     Log?.Invoke($"Connection: {st}");
@@ -695,6 +770,8 @@ public sealed class PlayerSession
                                 SetStage(PlayerStage.Streaming, "Connected, waiting for the picture. " + streamingText);
                             }
                         }
+                        // Instant replay needs a keyframe every few seconds (a clip has to start on one).
+                        if (!awaitingPicture && replay is not null && replay.ShouldAskKeyframe()) cur?.RequestKeyframe();
                         overlay?.Apply(window);
                         Tick();
                         return !_stop.IsSet && reconnectWhy is null;
@@ -718,6 +795,16 @@ public sealed class PlayerSession
                 var closing = Task.Run(Disconnect);
                 PumpWhile(() => !closing.IsCompleted);
                 closing.Wait();
+                if (woke)
+                {
+                    // Just woken: Wi-Fi takes a few seconds to rejoin. Wait for it (up to 30 s) rather than spend
+                    // the reconnect attempts on a network that isn't there yet.
+                    woke = false;
+                    overlay?.SetReconnecting("Waking up. Waiting for the network…");
+                    var until = DateTime.UtcNow.AddSeconds(30);
+                    PumpWhile(() => DateTime.UtcNow < until && !NetworkUp());
+                    Log?.Invoke(NetworkUp() ? "Network is back after sleep" : "Network still down 30 s after sleep; trying anyway");
+                }
 
                 bool ok = false;
                 for (int attempt = 1; attempt <= ReconnectAttempts && !_stop.IsSet && !ok; attempt++)
@@ -780,6 +867,14 @@ public sealed class PlayerSession
             AppDomain.CurrentDomain.UnhandledException -= onCrash;
             Log -= toFile;
             lock (textLog) textLog.Dispose();
+            if (TurnOffAfter && Remote is { } rem)
+            {
+                SetStage(PlayerStage.Stopping, $"Turning off {o.ConsoleName}");
+                bool off = false;
+                try { var turning = rem.TurnOffAsync(); off = turning.Wait(TimeSpan.FromSeconds(10)) && turning.Result; } catch { }
+                SetStage(PlayerStage.Ended, off ? $"Session ended. {o.ConsoleName} is turning off." : $"Session ended. Couldn't turn off {o.ConsoleName}: check that remote features are on.");
+                return 0;
+            }
             if (failedToReconnect)
             {
                 SetStage(PlayerStage.Failed, $"Lost the connection to {o.ConsoleName} and couldn't get it back after {ReconnectAttempts} tries. Check the network, then stream again.");

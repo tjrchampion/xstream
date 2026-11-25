@@ -26,21 +26,30 @@ public sealed class StreamOverlay : IVideoOverlay
 
     private enum Item
     {
-        Resume, XboxButton,
+        Resume, XboxButton, Type,
         Profile, MaxBitrate,
         Picture, Clarity, Fullscreen, Stats,
         Volume, Microphone, Rumble, TriggerRumble,
-        Screenshot, MoreSettings, Disconnect,
+        Screenshot, SaveClip, MoreSettings, Disconnect, TurnOff,
     }
 
-    private static readonly (Item item, string? section)[] Layout =
-    [
-        (Item.Resume, null), (Item.XboxButton, null),
-        (Item.Profile, "STREAM"), (Item.MaxBitrate, null),
-        (Item.Picture, "PICTURE"), (Item.Clarity, null), (Item.Fullscreen, null), (Item.Stats, null),
-        (Item.Volume, "SOUND & CONTROLLER"), (Item.Microphone, null), (Item.Rumble, null), (Item.TriggerRumble, null),
-        (Item.Screenshot, ""), (Item.MoreSettings, null), (Item.Disconnect, null),
-    ];
+    // Built per stream: typing and Turn off need a console (not cloud), Save clip needs instant replay on.
+    private readonly (Item item, string? section)[] Layout;
+
+    private static (Item item, string? section)[] BuildLayout(bool console, bool clips)
+    {
+        var l = new List<(Item, string?)> { (Item.Resume, null), (Item.XboxButton, null) };
+        if (console) l.Add((Item.Type, null));
+        l.AddRange([
+            (Item.Profile, "STREAM"), (Item.MaxBitrate, null),
+            (Item.Picture, "PICTURE"), (Item.Clarity, null), (Item.Fullscreen, null), (Item.Stats, null),
+            (Item.Volume, "SOUND & CONTROLLER"), (Item.Microphone, null), (Item.Rumble, null), (Item.TriggerRumble, null),
+            (Item.Screenshot, "")]);
+        if (clips) l.Add((Item.SaveClip, null));
+        l.AddRange([(Item.MoreSettings, null), (Item.Disconnect, null)]);
+        if (console) l.Add((Item.TurnOff, null));
+        return l.ToArray();
+    }
     private static readonly double[] BitrateSteps = [10, 15, 20, 25, 30, 40, 50, 60];
     private static readonly int[] RumbleSteps = [0, 25, 50, 75, 100];
     private static readonly string[] ClarityNames = ["Off", "Low", "Medium", "High"];
@@ -67,7 +76,7 @@ public sealed class StreamOverlay : IVideoOverlay
     private SKRect _reconnectDisconnectRect;
     private double _toastUntilMs;
 
-    private readonly SKRect[] _itemRects = new SKRect[Layout.Length];
+    private readonly SKRect[] _itemRects;
     private SKRect _panelRect, _barMenuRect, _barDisconnectRect, _awayRect;
 
     public event Action? DisconnectRequested;
@@ -79,11 +88,24 @@ public sealed class StreamOverlay : IVideoOverlay
     public event Action? XboxButtonRequested;
     /// <summary>"Take screenshot" (or F12): the session captures the next picture and saves it.</summary>
     public event Action? ScreenshotRequested;
+    /// <summary>"Save last 30 s" (or F10): the session writes the instant-replay buffer to a video file.</summary>
+    public event Action? SaveClipRequested;
+    /// <summary>"End and turn off Xbox": stop the stream and switch the console off.</summary>
+    public event Action? TurnOffRequested;
+    /// <summary>Typing on the console: the whole text so far (sent as it changes), and whether typing finished.</summary>
+    public event Action<string, bool>? TextTyped;
+    /// <summary>Typing started from the menu: show the device's touch keyboard if it has one.</summary>
+    public event Action? TouchKeyboardWanted;
     /// <summary>The menu took over the controller: release whatever the console thinks is held.</summary>
     public event Action? InputCaptured;
 
-    public StreamOverlay(string consoleName, AppSettings settings, bool fullscreen)
+    /// <param name="consoleControl">A console stream with remote control (typing, Turn off) available.</param>
+    /// <param name="clips">Instant replay is recording (Save clip in the menu).</param>
+    public StreamOverlay(string consoleName, AppSettings settings, bool fullscreen, bool consoleControl = false, bool clips = false)
     {
+        Layout = BuildLayout(consoleControl, clips);
+        _canType = consoleControl;
+        _itemRects = new SKRect[Layout.Length];
         _console = consoleName;
         _s = settings;
         _fullscreen = fullscreen;
@@ -91,7 +113,7 @@ public sealed class StreamOverlay : IVideoOverlay
 
     public bool MenuOpen { get { lock (_gate) return _menu; } }
     public bool Away { get { lock (_gate) return _away; } }
-    public bool Visible { get { lock (_gate) return _menu || _s.ShowStatsHud || _barUntilMs > 0 || _away || _toastUntilMs > 0 || _reconnecting is not null; } }
+    public bool Visible { get { lock (_gate) return _typing is not null || _menu || _s.ShowStatsHud || _barUntilMs > 0 || _away || _toastUntilMs > 0 || _reconnecting is not null; } }
 
     /// <summary>Show (text) or hide (null) the "Reconnecting…" screen. While it's up, B or a tap on Disconnect ends the stream.</summary>
     public void SetReconnecting(string? detail)
@@ -204,6 +226,13 @@ public sealed class StreamOverlay : IVideoOverlay
             if (pressed.HasFlag(GamepadButtons.B)) DisconnectRequested?.Invoke();
             return true;
         }
+        bool closeTyping = false;
+        lock (_gate)
+        {
+            // Typing: B on the controller closes the typing bar (the rest of the pad still drives the console).
+            if (_typing is not null && pressed.HasFlag(GamepadButtons.B) && !_menu) { _typing = null; _dirty = true; closeTyping = true; }
+        }
+        if (closeTyping) { ShowToast("Typing closed", 1500); return true; }
         lock (_gate)
         {
             if (_away) return true; // the launcher has the controller
@@ -222,14 +251,66 @@ public sealed class StreamOverlay : IVideoOverlay
         return true;
     }
 
+    // ---- Typing on the console: text from a keyboard (or the touch keyboard) goes to the console's text box -------
+    private string? _typing;            // non-null while typing
+    private readonly bool _canType;
+
+    /// <summary>Whether typing is on screen.</summary>
+    public bool Typing { get { lock (_gate) return _typing is not null; } }
+
+    /// <summary>Start typing (menu item, or the first key typed on a keyboard).</summary>
+    public void StartTyping()
+    {
+        if (!_canType) return;
+        lock (_gate) { _typing ??= ""; _menu = false; _barUntilMs = 0; _dirty = true; }
+    }
+
+    /// <summary>Text typed in the window (SDL text input: already in the keyboard's layout, any language).</summary>
+    public void OnText(string text)
+    {
+        if (!_canType || text.Length == 0) return;
+        string now;
+        lock (_gate)
+        {
+            if (_away || _reconnecting is not null || _menu) return;
+            _typing = (_typing ?? "") + text;
+            now = _typing; _dirty = true;
+        }
+        TextTyped?.Invoke(now, false);
+    }
+
+    private bool TypingKey(int sym)
+    {
+        const int Esc = 27, Enter = 13, Backspace = 8, KpEnter = 0x40000058;
+        string? now = null; bool done = false, cancel = false;
+        lock (_gate)
+        {
+            if (_typing is null) return false;
+            switch (sym)
+            {
+                case Backspace when _typing.Length > 0:
+                    _typing = char.IsLowSurrogate(_typing[^1]) && _typing.Length > 1 ? _typing[..^2] : _typing[..^1];
+                    now = _typing; break;
+                case Enter or KpEnter: now = _typing; done = true; _typing = null; break;
+                case Esc: cancel = true; _typing = null; break;
+            }
+            _dirty = true;
+        }
+        if (now is not null) TextTyped?.Invoke(now, done);
+        if (cancel) ShowToast("Typing closed", 1500);
+        return true; // every key belongs to the text while typing
+    }
+
     /// <summary>Key press from the window (SDL keycode). Returns true if handled.</summary>
     public bool OnKey(int sym)
     {
         const int Esc = 27, Enter = 13, Space = 32, Up = 0x40000052, Down = 0x40000051, Left = 0x40000050, Right = 0x4000004F,
-            F3 = 0x4000003C, F11 = 0x40000044, F12 = 0x40000045;
+            F3 = 0x4000003C, F10 = 0x40000043, F11 = 0x40000044, F12 = 0x40000045;
         lock (_gate) if (_away) return true;
+        if (TypingKey(sym)) return true;
         switch (sym)
         {
+            case F10: SaveClipRequested?.Invoke(); return true;
             case Esc: ToggleMenu(); return true;
             case F11: ToggleFullscreen(); return true;
             case F3: Set(s => s with { ShowStatsHud = !s.ShowStatsHud }); return true;
@@ -351,6 +432,9 @@ public sealed class StreamOverlay : IVideoOverlay
             case Item.TriggerRumble: Set(s => s with { TriggerRumble = !s.TriggerRumble }); break;
             case Item.Microphone: Set(s => s with { Microphone = !s.Microphone }); break;
             case Item.Screenshot: if (activate) { CloseMenu(); ScreenshotRequested?.Invoke(); } break;
+            case Item.SaveClip: if (activate) { CloseMenu(); SaveClipRequested?.Invoke(); } break;
+            case Item.Type: if (activate) { CloseMenu(); StartTyping(); TouchKeyboardWanted?.Invoke(); } break;
+            case Item.TurnOff: if (activate) { CloseMenu(); TurnOffRequested?.Invoke(); } break;
             case Item.MoreSettings: if (activate) { GoAway(); MoreSettingsRequested?.Invoke(); } break;
             case Item.Disconnect: if (activate) { CloseMenu(); DisconnectRequested?.Invoke(); } break;
         }
@@ -372,7 +456,7 @@ public sealed class StreamOverlay : IVideoOverlay
     public unsafe void Render(Span<byte> rgba, int stride)
     {
         bool menu, fullscreen, bar, away;
-        string? reconnecting;
+        string? reconnecting, typing;
         string? toast;
         ToastKind toastKind;
         int selected;
@@ -387,6 +471,7 @@ public sealed class StreamOverlay : IVideoOverlay
             if (_toastUntilMs > 0 && Now >= _toastUntilMs) { _toastUntilMs = 0; _toast = null; }
             toast = _toast;
             reconnecting = _reconnecting;
+            typing = _typing;
             toastKind = _toastKind;
             _dirty = false;
         }
@@ -403,6 +488,7 @@ public sealed class StreamOverlay : IVideoOverlay
                 if (s.ShowStatsHud && !menu) DrawHud(c, st, size);
                 if (bar && !menu) DrawBar(c);
                 if (menu) DrawMenu(c, st, size, selected, s, fullscreen);
+                else if (typing is not null) DrawTyping(c, typing);
             }
             if (toast is not null) DrawToast(c, toast, toastKind);
             c.Flush();
@@ -503,6 +589,26 @@ public sealed class StreamOverlay : IVideoOverlay
             ink.StrokeCap = SKStrokeCap.Round;
             for (int i = -1; i <= 1; i++) c.DrawLine(ox + 5 * k, cy + i * 5 * k, ox + 19 * k, cy + i * 5 * k, ink);
         }
+    }
+
+    /// <summary>Bottom bar while typing: the text going to the console, and how to finish.</summary>
+    private static void DrawTyping(SKCanvas c, string text)
+    {
+        float w = 1240, h = 150, x = (CanvasWidth - w) / 2, y = CanvasHeight - h - 70;
+        using (var bg = Fill(new SKColor(0x16, 0x1A, 0x20, 0xF5))) c.DrawRoundRect(x, y, w, h, 28, 28, bg);
+        using (var border = new SKPaint { Color = new SKColor(0x3D, 0xDC, 0x97, 0x70), IsStroke = true, StrokeWidth = 2, IsAntialias = true })
+            c.DrawRoundRect(x, y, w, h, 28, 28, border);
+        using (var label = Font(Bold, 19, Accent)) c.DrawText("TYPING ON THE CONSOLE", x + 36, y + 44, label);
+        using var f = Font(Bold, 38, Text);
+        // Show the end of long text: that's where the cursor is.
+        string shown = text;
+        while (shown.Length > 0 && f.MeasureText("…" + shown + "▏") > w - 72) shown = shown[1..];
+        if (shown.Length < text.Length) shown = "…" + shown;
+        c.DrawText(shown.Length == 0 ? "" : shown, x + 36, y + 96, f);
+        using (var caret = Fill(Accent)) c.DrawRect(x + 36 + f.MeasureText(shown) + 4, y + 64, 3, 42, caret);
+        using var hint = Font(Regular, 21, Muted);
+        const string help = "Enter  done   ·   Esc or B  close   ·   the console's text box updates as you type";
+        c.DrawText(help, x + 36, y + 134, hint);
     }
 
     private static void DrawToast(SKCanvas c, string text, ToastKind kind = ToastKind.Good)
@@ -614,7 +720,7 @@ public sealed class StreamOverlay : IVideoOverlay
         }
 
         // ---- Right column: settings
-        float rx = px + 640, rw = pw - 640 - 52, ry = py + 34, ih = 46;
+        float rx = px + 640, rw = pw - 640 - 52, ry = py + 34, ih = Layout.Length switch { > 17 => 38, > 15 => 41, _ => 46 };
         using (var div = Fill(new SKColor(0x26, 0x2B, 0x33))) c.DrawRect(px + 610, py + 40, 1.5f, ph - 80, div);
         for (int i = 0; i < Layout.Length; i++)
         {
@@ -632,7 +738,7 @@ public sealed class StreamOverlay : IVideoOverlay
             }
             var r = new SKRect(rx, ry, rx + rw, ry + ih);
             lock (_gate) _itemRects[i] = r;
-            bool sel = i == selected, danger = item == Item.Disconnect;
+            bool sel = i == selected, danger = item is Item.Disconnect or Item.TurnOff;
             if (sel)
                 using (var hi = Fill(danger ? new SKColor(0xFF, 0x6B, 0x6B, 0x33) : new SKColor(0x3D, 0xDC, 0x97, 0x2E)))
                     c.DrawRoundRect(r, 16, 16, hi);
@@ -677,6 +783,9 @@ public sealed class StreamOverlay : IVideoOverlay
         Item.TriggerRumble => "Trigger rumble",
         Item.Microphone => "Microphone (chat)",
         Item.Screenshot => "Take screenshot",
+        Item.SaveClip => "Save last 30 seconds",
+        Item.Type => "Type on the console",
+        Item.TurnOff => "End and turn off Xbox",
         Item.MoreSettings => "More settings…",
         _ => "Disconnect",
     };

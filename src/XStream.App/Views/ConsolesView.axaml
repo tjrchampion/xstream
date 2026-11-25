@@ -6,6 +6,34 @@
              xmlns:c="using:XStream.App.Controls"
              x:Class="XStream.App.Views.ConsolesView"
              x:DataType="vm:ConsolesViewModel">
+  <UserControl.Styles>
+    <Style Selector="TextBlock.unit"><Setter Property="FontSize" Value="13" /><Setter Property="Foreground" Value="{StaticResource Muted}" /><Setter Property="VerticalAlignment" Value="Bottom" /><Setter Property="Margin" Value="4,0,0,4" /></Style>
+    <Style Selector="Border.stat">
+      <Setter Property="Background" Value="{StaticResource Surface2}" /><Setter Property="CornerRadius" Value="12" /><Setter Property="Padding" Value="16,14" />
+    </Style>
+    <Style Selector="Border.pill">
+      <Setter Property="CornerRadius" Value="99" /><Setter Property="Padding" Value="10,4" /><Setter Property="Background" Value="#CC0C0E12" />
+    </Style>
+    <Style Selector="Border.pill > StackPanel > TextBlock"><Setter Property="FontSize" Value="11" /><Setter Property="FontWeight" Value="Bold" /><Setter Property="LetterSpacing" Value="1" /></Style>
+    <Style Selector="Button.tile">
+      <Setter Property="Background" Value="Transparent" /><Setter Property="BorderThickness" Value="0" /><Setter Property="FocusAdorner" Value="{x:Null}" />
+    </Style>
+    <Style Selector="Button.tile /template/ ContentPresenter#PART_ContentPresenter, Button.tile:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.tile:pressed /template/ ContentPresenter#PART_ContentPresenter, Button.tile:focus /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" /><Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.tile Border.ring">
+      <Setter Property="CornerRadius" Value="14" /><Setter Property="BorderThickness" Value="3" /><Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="IsHitTestVisible" Value="False" />
+    </Style>
+    <Style Selector="Button.tile:pointerover Border.ring, Button.tile:focus Border.ring"><Setter Property="BorderBrush" Value="{StaticResource Accent}" /></Style>
+    <Style Selector="Border.hero"><Setter Property="BorderBrush" Value="#553DDC97" /></Style>
+    <Style Selector="Border.hero.ended"><Setter Property="BorderBrush" Value="{StaticResource Line}" /></Style>
+    <Style Selector="Border.hero.failed"><Setter Property="BorderBrush" Value="#80E5484D" /></Style>
+    <Style Selector="Ellipse.verdict"><Setter Property="Width" Value="8" /><Setter Property="Height" Value="8" /><Setter Property="Fill" Value="{StaticResource Accent}" /></Style>
+    <Style Selector="Ellipse.verdict.warn"><Setter Property="Fill" Value="{StaticResource Warn}" /></Style>
+    <Style Selector="Ellipse.verdict.bad"><Setter Property="Fill" Value="{StaticResource Bad}" /></Style>
+  </UserControl.Styles>
   <ScrollViewer>
     <StackPanel Margin="36,32,36,36" Spacing="24" MaxWidth="1200">
       <!-- Header -->
@@ -25,8 +53,213 @@
         </StackPanel>
       </Grid>
 
-      <!-- Live / last stream -->
-      <v:StreamPanel DataContext="{Binding Stream}" IsVisible="{Binding HasPanel}" />
+      <!-- Now playing: the console being streamed (live numbers), or how the last session went. Nothing while
+           connecting: the full-screen connecting screen covers that. -->
+      <Border Classes="card hero" Padding="0" ClipToBounds="True" IsVisible="{Binding Stream.HasHero}"
+              Classes.ended="{Binding Stream.ShowSummary}" Classes.failed="{Binding Stream.HasError}">
+        <StackPanel>
+          <!-- Art header -->
+          <Panel Height="200">
+            <Panel.Background>
+              <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                <GradientStop Color="#2A3DDC97" Offset="0" />
+                <GradientStop Color="#0A1E9E8F" Offset="1" />
+              </LinearGradientBrush>
+            </Panel.Background>
+            <Image Source="{Binding ActiveConsole.GameArt, FallbackValue={x:Null}}" Stretch="UniformToFill" />
+            <Border>
+              <Border.Background>
+                <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,0%">
+                  <GradientStop Color="#F2161A20" Offset="0" />
+                  <GradientStop Color="#99161A20" Offset="0.5" />
+                  <GradientStop Color="#20161A20" Offset="1" />
+                </LinearGradientBrush>
+              </Border.Background>
+            </Border>
+            <Border>
+              <Border.Background>
+                <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                  <GradientStop Color="#00161A20" Offset="0.5" />
+                  <GradientStop Color="#FF161A20" Offset="1" />
+                </LinearGradientBrush>
+              </Border.Background>
+            </Border>
+            <Grid ColumnDefinitions="*,Auto" Margin="28,0,28,22" VerticalAlignment="Bottom">
+              <StackPanel Spacing="6">
+                <!-- Status -->
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <Border Classes="pill" IsVisible="{Binding Stream.IsStreaming}">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                      <Ellipse Classes="dot good pulse" VerticalAlignment="Center" Classes.warn="{Binding Stream.IsReconnecting}" />
+                      <TextBlock Text="LIVE" Foreground="{StaticResource Accent}" IsVisible="{Binding !Stream.IsReconnecting}" />
+                      <TextBlock Text="RECONNECTING" Foreground="{StaticResource Warn}" IsVisible="{Binding Stream.IsReconnecting}" />
+                      <TextBlock Classes="mono" Text="{Binding Stream.Elapsed}" Foreground="#CCFFFFFF" LetterSpacing="0" />
+                    </StackPanel>
+                  </Border>
+                  <Border Classes="pill" IsVisible="{Binding Stream.ShowSummary}">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                      <TextBlock Text="SESSION ENDED" Foreground="#CCFFFFFF" IsVisible="{Binding !Stream.HasError}" />
+                      <TextBlock Text="STREAM STOPPED" Foreground="{StaticResource Bad}" IsVisible="{Binding Stream.HasError}" />
+                    </StackPanel>
+                  </Border>
+                  <Border Classes="pill">
+                    <StackPanel Orientation="Horizontal"><TextBlock Text="{Binding Stream.ProfileText}" Foreground="#B3FFFFFF" /></StackPanel>
+                  </Border>
+                </StackPanel>
+                <TextBlock Text="{Binding Stream.ConsoleName}" FontSize="30" FontWeight="Bold" LetterSpacing="-0.5" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding ActiveConsole.GameName, FallbackValue=''}" FontSize="14" Foreground="#CCFFFFFF" TextTrimming="CharacterEllipsis"
+                           IsVisible="{Binding ActiveConsole.HasGame, FallbackValue=False}" />
+              </StackPanel>
+              <!-- Actions -->
+              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Bottom">
+                <Button Classes="primary" Command="{Binding Stream.ReturnToGameCommand}" IsVisible="{Binding Stream.IsAway}">
+                  <StackPanel Orientation="Horizontal" Spacing="8"><PathIcon Data="{StaticResource Icon.Play}" /><TextBlock Text="Back to game" /></StackPanel>
+                </Button>
+                <Button Classes="danger" Command="{Binding Stream.StopCommand}" IsVisible="{Binding Stream.IsRunning}" IsEnabled="{Binding !Stream.IsStopping}">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <PathIcon Data="{StaticResource Icon.Stop}" />
+                    <TextBlock Text="Stop" IsVisible="{Binding !Stream.IsStopping}" />
+                    <TextBlock Text="Stopping…" IsVisible="{Binding Stream.IsStopping}" />
+                  </StackPanel>
+                </Button>
+                <Button Classes="primary" Command="{Binding Stream.StreamAgainCommand}" IsVisible="{Binding Stream.ShowSummary}">
+                  <StackPanel Orientation="Horizontal" Spacing="8"><PathIcon Data="{StaticResource Icon.Play}" /><TextBlock Text="Stream again" /></StackPanel>
+                </Button>
+                <Button Classes="ghost" Command="{Binding Stream.DismissCommand}" IsVisible="{Binding Stream.ShowSummary}" Background="#66000000">
+                  <StackPanel Orientation="Horizontal" Spacing="8"><PathIcon Data="{StaticResource Icon.Close}" /><TextBlock Text="Close" /></StackPanel>
+                </Button>
+              </StackPanel>
+            </Grid>
+          </Panel>
+
+          <StackPanel Margin="28,4,28,24" Spacing="16">
+            <!-- Live numbers -->
+            <UniformGrid Columns="4" ColumnSpacing="12" IsVisible="{Binding Stream.IsStreaming}">
+              <Border Classes="stat">
+                <StackPanel Spacing="2">
+                  <TextBlock Classes="label" Text="BITRATE" />
+                  <StackPanel Orientation="Horizontal">
+                    <TextBlock Classes="big" Text="{Binding Stream.Live.Mbps, StringFormat={}{0:F1}, FallbackValue=–}" />
+                    <TextBlock Classes="unit" Text="Mbps" />
+                  </StackPanel>
+                  <c:Sparkline Values="{Binding Stream.BitrateHistory}" Stroke="{StaticResource Accent}" MinRange="5" Margin="0,6,0,0" />
+                </StackPanel>
+              </Border>
+              <Border Classes="stat">
+                <StackPanel Spacing="2">
+                  <TextBlock Classes="label" Text="PING" />
+                  <StackPanel Orientation="Horizontal">
+                    <TextBlock Classes="big" Text="{Binding Stream.Live.PingMs, StringFormat={}{0:F0}, FallbackValue=–}" />
+                    <TextBlock Classes="unit" Text="ms" />
+                  </StackPanel>
+                  <c:Sparkline Values="{Binding Stream.PingHistory}" Stroke="{StaticResource Info}" MinRange="20" Margin="0,6,0,0" />
+                </StackPanel>
+              </Border>
+              <Border Classes="stat">
+                <StackPanel Spacing="2">
+                  <TextBlock Classes="label" Text="NETWORK → SCREEN" />
+                  <StackPanel Orientation="Horizontal">
+                    <TextBlock Classes="big" Text="{Binding Stream.Live.NetToScreenP50Ms, StringFormat={}{0:F1}, FallbackValue=–}" />
+                    <TextBlock Classes="unit" Text="ms" />
+                  </StackPanel>
+                  <c:Sparkline Values="{Binding Stream.LatencyHistory}" Stroke="{StaticResource Violet}" MinRange="10" Margin="0,6,0,0" />
+                </StackPanel>
+              </Border>
+              <Border Classes="stat">
+                <StackPanel Spacing="2">
+                  <TextBlock Classes="label" Text="FRAME RATE" />
+                  <StackPanel Orientation="Horizontal">
+                    <TextBlock Classes="big" Text="{Binding Stream.Live.Fps, StringFormat={}{0:F0}, FallbackValue=–}" />
+                    <TextBlock Classes="unit" Text="fps" />
+                  </StackPanel>
+                  <TextBlock Classes="caption" Margin="0,6,0,0" Text="{Binding Stream.LiveDetail}" />
+                </StackPanel>
+              </Border>
+            </UniformGrid>
+
+            <!-- Verdict: one quiet line -->
+            <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding Stream.IsStreaming}">
+              <Ellipse Classes="verdict" VerticalAlignment="Center"
+                       Classes.warn="{Binding Stream.VerdictKind, Converter={x:Static app:Conv.Is}, ConverterParameter=warn}"
+                       Classes.bad="{Binding Stream.VerdictKind, Converter={x:Static app:Conv.Is}, ConverterParameter=bad}" />
+              <TextBlock Text="{Binding Stream.Verdict}" FontSize="13" Foreground="{StaticResource Muted}" VerticalAlignment="Center" />
+            </StackPanel>
+
+            <!-- After the session -->
+            <TextBlock Text="{Binding Stream.SummaryLine}" FontSize="15" IsVisible="{Binding Stream.ShowSummary}" TextWrapping="Wrap" />
+            <Border Classes="banner bad" Margin="0,-4,0,0">
+              <Border.IsVisible>
+                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                  <Binding Path="Stream.ShowSummary" />
+                  <Binding Path="Stream.HasError" />
+                </MultiBinding>
+              </Border.IsVisible>
+              <Grid ColumnDefinitions="Auto,*">
+                <PathIcon Data="{StaticResource Icon.Alert}" Foreground="{StaticResource Bad}" Width="16" Height="16" VerticalAlignment="Top" Margin="0,2,10,0" />
+                <TextBlock Grid.Column="1" Text="{Binding Stream.Error}" TextWrapping="Wrap" />
+              </Grid>
+            </Border>
+
+            <!-- Details, folded away -->
+            <Expander Header="Connection details and log" HorizontalAlignment="Stretch">
+              <StackPanel Spacing="14">
+                <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+                      IsVisible="{Binding Stream.Info, Converter={x:Static ObjectConverters.IsNotNull}}">
+                  <Grid.Styles>
+                    <Style Selector="TextBlock"><Setter Property="Margin" Value="0,3" /><Setter Property="FontSize" Value="13" /></Style>
+                    <Style Selector="TextBlock.k"><Setter Property="Foreground" Value="{StaticResource Muted}" /><Setter Property="Margin" Value="0,3,24,3" /></Style>
+                  </Grid.Styles>
+                  <TextBlock Classes="k" Text="Route to console" />
+                  <TextBlock Grid.Column="1" Text="{Binding Stream.Info.Route, FallbackValue=–}" TextWrapping="Wrap" />
+                  <TextBlock Grid.Row="1" Classes="k" Text="Video decode" />
+                  <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Stream.Info.Decoder, FallbackValue=–}" />
+                  <TextBlock Grid.Row="2" Classes="k" Text="Renderer" />
+                  <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Stream.Info.Renderer, FallbackValue=–}" />
+                  <TextBlock Grid.Row="3" Classes="k" Text="Game audio" />
+                  <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Stream.Info.Audio, FallbackValue=–}" />
+                  <TextBlock Grid.Row="4" Classes="k" Text="Controller" />
+                  <TextBlock Grid.Row="4" Grid.Column="1">
+                    <Run Text="{Binding Stream.Info.Controller, FallbackValue=–}" /><Run Text="  ·  " /><Run Text="{Binding Stream.Live.PadHz, StringFormat={}{0:F0} Hz, FallbackValue=''}" />
+                  </TextBlock>
+                  <TextBlock Grid.Row="5" Classes="k" Text="Low-latency input" />
+                  <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding Stream.Info.LowLatencyInput, FallbackValue=–}" />
+                  <TextBlock Grid.Row="6" Classes="k" Text="Bitrate caps / resend" />
+                  <TextBlock Grid.Row="6" Grid.Column="1">
+                    <Run Text="REMB " /><Run Text="{Binding Stream.Info.Remb, FallbackValue=–}" /><Run Text="  ·  NACK " /><Run Text="{Binding Stream.Info.Nack, FallbackValue=–}" />
+                  </TextBlock>
+                </Grid>
+                <Border Background="{StaticResource Bg}" CornerRadius="10" Padding="12" MaxHeight="220">
+                  <ScrollViewer>
+                    <ItemsControl ItemsSource="{Binding Stream.LogLines}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="x:String">
+                          <SelectableTextBlock Text="{Binding}" Classes="mono" FontSize="11.5" Foreground="{StaticResource Muted}" TextWrapping="Wrap" />
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </ScrollViewer>
+                </Border>
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <Button Classes="ghost" Command="{Binding Stream.OpenLogCommand}">
+                    <StackPanel Orientation="Horizontal" Spacing="8"><PathIcon Data="{StaticResource Icon.Folder}" /><TextBlock Text="Open session logs" /></StackPanel>
+                  </Button>
+                  <Button Classes="ghost" Command="{Binding Stream.ExportDiagnosticsNowCommand}">
+                    <StackPanel Orientation="Horizontal" Spacing="8"><PathIcon Data="{StaticResource Icon.Bug}" /><TextBlock Text="Export diagnostics" /></StackPanel>
+                  </Button>
+                </StackPanel>
+              </StackPanel>
+            </Expander>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- Result of a remote command (turn off, restart, start a game) -->
+      <Border Classes="banner" IsVisible="{Binding HasNotice}">
+        <StackPanel Orientation="Horizontal" Spacing="10">
+          <PathIcon Data="{StaticResource Icon.Power}" Foreground="{StaticResource Accent}" Width="15" Height="15" />
+          <TextBlock Text="{Binding Notice}" TextWrapping="Wrap" VerticalAlignment="Center" />
+        </StackPanel>
+      </Border>
 
       <!-- Load error -->
       <Border Classes="banner bad" IsVisible="{Binding HasError}">
@@ -62,7 +295,8 @@
         </ItemsControl.ItemsPanel>
         <ItemsControl.ItemTemplate>
           <DataTemplate x:DataType="vm:ConsoleItemViewModel">
-            <Border Classes="card console" Classes.streaming="{Binding IsStreaming}" Width="300" Padding="0" ClipToBounds="True">
+            <Border Classes="card console" Classes.streaming="{Binding IsStreaming}" Width="300" Padding="0" ClipToBounds="True"
+                    IsVisible="{Binding !IsInHeader}">
               <StackPanel>
                 <!-- Game art: what's running on it, else the last game played -->
                 <Panel Height="150">
@@ -83,8 +317,13 @@
                     </Border.Background>
                   </Border>
                   <PathIcon Data="{StaticResource Icon.Console}" Width="40" Height="40" Foreground="#40FFFFFF" IsVisible="{Binding !HasArt}" />
-                  <Border Classes="chip accent" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="12" IsVisible="{Binding IsLastUsed}"
-                          Background="#CC0C0E12">
+                  <Border Classes="chip accent" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="12" Background="#CC0C0E12">
+                    <Border.IsVisible>
+                      <MultiBinding Converter="{x:Static BoolConverters.And}">
+                        <Binding Path="IsLastUsed" />
+                        <Binding Path="!IsStreaming" />
+                      </MultiBinding>
+                    </Border.IsVisible>
                     <TextBlock Text="Last used" />
                   </Border>
                   <StackPanel VerticalAlignment="Bottom" Margin="20,0,20,10" Spacing="1" IsVisible="{Binding HasGame}">
@@ -126,10 +365,29 @@
                     <TextBlock Text="Stream" />
                   </StackPanel>
                 </Button>
-                <Border Classes="banner good" IsVisible="{Binding IsStreaming}" Padding="12,10">
+                <!-- Power, while it's on and not streaming (needs remote features on the console) -->
+                <Grid ColumnDefinitions="*,8,*" IsVisible="{Binding ShowPower}" Margin="0,-6,0,0">
+                  <Button Classes="ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                          Command="{Binding TurnOffCommand}" CommandParameter="{Binding}" ToolTip.Tip="Turn the console off">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <PathIcon Data="{StaticResource Icon.Power}" Width="13" Height="13" />
+                      <TextBlock Text="Turn off" FontSize="13" />
+                    </StackPanel>
+                  </Button>
+                  <Button Grid.Column="2" Classes="ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                          Command="{Binding RestartCommand}" CommandParameter="{Binding}" ToolTip.Tip="Restart the console">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <PathIcon Data="{StaticResource Icon.Refresh}" Width="13" Height="13" />
+                      <TextBlock Text="Restart" FontSize="13" />
+                    </StackPanel>
+                  </Button>
+                </Grid>
+                <!-- While streaming to this console: a status in the button's place (the header above has the controls) -->
+                <Border IsVisible="{Binding IsStreaming}" CornerRadius="10" Padding="12,11" Background="{StaticResource AccentSoft}">
                   <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
                     <Ellipse Classes="dot good pulse" VerticalAlignment="Center" />
-                    <TextBlock Text="Connected" Foreground="{StaticResource Accent}" FontWeight="SemiBold" />
+                    <TextBlock Text="Live" Foreground="{StaticResource Accent}" FontWeight="SemiBold" IsVisible="{Binding IsLive}" />
+                    <TextBlock Text="Connecting…" Foreground="{StaticResource Accent}" FontWeight="SemiBold" IsVisible="{Binding !IsLive}" />
                   </StackPanel>
                 </Border>
               </StackPanel>
@@ -138,6 +396,43 @@
           </DataTemplate>
         </ItemsControl.ItemTemplate>
       </ItemsControl>
+
+      <!-- Jump back in: start a recent game on the console, then stream it -->
+      <StackPanel Spacing="12" IsVisible="{Binding HasRecentGames}">
+        <StackPanel Spacing="2">
+          <TextBlock Classes="h3" Text="Jump back in" />
+          <TextBlock Classes="caption" Text="Starts the game on your console and streams it as it opens." />
+        </StackPanel>
+        <ItemsControl ItemsSource="{Binding RecentGames}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate><WrapPanel ItemSpacing="12" LineSpacing="12" /></ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:RecentGameViewModel">
+              <Button Classes="tile" Padding="0" Width="216" Height="122" CornerRadius="14" ClipToBounds="True"
+                      Command="{Binding PlayCommand}" CommandParameter="{Binding}" ToolTip.Tip="{Binding Name}">
+                <Panel>
+                  <Border Background="{StaticResource Surface2}" />
+                  <Image Source="{Binding Art}" Stretch="UniformToFill" />
+                  <Border>
+                    <Border.Background>
+                      <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                        <GradientStop Color="#00000000" Offset="0.4" />
+                        <GradientStop Color="#E6101318" Offset="1" />
+                      </LinearGradientBrush>
+                    </Border.Background>
+                  </Border>
+                  <Grid ColumnDefinitions="*,Auto" VerticalAlignment="Bottom" Margin="12,0,12,10">
+                    <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                    <PathIcon Grid.Column="1" Data="{StaticResource Icon.Play}" Width="14" Height="14" Foreground="{StaticResource Accent}" Margin="8,0,0,0" />
+                  </Grid>
+                  <Border Classes="ring" />
+                </Panel>
+              </Button>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
 
       <!-- Tips -->
       <Border Classes="card" Padding="20" IsVisible="{Binding Loaded}">

@@ -29,6 +29,14 @@ public sealed class Sdl2Backend : IGamepadBackend
     [DllImport(Lib)] private static extern int SDL_GameControllerRumbleTriggers(IntPtr gc, ushort left, ushort right, uint ms);
     [DllImport(Lib)] private static extern IntPtr SDL_GetError();
     [DllImport(Lib)] private static extern int SDL_JoystickGetDeviceInstanceID(int index);
+    // SDL 2.0.14+: sensors (gyro) and paddles. Missing in older builds: calls are guarded.
+    [DllImport(Lib)] private static extern int SDL_GameControllerHasSensor(IntPtr gc, int type);
+    [DllImport(Lib)] private static extern int SDL_GameControllerSetSensorEnabled(IntPtr gc, int type, int enabled);
+    [DllImport(Lib)] private static extern unsafe int SDL_GameControllerGetSensorData(IntPtr gc, int type, float* data, int count);
+    private const int SensorGyro = 2, ButtonPaddle1 = 16;
+    private bool _gyro, _extrasBroken;
+    private readonly PadExtras[] _extras = new PadExtras[4];
+    private readonly bool[] _gyroOn = new bool[4];
 
     static Sdl2Backend() => XStream.Core.Native.NativeLibs.Ensure();
 
@@ -60,7 +68,7 @@ public sealed class Sdl2Backend : IGamepadBackend
             var gc = _pads[i];
             if (gc == IntPtr.Zero || SDL_GameControllerGetAttached(gc) == 0)
             {
-                if (gc != IntPtr.Zero) { SDL_GameControllerClose(gc); _pads[i] = IntPtr.Zero; _ids[i] = -1; }
+                if (gc != IntPtr.Zero) { SDL_GameControllerClose(gc); _pads[i] = IntPtr.Zero; _ids[i] = -1; _gyroOn[i] = false; _extras[i] = default; }
                 connected[i] = false;
                 continue;
             }
@@ -72,7 +80,33 @@ public sealed class Sdl2Backend : IGamepadBackend
                 SDL_GameControllerGetAxis(gc, 2), SDL_GameControllerGetAxis(gc, 3),
                 SDL_GameControllerGetAxis(gc, 4), SDL_GameControllerGetAxis(gc, 5));
             if (_rumbleUntil[i] != 0 && now >= _rumbleUntil[i]) _rumbleUntil[i] = 0;
+            ReadExtras(i, gc);
         }
+    }
+
+    public PadExtras Extras(int pad) => pad is >= 0 and < 4 ? _extras[pad] : default;
+    public void EnableGyro(bool on) => _gyro = on;
+
+    private unsafe void ReadExtras(int i, IntPtr gc)
+    {
+        if (_extrasBroken) return;
+        try
+        {
+            byte paddles = 0;
+            for (int k = 0; k < 4; k++) if (SDL_GameControllerGetButton(gc, ButtonPaddle1 + k) != 0) paddles |= (byte)(1 << k);
+            float pitch = 0, yaw = 0; bool has = false;
+            if (_gyro)
+            {
+                if (!_gyroOn[i] && SDL_GameControllerHasSensor(gc, SensorGyro) != 0) _gyroOn[i] = SDL_GameControllerSetSensorEnabled(gc, SensorGyro, 1) == 0;
+                if (_gyroOn[i])
+                {
+                    float* d = stackalloc float[3];
+                    if (SDL_GameControllerGetSensorData(gc, SensorGyro, d, 3) == 0) { pitch = d[0]; yaw = d[1]; has = true; }
+                }
+            }
+            _extras[i] = new PadExtras(paddles, pitch, yaw, has);
+        }
+        catch (EntryPointNotFoundException) { _extrasBroken = true; } // SDL older than 2.0.14
     }
 
     private void Scan()

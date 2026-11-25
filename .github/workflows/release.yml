@@ -134,3 +134,48 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/Vexel.exe --draft --generate-notes --title "Vexel $XS_VERSION" \
             --notes "Download **Vexel.exe** below and run it (Windows 10/11, x64). Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org)."
           echo "Draft release created. Finish it with: scripts/finish-release.sh $GITHUB_REF_NAME"
+
+  # Apple Silicon Macs: Vexel.app in Vexel-mac.zip, added to the same draft release. Ad-hoc signed, not notarized
+  # (that needs a paid Apple Developer ID): the first launch is right-click > Open. macOS doesn't self-update yet;
+  # the app links to the release page when there's a new version.
+  mac:
+    needs: build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then V="${GITHUB_REF_NAME#v}"; else V="${{ inputs.version }}"; fi
+          echo "XS_VERSION=$V" >> "$GITHUB_ENV"
+
+      - uses: actions/cache@v4
+        with:
+          path: .cache/mac
+          key: mac-natives-${{ hashFiles('scripts/publish-macos.sh') }}
+
+      - name: libopus
+        run: brew install opus
+
+      - name: Patched SIPSorcery
+        run: ./scripts/get-sipsorcery.sh
+
+      - name: Build Vexel.app
+        run: ./scripts/publish-macos.sh
+
+      - name: Upload Mac build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vexel-${{ env.XS_VERSION }}-mac
+          path: dist/Vexel-mac.zip
+          if-no-files-found: error
+
+      - name: Add to the draft release
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/Vexel-mac.zip --clobber

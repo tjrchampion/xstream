@@ -5,7 +5,8 @@ using XStream.Core.Xbox;
 namespace XStream.App.Services;
 
 /// <summary>A game's key art saved on disk (Url is the original, for Discord).</summary>
-public sealed record GameArt(string Name, string Path, string TitleId = "", string Url = "");
+/// <param name="ProductId">Store product id, to start the game on a console (null if unknown).</param>
+public sealed record GameArt(string Name, string Path, string TitleId = "", string Url = "", string? ProductId = null);
 
 /// <summary>What the account is running on an Xbox right now, with its art if we could get it.</summary>
 public sealed record NowPlaying(string TitleId, string Name, GameArt? Art);
@@ -120,7 +121,7 @@ public sealed class GameArtService(XboxService xbox)
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException or TaskCanceledException) { return null; }
         }
-        return new GameArt(g.Name, file, g.TitleId, g.HeroUrl);
+        return new GameArt(g.Name, file, g.TitleId, g.HeroUrl, g.ProductId);
     }
 
     private static IReadOnlyList<GameArt> LoadIndex()

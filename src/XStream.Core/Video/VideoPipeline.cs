@@ -38,6 +38,9 @@ public sealed class VideoPipeline : IDisposable
         _decoder.Clock = clock;
     }
 
+    /// <summary>Sees every frame before it's decoded, on the decode thread (instant replay copies it). Must be quick.</summary>
+    public Action<AccessUnit>? Tap { get; set; }
+
     /// <summary>Call when a frame is enqueued so the decoder starts at once instead of on its next poll.</summary>
     public void Notify() => _wake.Set();
 
@@ -83,6 +86,7 @@ public sealed class VideoPipeline : IDisposable
                     Format = f;
                     FormatChanged?.Invoke(f);
                 }
+                Tap?.Invoke(au);
                 long errorsBefore = _decoder.Errors;
                 var pic = _decoder.Decode(au);
                 _decodeMs[_n++ % _decodeMs.Length] = _decoder.LastDecodeMs;

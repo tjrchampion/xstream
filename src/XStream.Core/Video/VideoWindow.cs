@@ -107,7 +107,7 @@ public sealed unsafe class VideoWindow : IDisposable
     private const uint RendererAccelerated = 0x2, RendererPresentVsync = 0x4;
     private const int TextureStreaming = 1;
     private const uint PixelFormatNv12 = 0x3231564E, PixelFormatIyuv = 0x56555949;
-    private const uint EventQuit = 0x100, EventKeyDown = 0x300, EventMouseButtonDown = 0x401;
+    private const uint EventQuit = 0x100, EventKeyDown = 0x300, EventTextInput = 0x303, EventMouseButtonDown = 0x401;
     private const uint PixelFormatAbgr8888 = 0x16762004; // R,G,B,A bytes in memory on little-endian
     private const int WindowPosCentered = 0x2FFF0000;
 
@@ -201,6 +201,8 @@ public sealed unsafe class VideoWindow : IDisposable
     public IVideoOverlay? Overlay { get; set; }
     /// <summary>Key presses (SDL keycode). Return true if handled; otherwise Esc quits.</summary>
     public Func<int, bool>? KeyDown { get; set; }
+    /// <summary>Text typed in the window (UTF-8 from SDL text input: the keyboard's own layout, IME and touch keyboard included).</summary>
+    public Action<string>? TextInput { get; set; }
     /// <summary>Left clicks, in overlay coordinates (0..Overlay.Width/Height).</summary>
     public Action<int, int>? Click { get; set; }
     /// <summary>Size of the stream's pictures (0 until the first one).</summary>
@@ -326,6 +328,11 @@ public sealed unsafe class VideoWindow : IDisposable
             {
                 int sym = *(int*)(ev + 20); // keysym.sym
                 if (KeyDown?.Invoke(sym) != true && sym == 27) QuitRequested = true; // Esc
+            }
+            else if (type == EventTextInput && TextInput is { } typed)
+            {
+                var text = Marshal.PtrToStringUTF8((IntPtr)(ev + 12)) ?? ""; // SDL_TextInputEvent.text[32]
+                if (text.Length > 0) typed(text);
             }
             else if (type == EventMouseButtonDown && *(ev + 16) == 1 && Click is { } click)
             {

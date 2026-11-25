@@ -27,6 +27,12 @@ public sealed record InputOptions
     public int NexusComboMs { get; init; } = 500;
     /// <summary>Spin for the last fraction of each millisecond for precise timing (costs a little CPU/battery).</summary>
     public bool PreciseTiming { get; init; } = true;
+    /// <summary>Button remapping (and paddles) applied before anything else.</summary>
+    public ControllerMapping Mapping { get; init; } = ControllerMapping.None;
+    /// <summary>Gyro aiming onto the right stick (null = off).</summary>
+    public GyroAim? Gyro { get; init; }
+    /// <summary>Gyro only while this button (or PaddleN) is held; "" = always.</summary>
+    public string GyroHold { get; init; } = "";
 }
 
 /// <summary>Live numbers for the overlay and session log.</summary>
@@ -75,6 +81,7 @@ public sealed class InputPump : IDisposable
         _o = options;
         _send = send;
         _padChanged = padChanged;
+        if (options.Gyro is not null) backend.EnableGyro(true);
     }
 
     public double NowMs => _sw.Elapsed.TotalMilliseconds;
@@ -202,6 +209,10 @@ public sealed class InputPump : IDisposable
         var (rx, ry) = Radial(r.RightX, r.RightY, _o.StickDeadzone);
         float lt = Linear(r.LeftTrigger, _o.TriggerDeadzone), rt = Linear(r.RightTrigger, _o.TriggerDeadzone);
         var b = r.Buttons;
+        var extras = _backend.Extras(index);
+        if (_o.Gyro is { } gyro && extras.HasGyro && (_o.GyroHold.Length == 0 || ControllerMapping.Held(_o.GyroHold, b, extras.Paddles)))
+            (rx, ry) = GyroAim.Combine(rx, ry, gyro.Stick(extras.GyroPitch, extras.GyroYaw));
+        if (!_o.Mapping.IsIdentity) b = _o.Mapping.Apply(b, extras.Paddles);
 
         const GamepadButtons combo = GamepadButtons.View | GamepadButtons.Menu;
         if ((b & combo) == combo && _o.NexusComboMs > 0)

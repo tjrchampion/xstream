@@ -253,13 +253,33 @@ public partial class App : Application
 
             window.Opened += async (_, _) =>
             {
+                if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_STREAM") is { Length: > 0 } demo)
+                    vm.Consoles.Consoles.CollectionChanged += (_, _) =>
+                    {
+                        if (vm.Consoles.Consoles.FirstOrDefault() is { } first && !vm.Stream.HasHero)
+                            vm.Stream.Demo(demo, first.ServerId, first.Name);
+                    };
+                // XSTREAM_DEMO_SHOT=file.png (testing): save the window as it looks after a few seconds, then quit.
+                if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_SHOT") is { Length: > 0 } shot)
+                    DispatcherTimer.RunOnce(() =>
+                    {
+                        double k = window.RenderScaling;
+                        using var rtb = new Avalonia.Media.Imaging.RenderTargetBitmap(
+                            new PixelSize((int)(window.Bounds.Width * k), (int)(window.Bounds.Height * k)), new Vector(96 * k, 96 * k));
+                        rtb.Render(window);
+                        rtb.Save(shot);
+                        desktop.Shutdown();
+                    }, TimeSpan.FromSeconds(8));
                 if (settings.Current.LauncherFullscreen) window.WindowState = WindowState.FullScreen;
                 UpdatePad();
                 _pad.FocusDefaultSoon();
                 if (vm.IsSignedIn) PrepareSoon(800);
                 await vm.StartupAsync();
+                // Shortcut from Steam / Armoury Crate / a desktop icon (see LaunchArgs): straight into that stream.
+                var launch = LaunchArgs.Parse(desktop.Args ?? []);
+                if (launch.Any && vm.IsSignedIn && !vm.Stream.IsRunning) await vm.LaunchAsync(launch);
                 // "Connect on launch": straight into the last console (B or Cancel on the connecting screen stays here).
-                if (settings.Current.AutoConnect && vm.IsSignedIn && !vm.Stream.IsRunning)
+                else if (settings.Current.AutoConnect && vm.IsSignedIn && !vm.Stream.IsRunning)
                     vm.Consoles.StreamLast(settings.Current.LastServerId);
             };
             return window;

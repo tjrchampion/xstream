@@ -76,6 +76,20 @@ public sealed record AppSettings
     public bool CloudListView { get; init; }
     /// <summary>Connect to the last console as soon as Vexel opens.</summary>
     public bool AutoConnect { get; init; }
+    /// <summary>Instant replay: keep the last <see cref="ReplaySeconds"/> so "Save last 30 seconds" (F10, or the stream menu) can save them.</summary>
+    public bool InstantReplay { get; init; }
+    public int ReplaySeconds { get; init; } = 30;
+    /// <summary>
+    /// Controller remapping, "From=To" pairs separated by commas (e.g. "A=B,B=A,Paddle1=LeftThumb"). Sources are
+    /// any Xbox button or Paddle1-4 (Elite / DualSense Edge back buttons); "To" may be None to turn a button off.
+    /// </summary>
+    public string ButtonMapping { get; init; } = "";
+    /// <summary>Aim with the controller's gyro (DualSense, DualShock 4, Switch Pro): tilting moves the right stick.</summary>
+    public bool GyroAim { get; init; }
+    /// <summary>Gyro strength (1 = default; 0.25 to 4).</summary>
+    public double GyroSensitivity { get; init; } = 1;
+    /// <summary>Gyro only while this button is held ("" = always on). Usually LeftShoulder or a paddle.</summary>
+    public string GyroHoldButton { get; init; } = "";
 
     private static readonly JsonSerializerOptions Json = new()
     {

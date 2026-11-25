@@ -38,9 +38,9 @@ public sealed partial class StreamViewModel : ObservableObject
     ];
     public ObservableCollection<string> LogLines { get; } = [];
 
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasPanel), nameof(IsConnecting), nameof(ShowLoader), nameof(ShowStartScreen))] public partial bool IsRunning { get; set; }
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasPanel))] public partial bool HasResult { get; set; }
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(IsConnecting), nameof(ShowLoader), nameof(ShowStartScreen))] public partial bool IsStreaming { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasPanel), nameof(IsConnecting), nameof(ShowLoader), nameof(ShowStartScreen), nameof(ShowSummary), nameof(HasHero))] public partial bool IsRunning { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasPanel), nameof(ShowSummary), nameof(HasHero))] public partial bool HasResult { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(IsConnecting), nameof(ShowLoader), nameof(ShowStartScreen), nameof(HasHero))] public partial bool IsStreaming { get; set; }
     [ObservableProperty] public partial bool IsReconnecting { get; set; }
     [ObservableProperty] public partial bool IsStopping { get; set; }
     /// <summary>The launcher's Settings page is open over a running stream (from "More settings…").</summary>
@@ -55,7 +55,10 @@ public sealed partial class StreamViewModel : ObservableObject
     [ObservableProperty] public partial string ProfileText { get; set; } = "";
 
     // Live numbers
-    [ObservableProperty] public partial LiveStats? Live { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(LiveDetail))] public partial LiveStats? Live { get; set; }
+    /// <summary>Under the frame rate: the resolution the console is sending, and loss. "1440p  ·  0.1% loss".</summary>
+    public string LiveDetail => Live is not { } l ? "" : string.Join("  ·  ",
+        new[] { l.VideoHeight > 0 ? $"{l.VideoHeight}p" : null, $"{l.LossPct:F1}% loss" }.Where(x => x is not null));
     [ObservableProperty] public partial string Verdict { get; set; } = "";
     [ObservableProperty] public partial string VerdictKind { get; set; } = "good"; // good | warn | bad
     [ObservableProperty] public partial double[] BitrateHistory { get; set; } = [];
@@ -64,7 +67,20 @@ public sealed partial class StreamViewModel : ObservableObject
     [ObservableProperty] public partial SessionInfo? Info { get; set; }
 
     // After the session
-    [ObservableProperty] public partial SessionSummary? Summary { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(SummaryLine), nameof(HasSummaryNumbers))] public partial SessionSummary? Summary { get; set; }
+
+    // "Now playing" header on the Consoles page: live while streaming, a short summary after (not while connecting:
+    // the full-screen connecting screen covers that, and a second progress display under it only flickered).
+    public bool ShowSummary => HasResult && !IsRunning && !StartFailed;
+    public bool HasHero => IsStreaming || ShowSummary;
+    public bool HasSummaryNumbers => Summary is not null;
+    /// <summary>One line for the finished session: "23 min · no freezes · 27.4 Mbps · 4 ms ping · 0.1% loss".</summary>
+    public string SummaryLine => Summary is not { } s ? "" : string.Join("  ·  ",
+        s.Minutes >= 1 ? $"{s.Minutes:F0} min" : $"{s.Minutes * 60:F0} s",
+        s.Freezes switch { 0 => "no freezes", 1 => "1 freeze", var n => $"{n} freezes" },
+        $"{s.AvgMbps:F1} Mbps",
+        $"{s.MedianRttMs:F0} ms ping",
+        $"{s.AvgLossPct:F1}% loss");
     [ObservableProperty] public partial string SummaryPath { get; set; } = "";
 
     public bool HasPanel => IsRunning || HasResult;
@@ -80,7 +96,7 @@ public sealed partial class StreamViewModel : ObservableObject
     /// stays up and says why, with Try again / Close, on whatever page Stream was pressed. It used to vanish,
     /// leaving only a result card that exists on the Consoles page: on any other page the start just "flickered".
     /// </summary>
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(ShowStartScreen))] public partial bool StartFailed { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ShowStartScreen), nameof(ShowSummary), nameof(HasHero))] public partial bool StartFailed { get; set; }
     /// <summary>The full-screen connecting screen is up: connecting, or showing why the start failed.</summary>
     public bool ShowStartScreen => ShowLoader || StartFailed;
     private bool _everStreamed, _cancelled;
@@ -393,6 +409,39 @@ public sealed partial class StreamViewModel : ObservableObject
     }
 
     private void SetStep(int i, StepState state) => Steps[i].State = state;
+
+    /// <summary>
+    /// XSTREAM_DEMO_STREAM=live|ended|failed (testing): show the Consoles page's "Now playing" header with sample
+    /// numbers, to check the layout without streaming.
+    /// </summary>
+    public void Demo(string mode, string serverId, string name)
+    {
+        Reset();
+        ServerId = serverId; ConsoleName = name; ProfileText = "Balanced"; Elapsed = "12:48";
+        Info = new SessionInfo { Decoder = "d3d11va (hardware)", Renderer = "Vexel Direct3D 11", Controller = "XInput", Audio = "Speakers, Opus",
+            LowLatencyInput = true, Remb = true, Nack = true, Route = "Home network (host -> 192.168.68.58:9002)" };
+        var rnd = new Random(4);
+        for (int i = 0; i < 60; i++)
+        {
+            BitrateHistory = Push(BitrateHistory, 38 + rnd.NextDouble() * 8);
+            PingHistory = Push(PingHistory, 4 + rnd.NextDouble() * 3);
+            LatencyHistory = Push(LatencyHistory, 9 + rnd.NextDouble() * 4);
+        }
+        AddLog("Video stream: 2560x1440 H.264 High level 5.1, BT.709, limited range");
+        if (mode == "live")
+        {
+            IsRunning = true;
+            IsStreaming = true;
+            Live = new LiveStats { Mbps = 41.3, PingMs = 5, Fps = 60, NetToScreenP50Ms = 10.4, LossPct = 0.1, BufferMs = 4, PadHz = 1000, VideoHeight = 1440, Link = "Connected" };
+            Verdict = "Stable"; VerdictKind = "good";
+        }
+        else
+        {
+            HasResult = true;
+            Summary = new SessionSummary { Minutes = 23.4, Freezes = mode == "failed" ? 3 : 0, AvgMbps = 39.6, MedianRttMs = 4.4, AvgLossPct = 0.11 };
+            if (mode == "failed") Error = "Lost the connection to Xbox and couldn't get it back after 4 tries. Check the network, then stream again.";
+        }
+    }
 
     private void AddLog(string line)
     {

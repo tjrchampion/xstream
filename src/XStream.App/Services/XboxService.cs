@@ -68,10 +68,34 @@ public sealed class XboxService : IDisposable
         return (tokens.CloudOffering ?? "xgpuweb", games, recent.Select(r => r.TitleId).ToList());
     }
 
+    // ---- Console remote control (power, launching games) -----------------------------------------------
+    private XboxConsoleControl? _control;
+    private IReadOnlyList<ControlledConsole>? _controlled;
+    public XboxConsoleControl Control => _control ??= new XboxConsoleControl(_http, async ct => (await _store.GetWebTokenAsync(ct)).Authorization);
+
+    /// <summary>The console's remote-control id: the same as its stream id, else matched by name.</summary>
+    public async Task<string> ControlIdAsync(string serverId, string name, CancellationToken ct = default)
+    {
+        _controlled ??= await Control.GetConsolesAsync(ct);
+        var c = _controlled.FirstOrDefault(x => x.Id.Equals(serverId, StringComparison.OrdinalIgnoreCase))
+                ?? _controlled.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (c is null) { _controlled = null; throw new XboxApiException($"{name} doesn't accept remote commands. Turn on remote features on the console.", 404); }
+        return c.Id;
+    }
+
+    public async Task TurnOffAsync(string serverId, string name, CancellationToken ct = default) =>
+        await Control.TurnOffAsync(await ControlIdAsync(serverId, name, ct), ct);
+
+    public async Task RestartAsync(string serverId, string name, CancellationToken ct = default) =>
+        await Control.RestartAsync(await ControlIdAsync(serverId, name, ct), ct);
+
+    public async Task LaunchAsync(string serverId, string name, string productId, CancellationToken ct = default) =>
+        await Control.LaunchAsync(await ControlIdAsync(serverId, name, ct), productId, ct);
+
     /// <summary>Downloads a URL's bytes (game art).</summary>
     public Task<byte[]> DownloadAsync(string url, CancellationToken ct) => _http.GetByteArrayAsync(url, ct);
 
-    public void SignOut() => _store.SignOut();
+    public void SignOut() { _controlled = null; _store.SignOut(); }
 
     public void Dispose() => _http.Dispose();
 }

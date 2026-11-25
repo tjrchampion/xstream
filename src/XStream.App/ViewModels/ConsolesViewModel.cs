@@ -50,8 +50,18 @@ public sealed partial class ConsoleItemViewModel : ObservableObject
     public bool OutOfHomeWarning { get; }
     public bool IsLastUsed { get; }
     public IRelayCommand<ConsoleItemViewModel> StreamCommand { get; }
+    public IAsyncRelayCommand<ConsoleItemViewModel>? TurnOffCommand { get; init; }
+    public IAsyncRelayCommand<ConsoleItemViewModel>? RestartCommand { get; init; }
+    /// <summary>On and not streaming: the card offers Turn off / Restart.</summary>
+    public bool ShowPower => IsOn && !IsStreaming;
+    partial void OnIsStreamingChanged(bool value) => OnPropertyChanged(nameof(ShowPower));
 
+    /// <summary>A stream to this console is starting or running (the card's button gives way to a status).</summary>
     [ObservableProperty] public partial bool IsStreaming { get; set; }
+    /// <summary>The picture is up (vs still connecting).</summary>
+    [ObservableProperty] public partial bool IsLive { get; set; }
+    /// <summary>Shown in the "Now playing" header instead (live or just ended): its card steps aside, no duplicate.</summary>
+    [ObservableProperty] public partial bool IsInHeader { get; set; }
 
     // Game art across the top of the card: what's running on it, else the last game played.
     [ObservableProperty, NotifyPropertyChangedFor(nameof(HasGame))] public partial string GameName { get; set; } = "";
@@ -87,6 +97,31 @@ public sealed partial class ConsoleItemViewModel : ObservableObject
     }
 }
 
+/// <summary>A recently played game on the Consoles page: art and name; choosing it starts it on the console and streams.</summary>
+public sealed partial class RecentGameViewModel : ObservableObject
+{
+    public RecentGameViewModel(GameArt art, IAsyncRelayCommand<RecentGameViewModel> play)
+    {
+        Name = art.Name; TitleId = art.TitleId; ProductId = art.ProductId; PlayCommand = play;
+        _ = Load(art.Path);
+    }
+
+    public string Name { get; }
+    public string TitleId { get; }
+    public string? ProductId { get; }
+    public IAsyncRelayCommand<RecentGameViewModel> PlayCommand { get; }
+    [ObservableProperty] public partial Avalonia.Media.Imaging.Bitmap? Art { get; set; }
+
+    private async Task Load(string path)
+    {
+        try
+        {
+            Art = await Task.Run(() => { using var f = File.OpenRead(path); return Avalonia.Media.Imaging.Bitmap.DecodeToWidth(f, 400); });
+        }
+        catch { /* no art: the tile shows the name */ }
+    }
+}
+
 /// <summary>Home page: the console list, plus the live stream panel when one is running.</summary>
 public sealed partial class ConsolesViewModel : ObservableObject
 {
@@ -100,21 +135,40 @@ public sealed partial class ConsolesViewModel : ObservableObject
         _settings = settings;
         _art = art;
         Stream = stream;
-        art.Changed += () => Avalonia.Threading.Dispatcher.UIThread.Post(ShowGames);
+        art.Changed += () => Avalonia.Threading.Dispatcher.UIThread.Post(() => { ShowGames(); ShowRecent(); });
         stream.StreamAgainRequested += id =>
         {
             var c = Consoles.FirstOrDefault(c => c.ServerId == id);
             if (c is not null && StartStreamCommand.CanExecute(c)) StartStreamCommand.Execute(c);
         };
-        stream.RunningChanged += running =>
+        stream.RunningChanged += _ => { SyncCards(); StartStreamCommand.NotifyCanExecuteChanged(); PlayGameCommand.NotifyCanExecuteChanged(); };
+        Consoles.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasRecentGames));
+        stream.PropertyChanged += (_, e) =>
         {
-            foreach (var c in Consoles) c.IsStreaming = running && c.ServerId == stream.ServerId;
-            StartStreamCommand.NotifyCanExecuteChanged();
+            if (e.PropertyName is nameof(StreamViewModel.IsStreaming) or nameof(StreamViewModel.ServerId) or nameof(StreamViewModel.HasHero)) SyncCards();
         };
     }
 
     public StreamViewModel Stream { get; }
     public ObservableCollection<ConsoleItemViewModel> Consoles { get; } = [];
+
+    /// <summary>The console in the "Now playing" header (streaming now, or the session that just ended). Null for cloud.</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasHeroArt))] public partial ConsoleItemViewModel? ActiveConsole { get; set; }
+    public bool HasHeroArt => ActiveConsole?.GameArt is not null;
+
+    private void SyncCards()
+    {
+        ConsoleItemViewModel? active = null;
+        foreach (var c in Consoles)
+        {
+            bool mine = c.ServerId == Stream.ServerId;
+            c.IsStreaming = Stream.IsRunning && mine;
+            c.IsLive = Stream.IsStreaming && mine;
+            if (mine && (Stream.IsRunning || Stream.HasHero)) active = c;
+            c.IsInHeader = mine && Stream.HasHero;
+        }
+        ActiveConsole = active;
+    }
 
     [ObservableProperty, NotifyPropertyChangedFor(nameof(IsEmpty))] public partial bool IsLoading { get; set; }
     [ObservableProperty, NotifyPropertyChangedFor(nameof(HasError), nameof(IsEmpty))] public partial string Error { get; set; } = "";
@@ -142,10 +196,14 @@ public sealed partial class ConsolesViewModel : ObservableObject
                 Consoles.Add(new ConsoleItemViewModel(c, c.ServerId == last, StartStreamCommand)
                 {
                     IsStreaming = Stream.IsRunning && c.ServerId == Stream.ServerId,
+                    TurnOffCommand = TurnOffCommand, RestartCommand = RestartCommand,
                 });
+            SyncCards();
             LastRefreshed = $"Updated {DateTime.Now:HH:mm}";
             Loaded = true;
             ShowGames();
+            _installedOn = null; // look again: games may have been installed or removed
+            ShowRecent();
             _ = _art.RefreshNowPlayingAsync(_settings.Current);
         }
         catch (XboxApiException ex) when (ex.Status is 401 or 403)
@@ -161,6 +219,107 @@ public sealed partial class ConsolesViewModel : ObservableObject
             IsLoading = false;
             OnPropertyChanged(nameof(IsEmpty));
         }
+    }
+
+    // ---- Remote control: power, and starting a game on the console ----------------------------------------
+    /// <summary>A short result line under the header ("Turning off Series X…").</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasNotice))] public partial string Notice { get; set; } = "";
+    public bool HasNotice => Notice.Length > 0;
+
+    private async void ShowNotice(string text, int ms = 6000)
+    {
+        Notice = text;
+        await Task.Delay(ms);
+        if (Notice == text) Notice = "";
+    }
+
+    [RelayCommand]
+    private async Task TurnOffAsync(ConsoleItemViewModel? c)
+    {
+        if (c is null) return;
+        try { await _xbox.TurnOffAsync(c.ServerId, c.Name); ShowNotice($"Turning off {c.Name}…"); await RefreshSoonAsync(); }
+        catch (Exception ex) { ShowNotice($"Couldn't turn off {c.Name}: {PlayerSession.Friendly(ex)}", 9000); }
+    }
+
+    [RelayCommand]
+    private async Task RestartAsync(ConsoleItemViewModel? c)
+    {
+        if (c is null) return;
+        try { await _xbox.RestartAsync(c.ServerId, c.Name); ShowNotice($"Restarting {c.Name}. It takes about a minute."); }
+        catch (Exception ex) { ShowNotice($"Couldn't restart {c.Name}: {PlayerSession.Friendly(ex)}", 9000); }
+    }
+
+    private async Task RefreshSoonAsync()
+    {
+        await Task.Delay(8000);
+        if (!Stream.IsRunning) await RefreshAsync();
+    }
+
+    /// <summary>Recently played console games (with store ids): pick one to start it on the console and stream.</summary>
+    public ObservableCollection<RecentGameViewModel> RecentGames { get; } = [];
+    public bool HasRecentGames => RecentGames.Count > 0 && Consoles.Count > 0;
+
+    // What's installed on the console games start on (product and title ids); null until looked up.
+    private HashSet<string>? _installed;
+    private string? _installedOn;
+
+    private void ShowRecent()
+    {
+        var target = PlayTarget();
+        if (target is not null && target.ServerId != _installedOn) { _installedOn = target.ServerId; _installed = null; _ = LoadInstalledAsync(target); }
+        // Only installed games: launching one that isn't just opens its Store page.
+        var items = _installed is null ? [] : _art.Items
+            .Where(a => !string.IsNullOrEmpty(a.ProductId) && (_installed.Contains(a.ProductId!) || _installed.Contains(a.TitleId)))
+            .Take(8).ToList();
+        if (items.Select(i => i.TitleId).SequenceEqual(RecentGames.Select(r => r.TitleId))) return;
+        RecentGames.Clear();
+        foreach (var a in items) RecentGames.Add(new RecentGameViewModel(a, PlayGameCommand));
+        OnPropertyChanged(nameof(HasRecentGames));
+    }
+
+    private async Task LoadInstalledAsync(ConsoleItemViewModel c)
+    {
+        try
+        {
+            var apps = await _xbox.Control.GetInstalledAsync(await _xbox.ControlIdAsync(c.ServerId, c.Name));
+            _installed = apps.SelectMany(a => new[] { a.ProductId, a.TitleId }).Where(x => x.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch { _installedOn = null; return; } // remote features off: no row
+        Avalonia.Threading.Dispatcher.UIThread.Post(ShowRecent);
+    }
+
+    private ConsoleItemViewModel? PlayTarget() =>
+        Consoles.FirstOrDefault(x => x.IsLastUsed && x.CanWake) ?? Consoles.FirstOrDefault(x => x.CanWake) ?? Consoles.FirstOrDefault();
+
+    /// <summary>Start the game on the last used console (waking it), then stream it.</summary>
+    [RelayCommand(CanExecute = nameof(CanPlayGame))]
+    private async Task PlayGameAsync(RecentGameViewModel? game)
+    {
+        var c = PlayTarget();
+        if (game?.ProductId is null || c is null || Stream.IsRunning) return;
+        await PlayOnAsync(c, game.ProductId, game.TitleId, game.Name);
+    }
+
+    private bool CanPlayGame(RecentGameViewModel? game) => !Stream.IsRunning;
+
+    /// <summary>Launch by store id, then stream (the stream wakes the console if needed; the game opens as it connects).</summary>
+    public async Task PlayOnAsync(ConsoleItemViewModel c, string productId, string titleId, string name)
+    {
+        try
+        {
+            if (!c.IsOn)
+            {
+                // Asleep: wake it first, so the launch has somewhere to go.
+                try { await _xbox.Control.WakeAsync(await _xbox.ControlIdAsync(c.ServerId, c.Name)); } catch { /* the stream wakes it too */ }
+                await Task.Delay(5000);
+            }
+            await _xbox.LaunchAsync(c.ServerId, c.Name, productId);
+            ShowNotice($"Starting {name} on {c.Name}…");
+        }
+        catch (Exception ex) { ShowNotice($"Couldn't start {name}: {PlayerSession.Friendly(ex)}. Streaming the console instead.", 9000); }
+        _settings.Update(s => s with { LastServerId = c.ServerId });
+        Stream.Art = _art.StartingWith(titleId);
+        if (!Stream.IsRunning) Stream.Start(c, _settings.Current.Profile);
     }
 
     /// <summary>
@@ -195,6 +354,26 @@ public sealed partial class ConsolesViewModel : ObservableObject
     {
         var c = Consoles.FirstOrDefault(c => c.ServerId == serverId && c.CanWake);
         if (c is not null && StartStreamCommand.CanExecute(c)) StartStreamCommand.Execute(c);
+    }
+
+    /// <summary>A shortcut's console: by name or id, else the last used one.</summary>
+    public ConsoleItemViewModel? Find(string? nameOrId) =>
+        (nameOrId is null ? null : Consoles.FirstOrDefault(c => c.ServerId.Equals(nameOrId, StringComparison.OrdinalIgnoreCase)
+                                                             || c.Name.Equals(nameOrId, StringComparison.OrdinalIgnoreCase)))
+        ?? (nameOrId is null ? Consoles.FirstOrDefault(c => c.IsLastUsed) ?? Consoles.FirstOrDefault() : null);
+
+    /// <summary>Command line: --stream [console], optionally --game productId.</summary>
+    public async Task<string?> LaunchAsync(LaunchArgs a)
+    {
+        if (Consoles.Count == 0) await RefreshAsync();
+        if (Find(a.Console) is not { } c) return a.Console is null ? "No consoles on this account" : $"No console called \"{a.Console}\"";
+        if (a.GameProductId is { } product)
+        {
+            var known = _art.Items.FirstOrDefault(i => string.Equals(i.ProductId, product, StringComparison.OrdinalIgnoreCase));
+            await PlayOnAsync(c, product, known?.TitleId ?? "", known?.Name ?? "the game");
+        }
+        else if (StartStreamCommand.CanExecute(c)) StartStreamCommand.Execute(c);
+        return null;
     }
 
     /// <summary>Menu button on the controller: stream the first (last used) console.</summary>

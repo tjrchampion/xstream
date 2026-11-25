@@ -1,3 +1,5 @@
+> **Built with AI.** Vexel is a personal project, built out of a desire to get as much performance out of remote play as possible.
+
 <p align="center">
   <img src="src/XStream.App/Assets/xstream-1024.png" width="112" alt="Vexel icon" />
 </p>
@@ -35,6 +37,12 @@ Vexel streams your Xbox console over your home network. It's built for playing w
 - **Clear feedback:** short messages when the network, frame rate or battery needs attention, and when things are back to normal.
 - **Sharper picture:** an optional halo-free Clarity boost before the picture is scaled to your screen, plus Fit, Fill and Stretch for screens that aren't 16:9.
 - **Play from anywhere:** at home or away. Vexel finds a direct path to your console over the internet, and shows which route it's using.
+- **Type on the console:** type with a keyboard, or the touch keyboard on a handheld, and the text goes straight into the console's text box (search, sign-ins, messages), updating as you type.
+- **Console control:** turn your Xbox off or restart it from its card, or end a stream with "End and turn off Xbox". Pick a recent game under **Jump back in** to start it on the console and stream it as it opens.
+- **Picks up after sleep:** put a handheld to sleep mid-game and the stream reconnects by itself when it wakes, once Wi-Fi is back.
+- **Instant replay:** keep the last 30 seconds and save them as an MP4 clip (F10, or the stream menu). Off by default.
+- **Your controller, your layout:** remap buttons, use Elite / DualSense Edge back paddles, and aim with the gyro on a DualSense, DualShock 4 or Switch Pro controller.
+- **Launch shortcuts:** add Vexel to Steam, Armoury Crate or Playnite with `--stream` and go straight into a stream (see [Shortcuts](#shortcuts)).
 - **Game audio, party chat, rumble and screenshots.**
 - **Made for the ROG Ally:**
   - runs the 120 Hz panel at the stream's 60 Hz
@@ -68,7 +76,7 @@ Vexel streams your Xbox console over your home network. It's built for playing w
   1. On the console, go to **Settings → Devices & connections → Remote features**.
   2. Turn on **Enable remote features**.
   3. Under **Power mode**, choose **Sleep**, so Vexel can wake the console.
-- **A Windows 10 or 11 PC or handheld** (x64). Vexel also builds and runs on macOS (Apple Silicon); see [Building from source](#building-from-source).
+- **A Windows 10 or 11 PC or handheld** (x64), or **a Mac with Apple Silicon** (macOS 13 or later).
 - **A good home network.** The console on Ethernet and this device on 5 or 6 GHz Wi-Fi works best.
 
 ### Install (Windows)
@@ -83,6 +91,14 @@ From then on, Vexel updates itself: new versions download in the background and 
 > If Windows shows "Windows protected your PC", choose **More info → Run anyway**. This happens with new releases until they build reputation with Microsoft SmartScreen.
 
 **Code signing:** Windows releases are signed through the SignPath Foundation. Free code signing is provided by [SignPath.io](https://about.signpath.io), with the certificate from [SignPath Foundation](https://signpath.org). See the [code signing policy](docs/CODE_SIGNING.md).
+
+### Install (Mac)
+
+1. Download **Vexel-mac.zip** from the [latest release](../../releases/latest) and open it.
+2. Drag **Vexel** to Applications.
+3. The first time, right-click Vexel and choose **Open**, then **Open** again. Vexel isn't notarized by Apple, so macOS asks once.
+
+The Mac version doesn't update itself yet: it tells you when there's a new version and links to the download.
 
 ### Cloud gaming (no console needed)
 
@@ -128,10 +144,27 @@ Vexel works over the internet as well as on your home network. You don't need to
 | **Open the stream menu in a game** | Hold **View + Menu** | Esc, or tap the screen |
 | Xbox button (guide) | Your pad's Xbox button, or stream menu → Xbox button | |
 | Screenshot | Stream menu → Take screenshot | F12 |
+| Save the last 30 seconds (instant replay on) | Stream menu → Save last 30 seconds | F10 |
+| Type on the console | Stream menu → Type on the console (opens the touch keyboard) | Just start typing; Enter finishes, Esc closes |
 | Full screen / stats readout | Stream menu | F11 / F3 |
 | Leave the launcher's full screen | | F11 |
 
 While the stream menu is open, the console gets no controller input, so you can change settings mid-game safely.
+
+Typing, Turn off, Restart and Jump back in use the console's remote features (the same ones the Xbox mobile app uses), so **Enable remote features** must be on. They work for your own console, not for cloud games.
+
+### Shortcuts
+
+Add Vexel as a game in Steam ("Add a non-Steam game"), Armoury Crate or Playnite, with launch options:
+
+| Launch options | What it does |
+|---|---|
+| `--stream` | Streams the last console you used |
+| `--stream "Living Room"` | Streams that console (its name or id) |
+| `--game 9NKX70BBCDRN --stream "Living Room"` | Starts that game (its Microsoft Store id) on the console, then streams it |
+| `--cloud FORTNITE` | Plays that Xbox Cloud Gaming title |
+
+**Settings → Launcher → Shortcuts** shows the app's path and copies the options for you.
 
 ### Tips for the smoothest stream
 
@@ -144,7 +177,7 @@ While the stream menu is open, the console gets no controller input, so you can 
 
 - **Sign-in:** your sign-in is stored only on your device, in `~/.xstream` (`%USERPROFILE%\.xstream` on Windows), along with your settings, session logs and cached game art. Signing out deletes the sign-in and the cached art.
 - **Services Vexel talks to:**
-  - Microsoft's sign-in and Xbox services: the console list, streaming, your recently played games and what's playing now
+  - Microsoft's sign-in and Xbox services: the console list, streaming, your recently played games and what's playing now, and the console remote-control service when you type, turn the console off or start a game
   - public STUN servers (Google, Cloudflare), which only see your internet address. They tell Vexel that address so it can connect to the console from away from home. The game stream doesn't pass through them.
   - the Microsoft Store image service and the Game Pass catalogue, for game names and art
   - the update feed
@@ -166,6 +199,8 @@ You need the [.NET 10 SDK](https://dotnet.microsoft.com/download), plus SDL2 and
 dotnet run --project src/XStream.App   # the launcher
 dotnet run --project tests/XStream.Tests
 ```
+
+**Mac release build:** `./scripts/publish-macos.sh` makes `dist/Vexel-mac.zip` with Vexel.app (self-contained, with SDL2 and libopus inside; video is decoded by macOS).
 
 **Windows release build:** `./scripts/publish-windows.sh` makes `dist/Vexel.exe`, a single self-contained file. It runs on macOS, Linux or Git Bash. Run `./scripts/build-ffmpeg-windows.sh` first (it needs MinGW-w64 and nasm) for a minimal LGPL FFmpeg; that brings the exe down to about 30 MB. Run `./scripts/build-opus-windows.sh` too, for libopus. The full release process (GitHub build, code signing and signed update manifests) is in [docs/RELEASING.md](docs/RELEASING.md). The code-signing policy is in [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
 

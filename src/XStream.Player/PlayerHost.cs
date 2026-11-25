@@ -111,6 +111,10 @@ public static class PlayerHost
         async Task<XboxStreamingClient> Refresh() => cloudTitle is null
             ? (await store.CreateClientAsync(http, AppSettings.Load())).client
             : (await store.CreateCloudClientAsync(http, AppSettings.Load())).client;
+        // Console remote control (typing, Turn off): same sign-in as the library, console streams only.
+        if (cloudTitle is null)
+            session.Remote = new ConsoleRemote(new XboxConsoleControl(http, async ct => (await store.GetWebTokenAsync(ct)).Authorization),
+                serverId, consoleName ?? "Xbox");
         int code = session.Run(PlayerOptions.From(settings, serverId) with
             {
                 ConsoleName = consoleName ?? "Xbox", CloudTitleId = cloudTitle, Place = WindowPlace.Parse(place),

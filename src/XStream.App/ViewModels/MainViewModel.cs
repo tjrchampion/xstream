@@ -1,3 +1,4 @@
+using XStream.Player;
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -108,6 +109,15 @@ public sealed partial class MainViewModel : ObservableObject
         if (!IsSignedIn) return;
         _ = _art.RefreshSoon(Settings.Current);
         await Consoles.RefreshAsync();
+    }
+
+    /// <summary>A command-line shortcut (see <see cref="LaunchArgs"/>): start that stream straight away.</summary>
+    public async Task LaunchAsync(LaunchArgs a)
+    {
+        string? problem;
+        if (a.CloudTitleId is { } title) problem = await Cloud.StreamTitleAsync(title);
+        else problem = await Consoles.LaunchAsync(a);
+        if (problem is not null) Consoles.Error = $"Shortcut: {problem}.";
     }
 
     public void SwitchPage(int delta)
