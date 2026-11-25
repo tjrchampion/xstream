@@ -140,7 +140,7 @@ jobs:
   # the app links to the release page when there's a new version.
   mac:
     needs: build
-    runs-on: macos-14
+    runs-on: macos-latest   # Apple Silicon (macos-14 has been retired)
     steps:
       - uses: actions/checkout@v4
 
@@ -174,8 +174,11 @@ jobs:
           path: dist/Vexel-mac.zip
           if-no-files-found: error
 
-      - name: Add to the draft release
-        if: ${{ github.event_name == 'push' }}
+      # On a tag push; or from "Run workflow" with a version, to add the Mac build to that existing release.
+      - name: Add to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" dist/Vexel-mac.zip --clobber
+        run: |
+          TAG="v$XS_VERSION"
+          if gh release view "$TAG" >/dev/null 2>&1; then gh release upload "$TAG" dist/Vexel-mac.zip --clobber
+          else echo "No release $TAG yet: the build is in the workflow's artifacts."; fi
