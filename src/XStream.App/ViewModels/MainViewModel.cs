@@ -37,11 +37,22 @@ public sealed partial class MainViewModel : ObservableObject
         SettingsPage = new SettingsViewModel(settings) { Stream = Stream };
         SettingsPage.Updates = Updates;
         SettingsPage.InstallUpdateRequested += RestartToUpdate;
+        SettingsPage.OpenMappingRequested += () => SelectedNav = Nav.First(n => n.Page == Mapping);
+        Consoles.EditControlsRequested += (key, name) =>
+        {
+            Mapping.SelectKey(key, name);
+            SelectedNav = Nav.First(n => n.Page == Mapping);
+        };
 
+        Mapping = new MappingViewModel(settings, _art)
+        {
+            CloudGames = () => Cloud.Recent.Select(g => ("cloud:" + g.Game.TitleId, g.Game.Name, (Func<Task<string?>>)(() => Cloud.Library.ArtAsync(g.Game, hero: true)))),
+        };
         Nav =
         [
             new("Consoles", "Icon.Console", Consoles),
             new("Cloud", "Icon.Cloud", Cloud),
+            new("Mapping", "Icon.Gamepad", Mapping),
             new("Sessions", "Icon.History", Sessions),
             new("Settings", "Icon.Settings", SettingsPage),
         ];
@@ -57,6 +68,7 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     public SettingsStore Settings { get; }
+    public MappingViewModel Mapping { get; }
     public GameArtService Art => _art;
     public Updater Updates { get; }
 
@@ -99,6 +111,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         CurrentPage = value?.Page;
         if (value?.Page == Sessions) Sessions.Refresh();
+        if (value?.Page == Mapping) Mapping.RefreshGames();
         if (value?.Page == Consoles && !Consoles.Loaded && IsSignedIn) _ = Consoles.RefreshAsync();
         // The cloud library: shown from the cache straight away, refreshed when the page is opened.
         if (value?.Page == Cloud && IsSignedIn && !Cloud.IsLoading) _ = Cloud.RefreshAsync();

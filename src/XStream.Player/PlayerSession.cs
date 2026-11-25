@@ -120,6 +120,8 @@ public sealed class PlayerSession
 
     /// <summary>Remote control of the streamed console (typing, Turn off); null for cloud or when unavailable.</summary>
     public ConsoleRemote? Remote { get; set; }
+    /// <summary>The game running on the console now (Xbox title id, null if none): its controller profile is used.</summary>
+    public Func<CancellationToken, Task<string?>>? NowPlaying { get; set; }
     /// <summary>"End and turn off Xbox" was chosen: the console is switched off after the stream closes.</summary>
     public bool TurnOffAfter { get; private set; }
 
@@ -342,15 +344,30 @@ public sealed class PlayerSession
             // Controller: read at 1 kHz on its own thread, sent the instant anything changes (to whichever
             // connection is live; nothing goes out while reconnecting).
             InputPump? pump = null;
+            string? gameKey = null;                       // the game running now (for its controller profile)
+            ControllerProfile activeController = live.DefaultController;
+            // Use the profile for the current game (if it changed, or the profiles were edited in the launcher).
+            void ApplyController(bool announce)
+            {
+                var want = live.ControllerFor(gameKey);
+                if (pump is null || (want.SameSetup(activeController) && want.GameKey == activeController.GameKey)) return;
+                bool changed = !want.SameSetup(activeController);
+                activeController = want;
+                pump.SetController(ControllerMapping.Parse(want.ButtonMapping), want.GyroAim ? new GyroAim(want.GyroSensitivity) : null, want.GyroHoldButton);
+                Log?.Invoke($"Controller profile: {want.GameName}: {want.Summary}");
+                if (announce && changed) overlay?.ShowToast(want.GameKey.Length == 0 ? "Controller: your default layout" : $"Controller: {want.GameName} layout", 3000);
+            }
             IGamepadBackend? backend = null;
             var padToastsFrom = DateTime.MaxValue; // set when the pump starts (+3 s: it reports the pads already plugged in)
             try
             {
-                var mapping = ControllerMapping.Parse(live.ButtonMapping, out var mapProblems);
+                // Controller setup: the game's own profile if it has one (cloud: known now; console: from presence,
+                // looked up below and every 20 s), else the default. Gyro or paddles anywhere -> the SDL2 backend.
+                gameKey = o.IsCloud ? "cloud:" + o.CloudTitleId : null;
+                activeController = live.ControllerFor(gameKey);
+                var mapping = ControllerMapping.Parse(activeController.ButtonMapping, out var mapProblems);
                 if (mapProblems.Count > 0) Log?.Invoke("Controller mapping: ignored " + string.Join(", ", mapProblems));
-                bool extras = live.GyroAim || live.ButtonMapping.Contains("Paddle", StringComparison.OrdinalIgnoreCase)
-                              || live.GyroHoldButton.StartsWith("Paddle", StringComparison.OrdinalIgnoreCase);
-                backend = GamepadBackends.CreateDefault(needExtras: extras);
+                backend = GamepadBackends.CreateDefault(needExtras: live.NeedsControllerExtras);
                 // The stream menu sees the controller first; while it's open the console gets a neutral pad.
                 var ov = overlay;
                 GamepadState[] neutral = [];
@@ -403,10 +420,10 @@ public sealed class PlayerSession
                 pump = new InputPump(backend, new InputOptions
                 {
                     Redundancy = XboxPeer.UnreliableInputSupported ? 1 : 0, NexusComboMs = 0,
-                    Mapping = mapping, Gyro = live.GyroAim ? new GyroAim(live.GyroSensitivity) : null, GyroHold = live.GyroHoldButton,
+                    Mapping = mapping, Gyro = activeController.GyroAim ? new GyroAim(activeController.GyroSensitivity) : null,
+                    GyroHold = activeController.GyroHoldButton,
                 }, Track, PadChanged);
-                if (!mapping.IsIdentity || live.GyroAim)
-                    Log?.Invoke($"Controller: {backend.Name}{(mapping.IsIdentity ? "" : ", remapped (" + live.ButtonMapping + ")")}{(live.GyroAim ? $", gyro aim x{live.GyroSensitivity:0.##}" + (live.GyroHoldButton.Length > 0 ? " while " + live.GyroHoldButton + " is held" : "") : "")}");
+                Log?.Invoke($"Controller: {backend.Name}, {activeController.GameName}: {activeController.Summary}");
                 if (ov is not null)
                     ov.XboxButtonRequested += () =>
                     {
@@ -479,7 +496,26 @@ public sealed class PlayerSession
                 cur?.Engine.Retune(next.Profile, next.MaxMbps * 1000);
                 if (next.Microphone != (mic is not null)) UpdateMic(next.Microphone);
                 overlay?.Sync(next);
+                ApplyController(announce: true);
             }
+            // Console streams: which game is running (presence), every 20 s, so its controller profile follows it.
+            if (!o.IsCloud && NowPlaying is { } nowPlaying)
+                new Thread(() =>
+                {
+                    while (!_stop.Wait(gameKey is null ? 5_000 : 20_000) && !ending)
+                    {
+                        try
+                        {
+                            var key = nowPlaying(_cts.Token).GetAwaiter().GetResult() ?? "";
+                            if (key == (gameKey ?? "") && gameKey is not null) continue;
+                            gameKey = key;
+                            if ((live.GameProfiles?.Length ?? 0) > 0) Log?.Invoke($"Game now: {(key.Length > 0 ? key : "none")}");
+                            ApplyController(announce: true);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException) { /* presence is best effort */ }
+                        catch (OperationCanceledException) { return; }
+                    }
+                }) { IsBackground = true, Name = "xstream-game" }.Start();
             if (overlay is not null)
                 overlay.SettingsChanged += change =>
                 {

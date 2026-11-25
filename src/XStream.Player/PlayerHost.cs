@@ -113,7 +113,21 @@ public static class PlayerHost
             : (await store.CreateCloudClientAsync(http, AppSettings.Load())).client;
         // Console remote control (typing, Turn off): same sign-in as the library, console streams only.
         if (cloudTitle is null)
-            session.Remote = new ConsoleRemote(new XboxConsoleControl(http, async ct => (await store.GetWebTokenAsync(ct)).Authorization),
+        {
+            // What's running (for per-game controller profiles): presence, with the sign-in token reused for 30 min.
+            (string Auth, string Xuid, DateTime At)? web = null;
+            session.NowPlaying = async ct =>
+            {
+                if (web is not { } w || DateTime.UtcNow - w.At > TimeSpan.FromMinutes(30))
+                {
+                    var (a, x) = await store.GetWebTokenAsync(ct);
+                    web = w = (a, x, DateTime.UtcNow);
+                }
+                return (await XboxLibrary.GetNowPlayingAsync(http, w.Auth, w.Xuid, ct))?.TitleId;
+            };
+        }
+        if (cloudTitle is null)
+            session.Remote =new ConsoleRemote(new XboxConsoleControl(http, async ct => (await store.GetWebTokenAsync(ct)).Authorization),
                 serverId, consoleName ?? "Xbox");
         int code = session.Run(PlayerOptions.From(settings, serverId) with
             {

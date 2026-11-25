@@ -138,46 +138,18 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] public partial bool InstantReplay { get; set; }
     partial void OnInstantReplayChanged(bool value) => Save(s => s with { InstantReplay = value });
 
-    // ---- Controller remapping and gyro -------------------------------------------------------------------
-    /// <summary>Ready-made layouts (the text box below shows and edits the mapping itself).</summary>
-    public static readonly (string Name, string Mapping)[] MappingPresets =
-    [
-        ("Standard (no changes)", ""),
-        ("Swap A and B (Nintendo layout)", "A=B,B=A,X=Y,Y=X"),
-        ("Back paddles as A, B, X, Y", "Paddle1=A,Paddle2=B,Paddle3=X,Paddle4=Y"),
-        ("Back paddles as stick clicks and bumpers", "Paddle1=LeftThumb,Paddle2=RightThumb,Paddle3=LeftShoulder,Paddle4=RightShoulder"),
-        ("Custom", ""),
-    ];
-    public string[] MappingPresetNames { get; } = MappingPresets.Select(p => p.Name).ToArray();
-    [ObservableProperty] public partial int MappingPresetIndex { get; set; }
-    [ObservableProperty] public partial string ButtonMapping { get; set; } = "";
-    [ObservableProperty] public partial string MappingProblem { get; set; } = "";
-    partial void OnMappingPresetIndexChanged(int value)
-    {
-        if (_loading || value < 0 || value >= MappingPresets.Length - 1) return; // Custom keeps the text as it is
-        ButtonMapping = MappingPresets[value].Mapping;
-    }
-    partial void OnButtonMappingChanged(string value)
-    {
-        XStream.Core.Input.ControllerMapping.Parse(value, out var problems);
-        MappingProblem = problems.Count == 0 ? "" : "Not understood: " + string.Join(", ", problems);
-        if (!_loading)
-        {
-            int preset = Array.FindIndex(MappingPresets, p => p.Mapping == value.Replace(" ", ""));
-            _loading = true; MappingPresetIndex = preset >= 0 ? preset : MappingPresets.Length - 1; _loading = false;
-        }
-        Save(s => s with { ButtonMapping = value.Trim() });
-    }
+    // ---- Sections: Settings shows one at a time ---------------------------------------------------------
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(IsStream), nameof(IsSound), nameof(IsLauncher), nameof(IsSystem))]
+    public partial string Section { get; set; } = "Stream";
+    public bool IsStream => Section == "Stream";
+    public bool IsSound => Section == "Sound";
+    public bool IsLauncher => Section == "Launcher";
+    public bool IsSystem => Section == "System";
+    [RelayCommand] private void ShowSection(string? name) { if (name is "Stream" or "Sound" or "Launcher" or "System") Section = name; }
 
-    [ObservableProperty] public partial bool GyroAim { get; set; }
-    [ObservableProperty] public partial double GyroSensitivity { get; set; }
-    [ObservableProperty] public partial int GyroHoldIndex { get; set; }
-    public static readonly string[] GyroHoldButtons = ["", "LeftShoulder", "RightShoulder", "LeftThumb", "Paddle1", "Paddle2"];
-    public string[] GyroHoldNames { get; } = ["Always on", "While LB is held", "While RB is held", "While the left stick is clicked", "While paddle 1 is held", "While paddle 2 is held"];
-    public string GyroSensitivityText => $"{GyroSensitivity:0.0}x";
-    partial void OnGyroAimChanged(bool value) => Save(s => s with { GyroAim = value });
-    partial void OnGyroSensitivityChanged(double value) { OnPropertyChanged(nameof(GyroSensitivityText)); Save(s => s with { GyroSensitivity = Math.Round(value, 2) }); }
-    partial void OnGyroHoldIndexChanged(int value) => Save(s => s with { GyroHoldButton = GyroHoldButtons[Math.Clamp(value, 0, GyroHoldButtons.Length - 1)] });
+    /// <summary>"Open Mapping": button layouts and gyro have their own page.</summary>
+    public event Action? OpenMappingRequested;
+    [RelayCommand] private void OpenMapping() => OpenMappingRequested?.Invoke();
 
     // ---- Shortcuts ---------------------------------------------------------------------------------------
     /// <summary>What to put in a shortcut or Steam's "Add a non-Steam game": this app and its launch options.</summary>
@@ -283,12 +255,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         RumbleStrength = s.RumbleStrength;
         TriggerRumble = s.TriggerRumble;
         InstantReplay = s.InstantReplay;
-        ButtonMapping = s.ButtonMapping;
-        int preset = Array.FindIndex(MappingPresets, p => p.Mapping == s.ButtonMapping);
-        MappingPresetIndex = preset >= 0 ? preset : MappingPresets.Length - 1;
-        GyroAim = s.GyroAim;
-        GyroSensitivity = s.GyroSensitivity;
-        GyroHoldIndex = Math.Max(0, Array.IndexOf(GyroHoldButtons, s.GyroHoldButton));
         foreach (var o in ClarityOptions) o.IsSelected = o.Level == s.Clarity;
         _loading = false;
     }

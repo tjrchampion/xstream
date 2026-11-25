@@ -68,7 +68,7 @@ public partial class App : Application
             _pad.Refresh += () =>
             {
                 if (vm.IsSignedIn && vm.CurrentPage == vm.Consoles) vm.Consoles.RefreshCommand.Execute(null);
-                else if (vm.CurrentPage == vm.SettingsPage) vm.SettingsPage.RunChecksCommand.Execute(null);
+                else if (vm.CurrentPage == vm.SettingsPage) { vm.SettingsPage.Section = "System"; vm.SettingsPage.RunChecksCommand.Execute(null); }
             };
             vm.PropertyChanged += (_, e) =>
             {
@@ -259,6 +259,18 @@ public partial class App : Application
                         if (vm.Consoles.Consoles.FirstOrDefault() is { } first && !vm.Stream.HasHero)
                             vm.Stream.Demo(demo, first.ServerId, first.Name);
                     };
+                // XSTREAM_DEMO_PAGE=Mapping (testing): open on that page.
+                if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_PAGE") is { Length: > 0 } page && vm.Nav.FirstOrDefault(n => n.Title == page) is { } nav)
+                    DispatcherTimer.RunOnce(() =>
+                    {
+                        vm.SelectedNav = nav;
+                        // XSTREAM_DEMO_SLOT=A (testing): on Mapping, open the second game and that button's picker (nothing is saved).
+                        if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_SLOT") is { Length: > 0 } slot && vm.Mapping.Games.Count > 1)
+                        {
+                            vm.Mapping.SelectGameCommand.Execute(vm.Mapping.Games[1]);
+                            vm.Mapping.PickSlotCommand.Execute(vm.Mapping.Slots.FirstOrDefault(x => x.Label == slot));
+                        }
+                    }, TimeSpan.FromSeconds(2));
                 // XSTREAM_DEMO_SHOT=file.png (testing): save the window as it looks after a few seconds, then quit.
                 if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_SHOT") is { Length: > 0 } shot)
                     DispatcherTimer.RunOnce(() =>

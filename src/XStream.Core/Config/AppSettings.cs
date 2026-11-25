@@ -9,6 +9,30 @@ namespace XStream.Core.Config;
 public enum ClarityLevel { Off, Low, Medium, High }
 
 /// <summary>User settings shared by the launcher UI and the CLI. Stored in ~/.xstream/settings.json.</summary>
+/// <summary>A controller setup for one game (or the default, with an empty key).</summary>
+public sealed record ControllerProfile(string GameKey, string GameName, string ButtonMapping = "", bool GyroAim = false,
+    double GyroSensitivity = 1, string GyroHoldButton = "")
+{
+    public bool NeedsExtras => GyroAim || ButtonMapping.Contains("Paddle", StringComparison.OrdinalIgnoreCase)
+                               || GyroHoldButton.StartsWith("Paddle", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Same controls, ignoring which game it's for.</summary>
+    public bool SameSetup(ControllerProfile o) =>
+        ButtonMapping == o.ButtonMapping && GyroAim == o.GyroAim && GyroSensitivity == o.GyroSensitivity && GyroHoldButton == o.GyroHoldButton;
+
+    /// <summary>A short description ("Swap A/B, gyro 1.5x while LB").</summary>
+    public string Summary
+    {
+        get
+        {
+            var parts = new List<string>();
+            parts.Add(ButtonMapping.Length == 0 ? "standard buttons" : "remapped (" + ButtonMapping + ")");
+            if (GyroAim) parts.Add($"gyro {GyroSensitivity:0.##}x" + (GyroHoldButton.Length > 0 ? " while " + GyroHoldButton + " is held" : ""));
+            return string.Join(", ", parts);
+        }
+    }
+}
+
 public sealed record AppSettings
 {
     public StreamProfile Profile { get; init; } = StreamProfile.Balanced;
@@ -90,6 +114,33 @@ public sealed record AppSettings
     public double GyroSensitivity { get; init; } = 1;
     /// <summary>Gyro only while this button is held ("" = always on). Usually LeftShoulder or a paddle.</summary>
     public string GyroHoldButton { get; init; } = "";
+    /// <summary>
+    /// Per-game controller setups: used instead of the ones above while that game is running (the stream switches
+    /// when the game changes). Keyed by Xbox title id, or "cloud:ID" for a cloud game.
+    /// </summary>
+    public ControllerProfile[]? GameProfiles { get; init; }
+
+    /// <summary>The default controller setup (the fields above) as a profile.</summary>
+    public ControllerProfile DefaultController => new("", "All games", ButtonMapping, GyroAim, GyroSensitivity, GyroHoldButton);
+
+    /// <summary>The controller setup for a game: its own profile if it has one, else the default.</summary>
+    public ControllerProfile ControllerFor(string? gameKey) =>
+        gameKey is { Length: > 0 } && GameProfiles?.FirstOrDefault(p => p.GameKey.Equals(gameKey, StringComparison.OrdinalIgnoreCase)) is { } p
+            ? p : DefaultController;
+
+    /// <summary>Add or replace a game's profile.</summary>
+    public AppSettings WithProfile(ControllerProfile profile) => this with
+    {
+        GameProfiles = [.. (GameProfiles ?? []).Where(p => !p.GameKey.Equals(profile.GameKey, StringComparison.OrdinalIgnoreCase)), profile],
+    };
+
+    public AppSettings WithoutProfile(string gameKey) => this with
+    {
+        GameProfiles = (GameProfiles ?? []).Where(p => !p.GameKey.Equals(gameKey, StringComparison.OrdinalIgnoreCase)).ToArray() is { Length: > 0 } rest ? rest : null,
+    };
+
+    /// <summary>Whether any setup (default or a game's) needs gyro or paddles, which only the SDL2 controller backend reads.</summary>
+    public bool NeedsControllerExtras => new[] { DefaultController }.Concat(GameProfiles ?? []).Any(p => p.NeedsExtras);
 
     private static readonly JsonSerializerOptions Json = new()
     {

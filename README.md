@@ -41,7 +41,7 @@ Vexel streams your Xbox console over your home network. It's built for playing w
 - **Console control:** turn your Xbox off or restart it from its card, or end a stream with "End and turn off Xbox". Pick a recent game under **Jump back in** to start it on the console and stream it as it opens.
 - **Picks up after sleep:** put a handheld to sleep mid-game and the stream reconnects by itself when it wakes, once Wi-Fi is back.
 - **Instant replay:** keep the last 30 seconds and save them as an MP4 clip (F10, or the stream menu). Off by default.
-- **Your controller, your layout:** remap buttons, use Elite / DualSense Edge back paddles, and aim with the gyro on a DualSense, DualShock 4 or Switch Pro controller.
+- **Your controller, your layout:** the **Mapping** page shows your games with their art and a picture of the controller: click a button to change what it does. Give each game its own layout and Vexel switches to it by itself when that game starts, even mid-stream. Elite / DualSense Edge back paddles, and gyro aiming on a DualSense, DualShock 4 or Switch Pro controller.
 - **Launch shortcuts:** add Vexel to Steam, Armoury Crate or Playnite with `--stream` and go straight into a stream (see [Shortcuts](#shortcuts)).
 - **Game audio, party chat, rumble and screenshots.**
 - **Made for the ROG Ally:**

@@ -153,6 +153,46 @@ static class FeatureTests
             r.Clear();
             Eq(0, r.Snapshot().Video.Count);
         }),
+        ("Game profiles: per-game layout, default otherwise, add/replace/remove, saved and loaded", () =>
+        {
+            var s = new XStream.Core.Config.AppSettings { ButtonMapping = "A=B" };
+            Eq("A=B", s.ControllerFor("123").ButtonMapping);
+            Eq("", s.ControllerFor("123").GameKey);
+            s = s.WithProfile(new XStream.Core.Config.ControllerProfile("123", "Halo", "", GyroAim: true, GyroSensitivity: 1.5));
+            s = s.WithProfile(new XStream.Core.Config.ControllerProfile("cloud:FORTNITE", "Fortnite", "X=Y"));
+            Eq("Halo", s.ControllerFor("123").GameName);
+            True(s.ControllerFor("123").GyroAim, "Halo has gyro");
+            Eq("A=B", s.ControllerFor("999").ButtonMapping);   // no profile: default
+            Eq("A=B", s.ControllerFor(null).ButtonMapping);
+            True(s.NeedsControllerExtras, "a gyro profile needs the SDL backend");
+            s = s.WithProfile(new XStream.Core.Config.ControllerProfile("123", "Halo", "B=A"));
+            Eq(2, s.GameProfiles!.Length);                     // replaced, not added
+            Eq("B=A", s.ControllerFor("123").ButtonMapping);
+            var path = Path.Combine(Path.GetTempPath(), $"xs-profiles-{Guid.NewGuid():N}.json");
+            try
+            {
+                s.Save(path);
+                var back = XStream.Core.Config.AppSettings.Load(path);
+                Eq(2, back.GameProfiles!.Length);
+                Eq("X=Y", back.ControllerFor("cloud:FORTNITE").ButtonMapping);
+            }
+            finally { File.Delete(path); }
+            s = s.WithoutProfile("123").WithoutProfile("cloud:FORTNITE");
+            True(s.GameProfiles is null, "last one removed");
+            True(!s.NeedsControllerExtras, "nothing needs extras now");
+        }),
+        ("Input pump switches layout live", () =>
+        {
+            var pad = new MapPad();
+            GamepadState[]? last = null;
+            var pump = new InputPump(pad, new InputOptions(), f => last = f);
+            pad.State = new GamepadState(0, GamepadButtons.A, 0, 0, 0, 0, 0, 0);
+            pump.Step(0);
+            Eq(GamepadButtons.A, last![0].Buttons);
+            pump.SetController(ControllerMapping.Parse("A=Y"), null, "");
+            pump.Step(1);
+            Eq(GamepadButtons.Y, last![0].Buttons);
+        }),
         ("Launch arguments", () =>
         {
             Eq(new LaunchArgs(true, null, null, null), LaunchArgs.Parse(["--stream"]));

@@ -81,7 +81,19 @@ public sealed class InputPump : IDisposable
         _o = options;
         _send = send;
         _padChanged = padChanged;
+        _setup = new Setup(options.Mapping, options.Gyro, options.GyroHold);
         if (options.Gyro is not null) backend.EnableGyro(true);
+    }
+
+    // The live controller setup (swapped whole when the game changes; read once per pad per poll).
+    private sealed record Setup(ControllerMapping Mapping, GyroAim? Gyro, string GyroHold);
+    private volatile Setup _setup;
+
+    /// <summary>Switch the button layout and gyro now (another game started, or the settings changed).</summary>
+    public void SetController(ControllerMapping mapping, GyroAim? gyro, string gyroHold)
+    {
+        if (gyro is not null) _backend.EnableGyro(true);
+        _setup = new Setup(mapping, gyro, gyroHold);
     }
 
     public double NowMs => _sw.Elapsed.TotalMilliseconds;
@@ -210,9 +222,10 @@ public sealed class InputPump : IDisposable
         float lt = Linear(r.LeftTrigger, _o.TriggerDeadzone), rt = Linear(r.RightTrigger, _o.TriggerDeadzone);
         var b = r.Buttons;
         var extras = _backend.Extras(index);
-        if (_o.Gyro is { } gyro && extras.HasGyro && (_o.GyroHold.Length == 0 || ControllerMapping.Held(_o.GyroHold, b, extras.Paddles)))
+        var setup = _setup;
+        if (setup.Gyro is { } gyro && extras.HasGyro && (setup.GyroHold.Length == 0 || ControllerMapping.Held(setup.GyroHold, b, extras.Paddles)))
             (rx, ry) = GyroAim.Combine(rx, ry, gyro.Stick(extras.GyroPitch, extras.GyroYaw));
-        if (!_o.Mapping.IsIdentity) b = _o.Mapping.Apply(b, extras.Paddles);
+        if (!setup.Mapping.IsIdentity) b = setup.Mapping.Apply(b, extras.Paddles);
 
         const GamepadButtons combo = GamepadButtons.View | GamepadButtons.Menu;
         if ((b & combo) == combo && _o.NexusComboMs > 0)

@@ -9,6 +9,21 @@
       <Setter Property="HorizontalAlignment" Value="Right" /><Setter Property="VerticalAlignment" Value="Center" />
       <Setter Property="MinWidth" Value="0" />
     </Style>
+    <!-- Section tabs -->
+    <Style Selector="Border.tabs">
+      <Setter Property="Background" Value="{StaticResource Surface2}" /><Setter Property="CornerRadius" Value="14" /><Setter Property="Padding" Value="4" />
+    </Style>
+    <Style Selector="Button.tab">
+      <Setter Property="Background" Value="Transparent" /><Setter Property="BorderThickness" Value="0" /><Setter Property="CornerRadius" Value="10" />
+      <Setter Property="Padding" Value="16,10" /><Setter Property="Foreground" Value="{StaticResource Muted}" /><Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.tab PathIcon"><Setter Property="Width" Value="14" /><Setter Property="Height" Value="14" /></Style>
+    <Style Selector="Button.tab:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#14FFFFFF" /><Setter Property="Foreground" Value="{StaticResource Text}" />
+    </Style>
+    <Style Selector="Button.tab.on /template/ ContentPresenter#PART_ContentPresenter, Button.tab.on:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource AccentSoft}" /><Setter Property="Foreground" Value="{StaticResource Accent}" />
+    </Style>
   </UserControl.Styles>
 
   <ScrollViewer>
@@ -18,6 +33,25 @@
         <TextBlock Classes="muted" Text="Changes are saved straight away. Profile, bitrate, picture, sound and rumble also change a running stream." />
       </StackPanel>
 
+      <!-- Sections: one at a time instead of one long page -->
+      <Border Classes="tabs" HorizontalAlignment="Left">
+        <StackPanel Orientation="Horizontal" Spacing="4">
+          <Button Classes="tab" Classes.on="{Binding IsStream}" Command="{Binding ShowSectionCommand}" CommandParameter="Stream">
+            <StackPanel Orientation="Horizontal" Spacing="8"><PathIcon Data="{StaticResource Icon.Bolt}" /><TextBlock Text="Stream" /></StackPanel>
+          </Button>
+          <Button Classes="tab" Classes.on="{Binding IsSound}" Command="{Binding ShowSectionCommand}" CommandParameter="Sound">
+            <StackPanel Orientation="Horizontal" Spacing="8"><PathIcon Data="{StaticResource Icon.Gamepad}" /><TextBlock Text="Sound and controls" /></StackPanel>
+          </Button>
+          <Button Classes="tab" Classes.on="{Binding IsLauncher}" Command="{Binding ShowSectionCommand}" CommandParameter="Launcher">
+            <StackPanel Orientation="Horizontal" Spacing="8"><PathIcon Data="{StaticResource Icon.Console}" /><TextBlock Text="Launcher" /></StackPanel>
+          </Button>
+          <Button Classes="tab" Classes.on="{Binding IsSystem}" Command="{Binding ShowSectionCommand}" CommandParameter="System">
+            <StackPanel Orientation="Horizontal" Spacing="8"><PathIcon Data="{StaticResource Icon.Settings}" /><TextBlock Text="System and account" /></StackPanel>
+          </Button>
+        </StackPanel>
+      </Border>
+
+      <StackPanel Spacing="22" IsVisible="{Binding IsStream}">
       <!-- Profile -->
       <Border Classes="card">
         <StackPanel Spacing="16">
@@ -149,6 +183,9 @@
         </StackPanel>
       </Border>
 
+      </StackPanel>
+
+      <StackPanel Spacing="22" IsVisible="{Binding IsSound}">
       <!-- Audio and controller -->
       <Border Classes="card">
         <StackPanel>
@@ -193,40 +230,21 @@
         </StackPanel>
       </Border>
 
-      <!-- Controller layout and gyro -->
+      <!-- Controller layouts live on the Mapping page; instant replay stays here -->
       <Border Classes="card">
         <StackPanel>
-          <TextBlock Classes="h2" Text="Controller layout" Margin="0,0,0,6" />
+          <TextBlock Classes="h2" Text="Controls and clips" Margin="0,0,0,6" />
           <Grid Classes="row" ColumnDefinitions="*,Auto">
             <StackPanel>
-              <TextBlock FontWeight="SemiBold" Text="Button layout" />
-              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Applies to the next stream. Back paddles need an Xbox Elite or DualSense Edge controller." />
+              <TextBlock FontWeight="SemiBold" Text="Button layouts and gyro" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Remap buttons and set up gyro aiming for all games or one game at a time, on the Mapping page." />
             </StackPanel>
-            <ComboBox Grid.Column="1" MinWidth="250" VerticalAlignment="Center" ItemsSource="{Binding MappingPresetNames}" SelectedIndex="{Binding MappingPresetIndex}" />
-          </Grid>
-          <Grid Classes="row" RowDefinitions="Auto,Auto,Auto">
-            <TextBlock Classes="caption" TextWrapping="Wrap"
-                       Text="Custom: From=To pairs, separated by commas. Buttons: A B X Y LB RB LS RS View Menu Xbox Up Down Left Right, Paddle1 to Paddle4, or None to turn one off." />
-            <TextBox Grid.Row="1" Classes="mono" Margin="0,8,0,0" Watermark="e.g. A=B, B=A, Paddle1=LS" Text="{Binding ButtonMapping}" />
-            <TextBlock Grid.Row="2" Classes="caption" Foreground="{StaticResource Warn}" Text="{Binding MappingProblem}" Margin="0,6,0,0"
-                       IsVisible="{Binding MappingProblem, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-          </Grid>
-          <Separator />
-          <Grid Classes="row" ColumnDefinitions="*,Auto">
-            <StackPanel>
-              <TextBlock FontWeight="SemiBold" Text="Gyro aiming" />
-              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Tilt the controller to aim: it moves the right stick, so it works in every game. Needs a controller with a gyro (DualSense, DualShock 4, Switch Pro). The ROG Ally's built-in gyro isn't readable by apps." />
-            </StackPanel>
-            <ToggleSwitch Grid.Column="1" IsChecked="{Binding GyroAim}" />
-          </Grid>
-          <Grid Classes="row" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" IsEnabled="{Binding GyroAim}">
-            <TextBlock FontWeight="SemiBold" Text="Gyro sensitivity" />
-            <TextBlock Grid.Column="1" Classes="mono" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Text="{Binding GyroSensitivityText}" />
-            <Slider Grid.Row="1" Grid.ColumnSpan="2" Minimum="0.25" Maximum="4" SmallChange="0.25" LargeChange="0.5" TickFrequency="0.25" IsSnapToTickEnabled="True" Value="{Binding GyroSensitivity}" />
-          </Grid>
-          <Grid Classes="row" ColumnDefinitions="*,Auto" IsEnabled="{Binding GyroAim}">
-            <TextBlock FontWeight="SemiBold" Text="Gyro on" VerticalAlignment="Center" />
-            <ComboBox Grid.Column="1" MinWidth="250" VerticalAlignment="Center" ItemsSource="{Binding GyroHoldNames}" SelectedIndex="{Binding GyroHoldIndex}" />
+            <Button Grid.Column="1" Classes="ghost" VerticalAlignment="Center" Command="{Binding OpenMappingCommand}">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <PathIcon Data="{StaticResource Icon.Gamepad}" Width="14" Height="14" />
+                <TextBlock Text="Open Mapping" />
+              </StackPanel>
+            </Button>
           </Grid>
           <Separator />
           <Grid Classes="row" ColumnDefinitions="*,Auto">
@@ -239,6 +257,9 @@
         </StackPanel>
       </Border>
 
+      </StackPanel>
+
+      <StackPanel Spacing="22" IsVisible="{Binding IsLauncher}">
       <!-- Launcher -->
       <Border Classes="card">
         <StackPanel>
@@ -309,6 +330,9 @@
         </StackPanel>
       </Border>
 
+      </StackPanel>
+
+      <StackPanel Spacing="22" IsVisible="{Binding IsSystem}">
       <!-- System check -->
       <Border Classes="card">
         <StackPanel Spacing="12">
@@ -419,6 +443,8 @@
                      IsVisible="{Binding DiagnosticsStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
         </StackPanel>
       </Border>
+      </StackPanel>
+
     </StackPanel>
   </ScrollViewer>
 </UserControl>

@@ -135,7 +135,12 @@ public sealed partial class ConsolesViewModel : ObservableObject
         _settings = settings;
         _art = art;
         Stream = stream;
-        art.Changed += () => Avalonia.Threading.Dispatcher.UIThread.Post(() => { ShowGames(); ShowRecent(); });
+        art.Changed += () => Avalonia.Threading.Dispatcher.UIThread.Post(() => { ShowGames(); ShowRecent(); NotifyController(); });
+        settings.Changed += _ => NotifyController();
+        // While streaming a console, keep "what's running" current (the header's game and its controller layout).
+        _presence = new Avalonia.Threading.DispatcherTimer(TimeSpan.FromSeconds(30), Avalonia.Threading.DispatcherPriority.Background,
+            async (_, _) => { if (Stream.IsStreaming && !Stream.IsCloud) await _art.RefreshNowPlayingAsync(_settings.Current); });
+        stream.RunningChanged += running => { if (running) _presence.Start(); else _presence.Stop(); };
         stream.StreamAgainRequested += id =>
         {
             var c = Consoles.FirstOrDefault(c => c.ServerId == id);
@@ -151,6 +156,7 @@ public sealed partial class ConsolesViewModel : ObservableObject
 
     public StreamViewModel Stream { get; }
     public ObservableCollection<ConsoleItemViewModel> Consoles { get; } = [];
+    private readonly Avalonia.Threading.DispatcherTimer _presence;
 
     /// <summary>The console in the "Now playing" header (streaming now, or the session that just ended). Null for cloud.</summary>
     [ObservableProperty, NotifyPropertyChangedFor(nameof(HasHeroArt))] public partial ConsoleItemViewModel? ActiveConsole { get; set; }
@@ -168,6 +174,7 @@ public sealed partial class ConsolesViewModel : ObservableObject
             c.IsInHeader = mine && Stream.HasHero;
         }
         ActiveConsole = active;
+        NotifyController();
     }
 
     [ObservableProperty, NotifyPropertyChangedFor(nameof(IsEmpty))] public partial bool IsLoading { get; set; }
@@ -354,6 +361,41 @@ public sealed partial class ConsolesViewModel : ObservableObject
     {
         var c = Consoles.FirstOrDefault(c => c.ServerId == serverId && c.CanWake);
         if (c is not null && StartStreamCommand.CanExecute(c)) StartStreamCommand.Execute(c);
+    }
+
+    // ---- Controller layout for the game being played (Now playing header) ----------------------------------
+    /// <summary>Open Settings on this game's controller layout (game key, name).</summary>
+    public event Action<string, string>? EditControlsRequested;
+
+    /// <summary>The game in the header (cloud: the cloud game; console: what's running on it).</summary>
+    private (string Key, string Name)? HeaderGame =>
+        Stream.IsCloud
+            ? (Stream.ServerId.StartsWith(PlayerHost.CloudPrefix) ? ("cloud:" + Stream.ServerId[PlayerHost.CloudPrefix.Length..], Stream.ConsoleName) : null)
+            : ActiveConsole is { HasGame: true } c && c.GameTitleId.Length > 0 ? (c.GameTitleId, c.GameName) : null;
+
+    /// <summary>"Controller: Halo layout" / "Controller: default layout" under the header.</summary>
+    public string ControllerLine
+    {
+        get
+        {
+            if (HeaderGame is not { } g) return "";
+            var p = _settings.Current.ControllerFor(g.Key);
+            return p.GameKey.Length > 0 ? $"Controller: {g.Name} layout ({p.Summary})" : $"Controller: default layout ({p.Summary})";
+        }
+    }
+    public bool HasControllerLine => ControllerLine.Length > 0;
+    public string EditControlsText => HeaderGame is { } g && _settings.Current.ControllerFor(g.Key).GameKey.Length > 0
+        ? "Edit controls" : "Controls for this game";
+
+    [RelayCommand]
+    private void EditControls()
+    {
+        if (HeaderGame is { } g) EditControlsRequested?.Invoke(g.Key, g.Name);
+    }
+
+    private void NotifyController()
+    {
+        OnPropertyChanged(nameof(ControllerLine)); OnPropertyChanged(nameof(HasControllerLine)); OnPropertyChanged(nameof(EditControlsText));
     }
 
     /// <summary>A shortcut's console: by name or id, else the last used one.</summary>
