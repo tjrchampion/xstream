@@ -22,7 +22,7 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
         #include <metal_stdlib>
         using namespace metal;
         struct VOut { float4 pos [[position]]; float2 uv; };
-        struct Params { float2 texel; float sharpen; float pad; float2 uvScale; float2 uvOffset; };
+        struct Params { float2 texel; float sharpen; float pad; float2 uvScale; float2 uvOffset; float2 foot; float2 pad2; };
         constexpr sampler samp(filter::linear, address::clamp_to_edge);
 
         // One triangle covering the viewport; no vertex buffer.
@@ -39,12 +39,12 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
         // (steeper edges, no halos), exactly like the CPU and Direct3D versions.
         static float luma(texture2d<float> ty, float2 uv, constant Params& p)
         {
-            float c = ty.sample(samp, uv).r;
+            float c = ty.sample(samp, uv, level(0)).r;
             if (p.sharpen <= 0) return c;
-            float n = ty.sample(samp, uv + float2(0, -p.texel.y)).r;
-            float s = ty.sample(samp, uv + float2(0,  p.texel.y)).r;
-            float e = ty.sample(samp, uv + float2( p.texel.x, 0)).r;
-            float w = ty.sample(samp, uv + float2(-p.texel.x, 0)).r;
+            float n = ty.sample(samp, uv + float2(0, -p.texel.y), level(0)).r;
+            float s = ty.sample(samp, uv + float2(0,  p.texel.y), level(0)).r;
+            float e = ty.sample(samp, uv + float2( p.texel.x, 0), level(0)).r;
+            float w = ty.sample(samp, uv + float2(-p.texel.x, 0), level(0)).r;
             float lo = min(c, min(min(n, s), min(e, w)));
             float hi = max(c, max(max(n, s), max(e, w)));
             return clamp(c + p.sharpen * (4 * c - n - s - e - w), lo, hi);
@@ -63,24 +63,51 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
             return float4(saturate(rgb), 1);
         }
 
+        // Shrinking the picture: average an n x n grid of taps over the area each screen pixel covers, instead of one
+        // tap that skips source pixels and breaks text into jagged bits. 1:1 and enlarging stay one tap.
+        static int taps(float f) { return f <= 1.02 ? 1 : f < 1.6 ? 2 : f < 2.6 ? 3 : 4; }
+
         fragment float4 fsNv12(VOut i [[stage_in]], texture2d<float> ty [[texture(0)]], texture2d<float> tuv [[texture(1)]],
                                constant Params& p [[buffer(0)]])
         {
             float2 uv = p.uvOffset + i.uv * p.uvScale;
-            return toRgb(luma(ty, uv, p), tuv.sample(samp, uv).rg, p);
+            int nx = taps(p.foot.x / p.texel.x), ny = taps(p.foot.y / p.texel.y);
+            if (nx == 1 && ny == 1) return toRgb(luma(ty, uv, p), tuv.sample(samp, uv, level(0)).rg, p);
+            float y = 0; float2 c = 0;
+            for (int a = 0; a < ny; a++)
+                for (int b = 0; b < nx; b++)
+                {
+                    float2 q = uv + p.foot * (float2((b + 0.5) / nx, (a + 0.5) / ny) - 0.5);
+                    y += luma(ty, q, p); c += tuv.sample(samp, q, level(0)).rg;
+                }
+            float n = nx * ny;
+            return toRgb(y / n, c / n, p);
         }
 
         fragment float4 fsI420(VOut i [[stage_in]], texture2d<float> ty [[texture(0)]], texture2d<float> tu [[texture(1)]],
                                texture2d<float> tv [[texture(2)]], constant Params& p [[buffer(0)]])
         {
             float2 uv = p.uvOffset + i.uv * p.uvScale;
-            return toRgb(luma(ty, uv, p), float2(tu.sample(samp, uv).r, tv.sample(samp, uv).r), p);
+            int nx = taps(p.foot.x / p.texel.x), ny = taps(p.foot.y / p.texel.y);
+            if (nx == 1 && ny == 1) return toRgb(luma(ty, uv, p), float2(tu.sample(samp, uv, level(0)).r, tv.sample(samp, uv, level(0)).r), p);
+            float y = 0; float2 c = 0;
+            for (int a = 0; a < ny; a++)
+                for (int b = 0; b < nx; b++)
+                {
+                    float2 q = uv + p.foot * (float2((b + 0.5) / nx, (a + 0.5) / ny) - 0.5);
+                    y += luma(ty, q, p); c += float2(tu.sample(samp, q, level(0)).r, tv.sample(samp, q, level(0)).r);
+                }
+            float n = nx * ny;
+            return toRgb(y / n, c / n, p);
         }
 
         fragment float4 fsOverlay(VOut i [[stage_in]], texture2d<float> t [[texture(0)]]) { return t.sample(samp, i.uv); }
         """;
 
-    [StructLayout(LayoutKind.Sequential)] private struct Params { public float TexelX, TexelY, Sharpen, Pad, ScaleX, ScaleY, OffsetX, OffsetY; }
+    /// <summary>XSTREAM_SCALE=simple: one tap per screen pixel when shrinking (the old way; for comparison).</summary>
+    private static readonly bool SimpleScaling = Environment.GetEnvironmentVariable("XSTREAM_SCALE") == "simple";
+
+    [StructLayout(LayoutKind.Sequential)] private struct Params { public float TexelX, TexelY, Sharpen, Pad, ScaleX, ScaleY, OffsetX, OffsetY, FootX, FootY, Pad2, Pad3; }
 
     private const string SdlLib = "SDL2";
     [DllImport(SdlLib)] private static extern IntPtr SDL_Metal_CreateView(IntPtr window);
@@ -410,6 +437,8 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
             prm.OffsetX = src.X / (float)_w; prm.OffsetY = src.Y / (float)_h;
         }
         else if (scaling == VideoScaling.Fit) rect = fit(_w, _h, _outW, _outH);
+        // How much of the picture one screen pixel covers (more than one source pixel when shrinking).
+        if (!SimpleScaling) { prm.FootX = prm.ScaleX / Math.Max(1, rect.W); prm.FootY = prm.ScaleY / Math.Max(1, rect.H); }
         return (rect, prm);
     }
 

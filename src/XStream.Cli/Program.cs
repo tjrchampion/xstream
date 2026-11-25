@@ -146,12 +146,16 @@ try
         {
             // Plays an H.264 file (or a built-in test pattern) through the real receive path:
             // RTP packets -> frame assembler -> decoder -> window, paced at 60 fps. No console needed.
-            var file = args.Skip(1).FirstOrDefault(a => !a.StartsWith("--"));
+            var file = args.Skip(1).Where((a, k) => !a.StartsWith("--") && args[k] is not ("--size" or "--clarity")).FirstOrDefault();
             var stream = file is not null ? File.ReadAllBytes(file) : TestPattern.Stream(80, 45, 600, 60); // 1280x720, 10 s
             var sw = System.Diagnostics.Stopwatch.StartNew();
             double Now() => sw.Elapsed.TotalMilliseconds;
             var mailbox = new FrameMailbox();
-            using var window = new VideoWindow(mailbox, Now, new VideoWindowOptions { Title = "XStream video test", Fullscreen = !args.Contains("--windowed"), VSync = args.Contains("--vsync"), StartHidden = args.Contains("--hidden") });
+            // --size WxH: window size (points), e.g. 960x540 on a 2x Mac screen = a 1920x1080 picture (the Ally's screen).
+            var size = args.SkipWhile(a => a != "--size").Skip(1).FirstOrDefault()?.Split('x') is [var sw0, var sh0] ? (W: int.Parse(sw0), H: int.Parse(sh0)) : (W: 1280, H: 720);
+            using var window = new VideoWindow(mailbox, Now, new VideoWindowOptions { Title = "XStream video test", Fullscreen = !args.Contains("--windowed"), VSync = args.Contains("--vsync"), StartHidden = args.Contains("--hidden"), Width = size.W, Height = size.H });
+            // --clarity 0-3: Clarity boost level.
+            if (args.SkipWhile(a => a != "--clarity").Skip(1).FirstOrDefault() is { } cl) window.Sharpen = int.Parse(cl);
             window.FirstPicture += () => Console.WriteLine($"First picture shown after {Now():F0} ms (window {(args.Contains("--hidden") ? "was hidden until now" : "was already visible")})");
             var buffer = new PlayoutBuffer<AccessUnit> { TargetDelayMs = 0 };
             using var pipe = new VideoPipeline(buffer, new H264Decoder(!args.Contains("--software")), mailbox, Now);

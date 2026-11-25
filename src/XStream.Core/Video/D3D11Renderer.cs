@@ -35,6 +35,8 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
             float  pad;
             float2 uvScale;   // Fill crops the picture: uv = uvOffset + uv * uvScale
             float2 uvOffset;
+            float2 foot;      // the source area one screen pixel covers, in UV units
+            float2 pad2;
         };
         struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 
@@ -52,12 +54,12 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
         // (steeper edges, no halos), exactly like the CPU version.
         float Luma(float2 uv)
         {
-            float c = texY.Sample(samp, uv);
+            float c = texY.SampleLevel(samp, uv, 0);
             if (sharpen <= 0) return c;
-            float n = texY.Sample(samp, uv + float2(0, -texel.y));
-            float s = texY.Sample(samp, uv + float2(0,  texel.y));
-            float e = texY.Sample(samp, uv + float2( texel.x, 0));
-            float w = texY.Sample(samp, uv + float2(-texel.x, 0));
+            float n = texY.SampleLevel(samp, uv + float2(0, -texel.y), 0);
+            float s = texY.SampleLevel(samp, uv + float2(0,  texel.y), 0);
+            float e = texY.SampleLevel(samp, uv + float2( texel.x, 0), 0);
+            float w = texY.SampleLevel(samp, uv + float2(-texel.x, 0), 0);
             float lo = min(c, min(min(n, s), min(e, w)));
             float hi = max(c, max(max(n, s), max(e, w)));
             return clamp(c + sharpen * (4 * c - n - s - e - w), lo, hi);
@@ -76,23 +78,51 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
             return float4(saturate(rgb), 1);
         }
 
+        // Shrinking the picture (1440p on a 1080p screen): one bilinear tap per screen pixel skips source pixels
+        // and breaks thin lines and text into jagged bits. Average an n x n grid of taps spread over the area the
+        // screen pixel covers instead (n grows with the shrink); 1:1 and enlarging stay one tap.
+        int Taps(float f) { return f <= 1.02 ? 1 : f < 1.6 ? 2 : f < 2.6 ? 3 : 4; }
+
         float4 PSNv12(VSOut i) : SV_Target
         {
             float2 uv = uvOffset + i.uv * uvScale;
-            return ToRgb(Luma(uv), texUV.Sample(samp, uv));
+            int nx = Taps(foot.x / texel.x), ny = Taps(foot.y / texel.y);
+            if (nx == 1 && ny == 1) return ToRgb(Luma(uv), texUV.SampleLevel(samp, uv, 0));
+            float y = 0; float2 c = 0;
+            for (int a = 0; a < ny; a++)
+                for (int b = 0; b < nx; b++)
+                {
+                    float2 q = uv + foot * (float2((b + 0.5) / nx, (a + 0.5) / ny) - 0.5);
+                    y += Luma(q); c += texUV.SampleLevel(samp, q, 0);
+                }
+            float n = nx * ny;
+            return ToRgb(y / n, c / n);
         }
 
         float4 PSI420(VSOut i) : SV_Target
         {
             float2 uv = uvOffset + i.uv * uvScale;
-            return ToRgb(Luma(uv), float2(texU.Sample(samp, uv), texV.Sample(samp, uv)));
+            int nx = Taps(foot.x / texel.x), ny = Taps(foot.y / texel.y);
+            if (nx == 1 && ny == 1) return ToRgb(Luma(uv), float2(texU.SampleLevel(samp, uv, 0), texV.SampleLevel(samp, uv, 0)));
+            float y = 0; float2 c = 0;
+            for (int a = 0; a < ny; a++)
+                for (int b = 0; b < nx; b++)
+                {
+                    float2 q = uv + foot * (float2((b + 0.5) / nx, (a + 0.5) / ny) - 0.5);
+                    y += Luma(q); c += float2(texU.SampleLevel(samp, q, 0), texV.SampleLevel(samp, q, 0));
+                }
+            float n = nx * ny;
+            return ToRgb(y / n, c / n);
         }
 
         float4 PSOverlay(VSOut i) : SV_Target { return texOv.Sample(samp, i.uv); }
         """;
 
+    /// <summary>XSTREAM_SCALE=simple: one tap per screen pixel when shrinking (the old way; for comparison).</summary>
+    private static readonly bool SimpleScaling = Environment.GetEnvironmentVariable("XSTREAM_SCALE") == "simple";
+
     [StructLayout(LayoutKind.Sequential)]
-    private struct Params { public float TexelX, TexelY, Sharpen, Pad, ScaleX, ScaleY, OffsetX, OffsetY; }
+    private struct Params { public float TexelX, TexelY, Sharpen, Pad, ScaleX, ScaleY, OffsetX, OffsetY, FootX, FootY, Pad2, Pad3; }
 
     [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hwnd, out RawRect rect);
     [StructLayout(LayoutKind.Sequential)] private struct RawRect { public int Left, Top, Right, Bottom; }
@@ -345,6 +375,8 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
                     videoRect = fit(_w, _h, _outW, _outH);
                     break;
             }
+            // How much of the picture one screen pixel covers (more than one source pixel when shrinking).
+            if (!SimpleScaling) { prm.FootX = prm.ScaleX / Math.Max(1, videoRect.W); prm.FootY = prm.ScaleY / Math.Max(1, videoRect.H); }
             SetParams(prm);
             _ctx.RSSetViewport(new Viewport(videoRect.X, videoRect.Y, videoRect.W, videoRect.H));
             _ctx.OMSetBlendState(null);
