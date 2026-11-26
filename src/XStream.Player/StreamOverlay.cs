@@ -30,22 +30,23 @@ public sealed class StreamOverlay : IVideoOverlay
         Resume, XboxButton, Type,
         Profile, MaxBitrate, Tips,
         Picture, Clarity, Enhance, Fullscreen, Stats,
-        Volume, Microphone, Party, Rumble, TriggerRumble,
+        Volume, Microphone, Party, Rumble, TriggerRumble, MouseSpeed,
         Screenshot, SaveClip, MoreSettings, Disconnect, TurnOff,
     }
 
     // Built per stream: typing and Turn off need a console (not cloud), Save clip needs instant replay on.
     private readonly (Item item, string? section)[] Layout;
 
-    private static (Item item, string? section)[] BuildLayout(bool console, bool clips)
+    private static (Item item, string? section)[] BuildLayout(bool console, bool clips, bool mouse)
     {
         var l = new List<(Item, string?)> { (Item.Resume, null), (Item.XboxButton, null) };
         if (console) l.Add((Item.Type, null));
         l.AddRange([
             (Item.Profile, "STREAM"), (Item.MaxBitrate, null), (Item.Tips, null),
             (Item.Picture, "PICTURE"), (Item.Clarity, null), (Item.Enhance, null), (Item.Fullscreen, null), (Item.Stats, null),
-            (Item.Volume, "SOUND & CONTROLLER"), (Item.Microphone, null), (Item.Party, null), (Item.Rumble, null), (Item.TriggerRumble, null),
-            (Item.Screenshot, "")]);
+            (Item.Volume, "SOUND & CONTROLLER"), (Item.Microphone, null), (Item.Party, null), (Item.Rumble, null), (Item.TriggerRumble, null)]);
+        if (mouse) l.Add((Item.MouseSpeed, null)); // keyboard and mouse can play: tune the mouse while playing
+        l.Add((Item.Screenshot, ""));
         if (clips) l.Add((Item.SaveClip, null));
         l.AddRange([(Item.MoreSettings, null), (Item.Disconnect, null)]);
         if (console) l.Add((Item.TurnOff, null));
@@ -53,6 +54,7 @@ public sealed class StreamOverlay : IVideoOverlay
     }
     private static readonly double[] BitrateSteps = [10, 15, 20, 25, 30, 40, 50, 60];
     private static readonly int[] RumbleSteps = [0, 25, 50, 75, 100];
+    private static readonly double[] MouseSteps = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.6, 0.7, 0.85, 1, 1.25, 1.5, 2, 2.5, 3, 4];
     private static readonly string[] ClarityNames = ["Off", "Low", "Medium", "High"];
 
     private readonly object _gate = new();
@@ -93,6 +95,14 @@ public sealed class StreamOverlay : IVideoOverlay
     public event Action? SaveClipRequested;
     /// <summary>"Party &amp; Discord chat…": show the console's guide (its Parties &amp; chats) and how to bring Discord voice in.</summary>
     public event Action? PartyRequested;
+    /// <summary>Real keyboard in use (keys go to the console): Esc is then the game's, held for this menu.</summary>
+    public Func<bool>? EscGoesToGame { get; set; }
+    /// <summary>Esc tapped while it's the game's: send it to the console.</summary>
+    public event Action? EscTapped;
+    public const double EscHoldMs = 500;
+    private double _escDownAt = -1;
+    private long _escPress;
+
     /// <summary>F9 down (true) / up (false): toggles mute, or push to talk.</summary>
     public event Action<bool>? MicKey;
     private bool _f9Down;
@@ -100,6 +110,13 @@ public sealed class StreamOverlay : IVideoOverlay
     /// <summary>Key released (from the window).</summary>
     public void OnKeyUp(int sym)
     {
+        if (sym == 27)
+        {
+            bool tap;
+            lock (_gate) { tap = _escDownAt >= 0 && Now - _escDownAt < EscHoldMs; _escDownAt = -1; }
+            if (tap) EscTapped?.Invoke();
+            return;
+        }
         if (sym != 0x40000042) return; // F9
         lock (_gate) { if (!_f9Down) return; _f9Down = false; }
         MicKey?.Invoke(false);
@@ -117,7 +134,7 @@ public sealed class StreamOverlay : IVideoOverlay
     /// <param name="clips">Instant replay is recording (Save clip in the menu).</param>
     public StreamOverlay(string consoleName, AppSettings settings, bool fullscreen, bool consoleControl = false, bool clips = false)
     {
-        Layout = BuildLayout(consoleControl, clips);
+        Layout = BuildLayout(consoleControl, clips, settings.KeyboardMouse != XStream.Core.Input.KeyboardMouseMode.Off);
         _canType = consoleControl;
         _itemRects = new SKRect[Layout.Length];
         _console = consoleName;
@@ -347,7 +364,22 @@ public sealed class StreamOverlay : IVideoOverlay
         switch (sym)
         {
             case F10: SaveClipRequested?.Invoke(); return true;
-            case Esc: ToggleMenu(); return true;
+            case Esc:
+                // Real keyboard in use: a tap is the game's Esc; hold it to open this menu (the game sees nothing).
+                if (!MenuOpen && EscGoesToGame?.Invoke() == true)
+                {
+                    long press;
+                    lock (_gate) { if (_escDownAt >= 0) return true; press = ++_escPress; _escDownAt = Now; } // repeats: already timing
+                    _ = Task.Delay((int)EscHoldMs).ContinueWith(_ =>
+                    {
+                        bool held;
+                        lock (_gate) { held = _escDownAt >= 0 && _escPress == press; if (held) _escDownAt = -2; } // -2: used for the menu
+                        if (held) ToggleMenu();
+                    });
+                    return true;
+                }
+                ToggleMenu();
+                return true;
             case F11: ToggleFullscreen(); return true;
             case F3: Set(NextStats(1)); return true;
             case F9:
@@ -472,6 +504,7 @@ public sealed class StreamOverlay : IVideoOverlay
                 break;
             case Item.Rumble: Set(s => s with { RumbleStrength = Step(RumbleSteps, s.RumbleStrength, dir, activate) }); break;
             case Item.TriggerRumble: Set(s => s with { TriggerRumble = !s.TriggerRumble }); break;
+            case Item.MouseSpeed: Set(s => s with { MouseSensitivity = Step(MouseSteps, Math.Round(s.MouseSensitivity, 2), activate ? 1 : dir, activate) }); break;
             case Item.Microphone:
                 // Off -> On (open mic) -> Push to talk -> Off.
                 Set(s => !s.Microphone ? s with { Microphone = true, PushToTalk = false }
@@ -914,7 +947,7 @@ public sealed class StreamOverlay : IVideoOverlay
         }
 
         // ---- Right column: settings
-        float rx = px + 640, rw = pw - 640 - 52, ry = py + 34, ih = Layout.Length switch { > 20 => 33, > 18 => 35, > 17 => 38, > 15 => 41, _ => 46 };
+        float rx = px + 640, rw = pw - 640 - 52, ry = py + 34, ih = Layout.Length switch { > 21 => 31, > 20 => 33, > 18 => 35, > 17 => 38, > 15 => 41, _ => 46 };
         using (var div = Fill(new SKColor(0x26, 0x2B, 0x33))) c.DrawRect(px + 610, py + 40, 1.5f, ph - 80, div);
         for (int i = 0; i < Layout.Length; i++)
         {
@@ -976,6 +1009,7 @@ public sealed class StreamOverlay : IVideoOverlay
         Item.Volume => "Volume",
         Item.Rumble => "Rumble",
         Item.TriggerRumble => "Trigger rumble",
+        Item.MouseSpeed => "Mouse sensitivity",
         Item.Microphone => "Microphone (chat)",
         Item.Party => "Party & Discord chat…",
         Item.Tips => "Suggested settings",
@@ -988,7 +1022,7 @@ public sealed class StreamOverlay : IVideoOverlay
     };
 
     private static bool Adjustable(Item item) => item is Item.Profile or Item.MaxBitrate or Item.Picture or Item.Clarity
-        or Item.Volume or Item.Rumble or Item.Stats;
+        or Item.Volume or Item.Rumble or Item.Stats or Item.MouseSpeed;
 
     /// <summary>Stats readout: Off → Simple → Detailed → Off (dir -1 goes the other way).</summary>
     private static Func<AppSettings, AppSettings> NextStats(int dir) => s =>
@@ -1019,6 +1053,7 @@ public sealed class StreamOverlay : IVideoOverlay
         Item.Microphone => !s.Microphone ? "Off" : s.PushToTalk ? "Push to talk" : "On",
         Item.Rumble => s.RumbleStrength <= 0 ? "Off" : $"{s.RumbleStrength}%",
         Item.TriggerRumble => s.TriggerRumble ? "On" : "Off",
+        Item.MouseSpeed => s.KeyboardMouseNative ? "Game's own" : $"{s.MouseSensitivity:0.##}×",
         _ => null,
     };
 

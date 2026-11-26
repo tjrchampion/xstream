@@ -14,7 +14,7 @@
     <!-- Exe icon on Windows: Explorer, taskbar, and the SDL video window (same exe). -->
     <ApplicationIcon>Assets/xstream.ico</ApplicationIcon>
     <Product>XStream</Product>
-    <Version>0.5.0</Version>
+    <Version>0.5.1</Version>
     <Description>Xbox remote play client built around stream stability</Description>
   </PropertyGroup>
   <!-- Release publish (scripts/publish-windows.sh passes XsTrim=true): drop framework code XStream never uses.

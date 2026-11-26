@@ -257,6 +257,9 @@ public sealed unsafe class VideoWindow : IDisposable
         SDL_SetHint("SDL_RENDER_DRIVER", renderer);
         SDL_SetHint("SDL_RENDER_VSYNC", o.VSync ? "1" : "0");
         SDL_SetHint("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS", "0");
+        // macOS swallows the click that brings a window back to the front; let it through, so one click on the
+        // picture both refocuses and resumes keyboard-and-mouse play.
+        SDL_SetHint("SDL_MOUSE_FOCUS_CLICKTHROUGH", "1");
         SDL_SetHint("SDL_RENDER_SCALE_QUALITY", "1");
         if (SDL_InitSubSystem(InitVideo) != 0) throw new InvalidOperationException("SDL video init failed: " + Err());
         // The console sends HD video in BT.709 colour. SDL's default converts YUV with SD (BT.601) maths, which

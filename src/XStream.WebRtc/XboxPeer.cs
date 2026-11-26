@@ -410,10 +410,26 @@ public sealed class XboxPeer : IAsyncDisposable
         try { pc.SendAudio(samples, opusFrame); } catch { /* connection closing */ }
     }
 
+    private readonly object _inputSend = new();
+
     public void SendGamepad(GamepadState[] pads)
     {
         if (!InputReady) return;
-        _input!.send(InputPacket.Gamepad(Interlocked.Increment(ref _inputSeq), NowMs, pads));
+        lock (_inputSend) _input!.send(InputPacket.Gamepad(Interlocked.Increment(ref _inputSeq), NowMs, pads));
+    }
+
+    /// <summary>Native mouse: relative movement, wheel and buttons (experimental; sent from the window thread).</summary>
+    public void SendMouse(int dx, int dy, int wheelX, int wheelY, InputPacket.MouseButtons buttons)
+    {
+        if (!InputReady) return;
+        lock (_inputSend) _input!.send(InputPacket.Mouse(Interlocked.Increment(ref _inputSeq), NowMs, dx, dy, wheelX, wheelY, buttons));
+    }
+
+    /// <summary>Native keyboard: Windows virtual-key codes going down or up (experimental).</summary>
+    public void SendKeys(IReadOnlyList<(byte Vk, bool Down)> keys)
+    {
+        if (!InputReady || keys.Count == 0) return;
+        lock (_inputSend) _input!.send(InputPacket.Keyboard(Interlocked.Increment(ref _inputSeq), NowMs, keys));
     }
 
     /// <summary>

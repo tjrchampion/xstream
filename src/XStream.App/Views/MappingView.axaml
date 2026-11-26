@@ -347,7 +347,7 @@
                   <TextBlock FontSize="13" Text="Mouse sensitivity" />
                   <TextBlock Grid.Column="1" Classes="mono" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Text="{Binding MouseSensitivityText}" />
                 </Grid>
-                <Slider Minimum="0.25" Maximum="4" SmallChange="0.05" LargeChange="0.25" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding MouseSensitivity}" />
+                <Slider Minimum="0.1" Maximum="4" SmallChange="0.05" LargeChange="0.25" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding MouseSensitivity}" />
               </StackPanel>
               <Grid ColumnDefinitions="*,Auto">
                 <StackPanel Spacing="1">
@@ -355,6 +355,14 @@
                   <TextBlock Classes="caption" Text="Mouse forward looks down" />
                 </StackPanel>
                 <ToggleSwitch Grid.Column="1" IsChecked="{Binding MouseInvertY}" OnContent="" OffContent="" VerticalAlignment="Center" />
+              </Grid>
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Spacing="1">
+                  <TextBlock FontSize="13" Text="Real keyboard and mouse (experimental)" />
+                  <TextBlock Classes="caption" TextWrapping="Wrap" MaxWidth="260"
+                             Text="Send keys and the mouse to the console as a real keyboard and mouse, for games and apps that support them (Edge, Flight Simulator, Halo…), instead of as a controller. Tap Esc for the game; hold Esc for Vexel's menu. F3 and F9-F12 stay Vexel's." />
+                </StackPanel>
+                <ToggleSwitch Grid.Column="1" IsChecked="{Binding KeyboardNative}" OnContent="" OffContent="" VerticalAlignment="Center" />
               </Grid>
             </StackPanel>
           </Border>

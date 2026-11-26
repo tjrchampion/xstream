@@ -49,12 +49,64 @@ public sealed class KeyboardMouseInput : IWindowInput
     }
 
     public static KeyboardMouseInput FromSettings(AppSettings s, Action<bool>? setRelativeMouse = null) =>
-        new(s.KeyboardMouse, Bindings(s), Mouse(s), setRelativeMouse);
+        new(s.KeyboardMouse, Bindings(s), Mouse(s), setRelativeMouse) { Native = s.KeyboardMouseNative };
+
+    // ---- Native: a real keyboard and mouse for the console (experimental) ------------------------------
+    /// <summary>Send keys and the mouse to the console as themselves (the virtual controller stays neutral).</summary>
+    public bool Native { get => _native; set { if (!value) ReleaseNative(); _native = value; } }
+    private volatile bool _native;
+    /// <summary>Keys going down/up (Windows virtual-key codes). Window thread.</summary>
+    public Action<IReadOnlyList<(byte Vk, bool Down)>>? NativeKeys { get; set; }
+    /// <summary>Mouse movement (relative), wheel (120 per notch) and buttons held. Window thread.</summary>
+    public Action<int, int, int, int, XStream.Core.Xbox.InputPacket.MouseButtons>? NativeMouse { get; set; }
+    private readonly HashSet<byte> _vkDown = [];
+    private XStream.Core.Xbox.InputPacket.MouseButtons _mouseDown;
+
+    /// <summary>Let go of everything the console thinks is held (menu opened, focus lost, native turned off).</summary>
+    private void ReleaseNative()
+    {
+        if (_vkDown.Count > 0) { NativeKeys?.Invoke(_vkDown.Select(v => (v, false)).ToList()); _vkDown.Clear(); }
+        if (_mouseDown != 0) { _mouseDown = 0; NativeMouse?.Invoke(0, 0, 0, 0, 0); }
+    }
+
+    /// <summary>SDL scancode -> Windows virtual-key code (0 = not sent). Keys Vexel keeps (Esc, F3, F9-F12) aren't sent.</summary>
+    public static byte Vk(int sc) => sc switch
+    {
+        >= 4 and <= 29 => (byte)(0x41 + sc - 4),          // A-Z
+        >= 30 and <= 38 => (byte)(0x31 + sc - 30),        // 1-9
+        39 => 0x30,                                       // 0
+        40 => 0x0D, 42 => 0x08, 43 => 0x09, 44 => 0x20,   // Enter, Backspace, Tab, Space
+        45 => 0xBD, 46 => 0xBB, 47 => 0xDB, 48 => 0xDD, 49 => 0xDC, 51 => 0xBA, 52 => 0xDE, 53 => 0xC0, 54 => 0xBC, 55 => 0xBE, 56 => 0xBF,
+        57 => 0x14,                                       // Caps Lock
+        58 or 59 or 61 or 62 or 63 or 64 or 65 => (byte)(0x70 + sc - 58), // F1, F2, F4-F8 (F3, F9-F12 are Vexel's)
+        73 => 0x2D, 74 => 0x24, 75 => 0x21, 76 => 0x2E, 77 => 0x23, 78 => 0x22, // Insert Home PgUp Delete End PgDn
+        79 => 0x27, 80 => 0x25, 81 => 0x28, 82 => 0x26,   // Right Left Down Up
+        >= 89 and <= 97 => (byte)(0x61 + sc - 89),        // keypad 1-9
+        98 => 0x60, 88 => 0x0D,                           // keypad 0, keypad Enter
+        224 => 0xA2, 225 => 0xA0, 226 => 0xA4, 227 => 0x5B, 228 => 0xA3, 229 => 0xA1, 230 => 0xA5, 231 => 0x5C, // Ctrl Shift Alt Win, left/right
+        _ => 0,
+    };
+
+    private void NativeKey(int scancode, bool down, bool repeat)
+    {
+        byte vk = Vk(scancode);
+        if (vk == 0 || repeat) return;
+        if (down ? !_vkDown.Add(vk) : !_vkDown.Remove(vk)) return;
+        NativeKeys?.Invoke([(vk, down)]);
+    }
+
+    private static XStream.Core.Xbox.InputPacket.MouseButtons MouseBit(int sdlButton) => sdlButton switch
+    {
+        1 => XStream.Core.Xbox.InputPacket.MouseButtons.Left, 2 => XStream.Core.Xbox.InputPacket.MouseButtons.Middle,
+        3 => XStream.Core.Xbox.InputPacket.MouseButtons.Right, 4 => XStream.Core.Xbox.InputPacket.MouseButtons.X1,
+        5 => XStream.Core.Xbox.InputPacket.MouseButtons.X2, _ => 0,
+    };
 
     /// <summary>Settings changed (launcher or menu): new mode, keys and mouse feel, live.</summary>
     public void Configure(AppSettings s)
     {
         Mode = s.KeyboardMouse;
+        Native = s.KeyboardMouseNative;
         var cur = _setup;
         var mouse = Mouse(s);
         bool sameMouse = cur.Mouse.Sensitivity == mouse.Sensitivity && cur.Mouse.InvertY == mouse.InvertY;
@@ -74,6 +126,16 @@ public sealed class KeyboardMouseInput : IWindowInput
 
     /// <summary>The mouse is captured and keys drive the controller.</summary>
     public bool Captured => _captured;
+
+    private long _motionEvents, _motionCounts;
+    private volatile float _peakStick;
+    /// <summary>For the session log: mouse-motion events seen, counts taken while captured, and the biggest stick deflection from the mouse, since the last call.</summary>
+    public (long Events, long Counts, float PeakStick) TakeMouseStats()
+    {
+        var r = (Interlocked.Exchange(ref _motionEvents, 0), Interlocked.Exchange(ref _motionCounts, 0), _peakStick);
+        _peakStick = 0;
+        return r;
+    }
     /// <summary>The virtual controller is in use (set each poll by the input pump from <see cref="Mode"/> and the real pads).</summary>
     public bool Active { get => _active; set => _active = value; }
 
@@ -99,13 +161,17 @@ public sealed class KeyboardMouseInput : IWindowInput
             {
                 int scancode = (int)U32(ev, 16);
                 if ((uint)scancode < KeyNames.MouseBase) Volatile.Write(ref _down[scancode], type == EvKeyDown);
+                if (_native && _captured && !IsBlocked()) NativeKey(scancode, type == EvKeyDown, ev[13] != 0);
                 return false;
             }
             case EvMotion:
+                Interlocked.Increment(ref _motionEvents);
                 if (_captured && U32(ev, 12) != TouchMouseId)
                 {
+                    Interlocked.Add(ref _motionCounts, Math.Abs((int)U32(ev, 28)) + Math.Abs((int)U32(ev, 32)));
                     Interlocked.Add(ref _dx, (int)U32(ev, 28));
                     Interlocked.Add(ref _dy, (int)U32(ev, 32));
+                    if (_native && !IsBlocked()) NativeMouse?.Invoke((int)U32(ev, 28), (int)U32(ev, 32), 0, 0, _mouseDown);
                 }
                 return false;
             case EvButtonDown or EvButtonUp:
@@ -117,6 +183,11 @@ public sealed class KeyboardMouseInput : IWindowInput
                 if (_captured)
                 {
                     if (button is >= 1 and <= 5) Volatile.Write(ref _down[code], down);
+                    if (_native && !IsBlocked() && MouseBit(button) is var bit and not 0)
+                    {
+                        _mouseDown = down ? _mouseDown | bit : _mouseDown & ~bit;
+                        NativeMouse?.Invoke(0, 0, 0, 0, _mouseDown);
+                    }
                     return true;
                 }
                 if (button is >= 1 and <= 5) Volatile.Write(ref _down[code], false);
@@ -127,6 +198,7 @@ public sealed class KeyboardMouseInput : IWindowInput
                 if (!_captured || U32(ev, 12) == TouchMouseId) return false;
                 int y = (int)U32(ev, 20);
                 if (U32(ev, 24) == 1) y = -y; // SDL_MOUSEWHEEL_FLIPPED
+                if (_native && !IsBlocked()) { NativeMouse?.Invoke(0, 0, 0, y * 120, _mouseDown); return true; }
                 if (y > 0) Interlocked.Increment(ref _wheelUp);
                 else if (y < 0) Interlocked.Increment(ref _wheelDown);
                 return true;
@@ -134,29 +206,42 @@ public sealed class KeyboardMouseInput : IWindowInput
                 if (ev[12] == FocusLost)
                 {
                     _focused = false;
-                    _resume = false;
+                    // Playing when something took the focus (a permission prompt, another app): carry on when it comes back.
+                    _resume = _captured || _resume;
                     Release();
                     Array.Clear(_down); // keys let go while away never send their key-up here
                 }
-                else if (ev[12] == FocusGained) _focused = true;
+                else if (ev[12] == FocusGained)
+                {
+                    _focused = true;
+                    if (_captured) _reassertAt = Environment.TickCount64 + 50; // captured during the focusing click: apply again now we're in front
+                    if (!_resume) _hinted = false; // waiting for a click again: say so
+                }
                 return false;
         }
         return false;
     }
 
+    private long _reassertAt;
+
     /// <summary>Every window loop: let go when something else needs the input, take it back after the menu / typing.</summary>
     public void Tick()
     {
+        if (_reassertAt > 0 && Environment.TickCount64 >= _reassertAt)
+        {
+            _reassertAt = 0;
+            if (_captured && _focused) { _setRelative(false); _setRelative(true); } // SDL ignores "on" when it thinks it's on already
+        }
         bool active = _active, blocked = IsBlocked();
         if (_captured && (blocked || !active))
         {
             Release();
             _resume = blocked && active && _focused; // menu, typing: back to the game afterwards without another click
         }
-        else if (!_captured && _resume && !blocked)
+        else if (!_captured && _resume && !blocked && _focused) // (while away, keep the resume for when the focus comes back)
         {
             _resume = false;
-            if (active && _focused) Capture();
+            if (active) Capture();
         }
         if (active && !_hinted && !_captured && !blocked)
         {
@@ -169,6 +254,9 @@ public sealed class KeyboardMouseInput : IWindowInput
     {
         if (_captured) return;
         _setRelative(true);
+        // macOS: relative mode switched on while the window is still coming to the front (the click that focuses it)
+        // hides the pointer but delivers no movement. Apply it again a moment later, when the window is key.
+        _reassertAt = Environment.TickCount64 + 150;
         Interlocked.Exchange(ref _dx, 0); Interlocked.Exchange(ref _dy, 0);
         _captured = true;
     }
@@ -177,6 +265,7 @@ public sealed class KeyboardMouseInput : IWindowInput
     public void Release()
     {
         if (!_captured) return;
+        ReleaseNative();
         _captured = false;
         _setRelative(false);
         for (int c = KeyNames.MouseBase; c < KeyNames.CodeCount; c++) Volatile.Write(ref _down[c], false);
@@ -197,7 +286,7 @@ public sealed class KeyboardMouseInput : IWindowInput
         if (wu != _seenWheelUp) { _seenWheelUp = wu; _wheelUpUntil = nowMs + WheelPulseMs; }
         if (wd != _seenWheelDown) { _seenWheelDown = wd; _wheelDownUntil = nowMs + WheelPulseMs; }
 
-        if (!_captured || IsBlocked())
+        if (!_captured || IsBlocked() || _native) // native: the console gets a real keyboard and mouse instead
         {
             if (_wasEngaged) { s.Mouse.Reset(); _wasEngaged = false; }
             return default;
@@ -209,6 +298,8 @@ public sealed class KeyboardMouseInput : IWindowInput
         var keys = s.Bindings.Evaluate(_snap);
         var (mx, my) = s.Mouse.Update(dx, dy, dt);
         var (rx, ry) = Clamp(keys.RightX + mx, keys.RightY + my);
+        float m = MathF.Max(MathF.Abs(mx), MathF.Abs(my));
+        if (m > _peakStick) _peakStick = m;
         return keys with { RightX = rx, RightY = ry };
     }
 

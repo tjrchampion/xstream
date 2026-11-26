@@ -300,7 +300,11 @@ public sealed class PlayerSession
                     // While it's in use, typed letters are game keys: typing to the console is from the menu only.
                     var km = kbm = KeyboardMouseInput.FromSettings(live);
                     km.Blocked = () => ov0.HoldsInput;
-                    km.Hint += () => ov0.ShowToast("Keyboard and mouse: click the picture to play. Esc for the menu", 5000);
+                    km.NativeKeys = keys => cur?.SendKeys(keys);
+                    ov0.EscGoesToGame = () => km.Native && km.Captured && km.Active;
+                    ov0.EscTapped += () => { cur?.SendKeys([(0x1B, true)]); _ = Task.Delay(60).ContinueWith(_ => cur?.SendKeys([(0x1B, false)])); };
+                    km.NativeMouse = (dx, dy, wx, wy, b) => cur?.SendMouse(dx, dy, wx, wy, b);
+                    km.Hint += () => ov0.ShowToast(km.Native ? "Keyboard and mouse: click the picture to play. Hold Esc for the menu" : "Keyboard and mouse: click the picture to play. Esc for the menu", 5000);
                     window.Input = km;
                     window.TextInput = t => { if (!km.Active || ov0.Typing) ov0.OnText(t); };
                     if (replay is not null)
@@ -329,14 +333,29 @@ public sealed class PlayerSession
                         overlay.TurnOffRequested += () => { TurnOffAfter = true; Stop(); };
                         _ = remote.IdAsync(); // look the console up now, so the first keystroke goes straight out
                     }
-                    // XSTREAM_SCREENSHOT=file.png;seconds (testing): capture what the renderer shows, to check it.
-                    if (Environment.GetEnvironmentVariable("XSTREAM_SCREENSHOT")?.Split(';') is [var shotPath, var shotAt])
-                        _ = Task.Delay(TimeSpan.FromSeconds(double.Parse(shotAt, System.Globalization.CultureInfo.InvariantCulture)))
-                            .ContinueWith(_ => win.RequestScreenshot((px, w, h) =>
+                    // XSTREAM_SCREENSHOT=file.png;seconds[|file2.png;seconds] (testing): capture what the renderer shows, to check it.
+                    foreach (var shot in (Environment.GetEnvironmentVariable("XSTREAM_SCREENSHOT") ?? "").Split('|', StringSplitOptions.RemoveEmptyEntries))
+                        if (shot.Split(';') is [var shotPath, var shotAt])
+                            _ = Task.Delay(TimeSpan.FromSeconds(double.Parse(shotAt, System.Globalization.CultureInfo.InvariantCulture)))
+                                .ContinueWith(_ => win.RequestScreenshot((px, w, h) =>
+                                {
+                                    Screenshots.SaveTo(px, w, h, shotPath);
+                                    Log?.Invoke($"Screenshot {w}x{h}: {shotPath}");
+                                }));
+                    // XSTREAM_TEST_KEYS=5B@6,1B@14 (testing): press these keys (hex Windows virtual-key codes) on the console's
+                    // native keyboard at these seconds, to check the console takes keyboard input.
+                    foreach (var key in (Environment.GetEnvironmentVariable("XSTREAM_TEST_KEYS") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
+                        if (key.Split('@') is [var vkHex, var at])
+                        {
+                            byte vk = Convert.ToByte(vkHex, 16);
+                            _ = Task.Delay(TimeSpan.FromSeconds(double.Parse(at, System.Globalization.CultureInfo.InvariantCulture))).ContinueWith(async _ =>
                             {
-                                Screenshots.SaveTo(px, w, h, shotPath);
-                                Log?.Invoke($"Screenshot {w}x{h}: {shotPath}");
-                            }));
+                                cur?.SendKeys([(vk, true)]);
+                                await Task.Delay(120);
+                                cur?.SendKeys([(vk, false)]);
+                                Log?.Invoke($"Test: pressed native key 0x{vk:X2}");
+                            });
+                        }
                     overlay.ScreenshotRequested += () => win.RequestScreenshot((px, w, h) => Task.Run(() =>
                     {
                         try
@@ -673,6 +692,13 @@ public sealed class PlayerSession
                         }
                     }
                     else if (tick % 300 == 1 && XStream.Core.Native.WindowsStreaming.Battery() is { OnBattery: false }) batteryWarned = 101;
+                }
+                // Keyboard and mouse, every 10 s while in use: is mouse movement arriving, and moving the stick?
+                if (kbm is { } kk && tick % 100 == 1)
+                {
+                    var (ev, counts, peak) = kk.TakeMouseStats();
+                    if (kk.Active && (kk.Captured || ev > 0))
+                        Log?.Invoke($"Keyboard and mouse: {(kk.Captured ? "captured" : "not captured")}, {ev} mouse moves, {counts} counts while captured, right stick up to {peak:0.00}");
                 }
                 if (Stage == PlayerStage.Streaming && !reconnecting && s.Link == LinkState.Connected && o.CheckSeconds <= 0)
                 {

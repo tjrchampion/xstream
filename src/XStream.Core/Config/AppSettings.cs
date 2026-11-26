@@ -90,6 +90,11 @@ public sealed record AppSettings
     public bool Microphone { get; init; }
     /// <summary>Push to talk: the mic only sends while <see cref="MicButton"/> (or F9) is held. Off: open mic, F9 / the button mutes.</summary>
     public bool PushToTalk { get; init; }
+    /// <summary>
+    /// Real keyboard and mouse (experimental): keys and the mouse go to the console as a keyboard and mouse, for
+    /// games and apps that support them, instead of being turned into a controller.
+    /// </summary>
+    public bool KeyboardMouseNative { get; init; }
     /// <summary>Controller button for the mic ("" = none): toggles mute, or is held to talk. Paddle1-4 suit it best (they aren't sent to the game).</summary>
     public string MicButton { get; init; } = "";
     /// <summary>Microphone to use (its name as the system lists it); "" = the system default.</summary>
@@ -134,7 +139,9 @@ public sealed record AppSettings
     /// <summary>Keyboard-and-mouse keys, as changes from the default layout ("A=Space,RightTrigger=MouseLeft"; see KeyboardBindings).</summary>
     public string KeyboardMouseBindings { get; init; } = "";
     /// <summary>Mouse aim speed on the right stick (1 = default; 0.25 to 4).</summary>
-    public double MouseSensitivity { get; init; } = 1;
+    public double MouseSensitivity { get; init; } = DefaultMouseSensitivity;
+    /// <summary>macOS reports much bigger mouse movements than Windows (about 7,000 a second measured in normal use): start lower there.</summary>
+    public static double DefaultMouseSensitivity => OperatingSystem.IsMacOS() ? 0.35 : 1;
     /// <summary>Mouse forward looks down.</summary>
     public bool MouseInvertY { get; init; }
     /// <summary>
@@ -183,7 +190,7 @@ public sealed record AppSettings
         }
     }
 
-    public const int CurrentVersion = 5;
+    public const int CurrentVersion = 6;
 
     /// <summary>
     /// Every setting is written to the file, so a changed default never reached anyone who already had one. Settings
@@ -205,6 +212,8 @@ public sealed record AppSettings
             s = s with { GyroAim = false };
         if (s.SettingsVersion < 5 && s.Resolution is StreamResolution.R1080 or StreamResolution.Auto) // 0.5.0: Quality is Sharpest or Fastest
             s = s with { Resolution = StreamResolution.Max }; // the console ignored 1080p at home and sent its top tier anyway
+        if (s.SettingsVersion < 6 && s.MouseSensitivity == 1) // 0.5.1: a lower default on macOS (no change elsewhere)
+            s = s with { MouseSensitivity = DefaultMouseSensitivity };
         return s with { SettingsVersion = CurrentVersion };
     }
 

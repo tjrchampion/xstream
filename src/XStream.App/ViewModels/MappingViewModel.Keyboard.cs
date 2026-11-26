@@ -118,6 +118,9 @@ public sealed partial class MappingViewModel
     [ObservableProperty] public partial int KeyModeIndex { get; set; } = 1;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(MouseSensitivityText))] public partial double MouseSensitivity { get; set; } = 1;
     [ObservableProperty] public partial bool MouseInvertY { get; set; }
+    /// <summary>Real keyboard and mouse for the console (experimental) instead of a controller.</summary>
+    [ObservableProperty] public partial bool KeyboardNative { get; set; }
+    partial void OnKeyboardNativeChanged(bool value) => SaveKeyboard();
     public string MouseSensitivityText => $"{MouseSensitivity:0.00}x";
     partial void OnKeyModeIndexChanged(int value) => SaveKeyboard();
     partial void OnMouseSensitivityChanged(double value) => SaveKeyboard();
@@ -131,8 +134,9 @@ public sealed partial class MappingViewModel
             var s = _store.Current;
             _keys = KeyboardBindings.Parse(s.KeyboardMouseBindings);
             KeyModeIndex = Math.Clamp((int)s.KeyboardMouse, 0, 2);
-            MouseSensitivity = Math.Clamp(s.MouseSensitivity, 0.25, 4);
+            MouseSensitivity = Math.Clamp(s.MouseSensitivity, 0.1, 4);
             MouseInvertY = s.MouseInvertY;
+            KeyboardNative = s.KeyboardMouseNative;
         }
         finally { _loadingKeys = false; }
         ShowKeys();
@@ -145,7 +149,7 @@ public sealed partial class MappingViewModel
         string text = _keys.ToText();
         var mode = (KeyboardMouseMode)Math.Clamp(KeyModeIndex, 0, 2);
         double sens = Math.Round(MouseSensitivity, 2);
-        Save(s => s with { KeyboardMouseBindings = text, KeyboardMouse = mode, MouseSensitivity = sens, MouseInvertY = MouseInvertY });
+        Save(s => s with { KeyboardMouseBindings = text, KeyboardMouse = mode, MouseSensitivity = sens, MouseInvertY = MouseInvertY, KeyboardMouseNative = KeyboardNative });
     }
 
     /// <summary>Tag every button with its keys.</summary>

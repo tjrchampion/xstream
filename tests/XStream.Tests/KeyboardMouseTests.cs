@@ -161,13 +161,15 @@ static class KeyboardMouseTests
             True(k.Captured, "back after the menu");
             Eq(0f, k.Read(4).RightTrigger);                           // the menu click wasn't kept as held
 
-            // Focus lost: released, keys forgotten, and no automatic recapture.
+            // Focus lost while playing (a permission prompt, another app): released and keys forgotten; when the
+            // focus comes back, play carries on without another click.
             k.OnEvent(Focus(lost: true));
             True(!k.Captured, "released on focus loss");
+            k.Tick();
+            True(!k.Captured, "stays released while away");
             k.OnEvent(Focus(lost: false));
             k.Tick();
-            True(!k.Captured, "needs a click after focus loss");
-            k.OnEvent(Button(true, 1)); k.OnEvent(Button(false, 1));
+            True(k.Captured, "back when the focus returns");
             Eq(0f, k.Read(5).LeftY);                                  // W forgotten
             // A controller takes over (Auto): released.
             k.Active = false;

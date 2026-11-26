@@ -351,6 +351,44 @@ var tests = new List<(string name, Action body)>
         for (int i = 1; i <= 100; i++) False(fine.Tick(new XStream.Core.Diagnostics.CheckSample(30, 50, 0, 4, 1), "Home network"), "clean: never told");
         Eq(XStream.Core.Diagnostics.CheckLevel.Good, fine.Latest!.Level);
     }),
+    ("Real keyboard: tap Esc goes to the game, hold Esc opens the menu", () =>
+    {
+        var ov = new XStream.Player.StreamOverlay("Xbox", new AppSettings(), false) { EscGoesToGame = () => true };
+        int taps = 0; ov.EscTapped += () => taps++;
+        ov.OnKey(27); ov.OnKeyUp(27);
+        Eq(1, taps); False(ov.MenuOpen, "tap: no menu");
+        ov.OnKey(27); Thread.Sleep((int)XStream.Player.StreamOverlay.EscHoldMs + 250);
+        True(ov.MenuOpen, "held: menu");
+        ov.OnKeyUp(27);
+        Eq(1, taps); // the hold isn't also a tap
+        ov.OnKey(27);
+        False(ov.MenuOpen, "Esc closes the menu as usual");
+        var plain = new XStream.Player.StreamOverlay("Xbox", new AppSettings(), false);
+        plain.OnKey(27);
+        True(plain.MenuOpen, "controller mode: Esc opens the menu at once");
+        Eq(OperatingSystem.IsMacOS() ? 0.35 : 1.0, AppSettings.Migrate(new AppSettings { SettingsVersion = 5, MouseSensitivity = 1 }).MouseSensitivity);
+        Eq(2.0, AppSettings.Migrate(new AppSettings { SettingsVersion = 5, MouseSensitivity = 2 }).MouseSensitivity);
+    }),
+    ("Native mouse and keyboard packets (reference layout)", () =>
+    {
+        var m = InputPacket.Mouse(7, 1.5, -3, 4, 0, 120, InputPacket.MouseButtons.Left | InputPacket.MouseButtons.Right);
+        Eq(14 + 1 + 18, m.Length);
+        Eq((ushort)32, System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(m));
+        Eq(7u, System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(m.AsSpan(2)));
+        Eq((byte)1, m[14]);
+        Eq(-3, System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(m.AsSpan(15)));
+        Eq(4, System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(m.AsSpan(19)));
+        Eq(120, System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(m.AsSpan(27)));
+        Eq((byte)3, m[31]); Eq((byte)0, m[32]); // buttons Left|Right; type 0 = relative
+        var k = InputPacket.Keyboard(8, 2, [(0x41, true), (0x0D, false)]);
+        Eq((ushort)64, System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(k));
+        True(k.AsSpan(14).SequenceEqual(new byte[] { 2, 2, 1, 0x41, 2, 0, 0x0D }), "count, then type 2 / pressed / vk");
+        Eq((byte)0x41, XStream.Core.Input.KeyboardMouseInput.Vk(4));   // A
+        Eq((byte)0x26, XStream.Core.Input.KeyboardMouseInput.Vk(82));  // Up
+        Eq((byte)0x0D, XStream.Core.Input.KeyboardMouseInput.Vk(40));  // Enter
+        Eq((byte)0, XStream.Core.Input.KeyboardMouseInput.Vk(41));     // Esc stays Vexel's
+        Eq((byte)0, XStream.Core.Input.KeyboardMouseInput.Vk(60));     // F3 stays Vexel's
+    }),
     ("Wi-Fi details from netsh (Windows)", () =>
     {
         const string text = """

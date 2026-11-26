@@ -22,7 +22,10 @@ public readonly record struct GamepadState(
 /// </summary>
 public static class InputPacket
 {
-    public const ushort ReportMetadata = 1, ReportGamepad = 2, ReportClientMetadata = 8, ReportVibration = 128;
+    public const ushort ReportMetadata = 1, ReportGamepad = 2, ReportClientMetadata = 8, ReportMouse = 32, ReportKeyboard = 64, ReportVibration = 128;
+
+    /// <summary>Mouse buttons in a native mouse report (the xbox.com player's values).</summary>
+    [Flags] public enum MouseButtons : byte { None = 0, Left = 1, Right = 2, Middle = 4, X1 = 8, X2 = 16 }
     private const int HeaderSize = 14;
 
     /// <summary>First packet after the message-channel handshake.</summary>
@@ -55,6 +58,39 @@ public static class InputPacket
             BinaryPrimitives.WriteUInt32BigEndian(s[19..], 1);    // virtual physicality (big-endian in the reference)
             o += 23;
         }
+        return p;
+    }
+
+    /// <summary>
+    /// Native mouse (report 32): u8 count, then per record u32 X, u32 Y, u32 wheelX, u32 wheelY (little-endian;
+    /// relative deltas as two's complement), u8 buttons, u8 type (0 = relative). Layout from xbox-xcloud-player packet.ts;
+    /// type and button values from the xbox.com player (Relative = 0, Absolute = 1; Left 1, Right 2, Middle 4, X1 8, X2 16).
+    /// </summary>
+    public static byte[] Mouse(uint sequence, double nowMs, int dx, int dy, int wheelX, int wheelY, MouseButtons buttons)
+    {
+        var p = new byte[HeaderSize + 1 + 18];
+        WriteHeader(p, ReportMouse, sequence, nowMs);
+        var s = p.AsSpan(HeaderSize);
+        s[0] = 1;
+        BinaryPrimitives.WriteInt32LittleEndian(s[1..], dx);
+        BinaryPrimitives.WriteInt32LittleEndian(s[5..], dy);
+        BinaryPrimitives.WriteInt32LittleEndian(s[9..], wheelX);
+        BinaryPrimitives.WriteInt32LittleEndian(s[13..], wheelY);
+        s[17] = (byte)buttons;
+        s[18] = 0; // type: 0 = relative, 1 = absolute (the web player's enum; absolute needs "absolute mouse capable" first)
+        return p;
+    }
+
+    /// <summary>
+    /// Native keyboard (report 64): u8 count, then per key u8 type (2 = Windows virtual key), u8 pressed, u8 key code.
+    /// </summary>
+    public static byte[] Keyboard(uint sequence, double nowMs, IReadOnlyList<(byte Vk, bool Down)> keys)
+    {
+        var p = new byte[HeaderSize + 1 + 3 * keys.Count];
+        WriteHeader(p, ReportKeyboard, sequence, nowMs);
+        int o = HeaderSize;
+        p[o++] = (byte)keys.Count;
+        foreach (var (vk, down) in keys) { p[o++] = 2; p[o++] = down ? (byte)1 : (byte)0; p[o++] = vk; }
         return p;
     }
 
