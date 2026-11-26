@@ -50,7 +50,7 @@ Vexel streams your Xbox console over your home network. It's built for playing w
   - turns off Wi-Fi background scans while streaming
   - warns when the battery is low
 - **Discord status:** "Playing *game* via Vexel" while you stream.
-- **Safe updates:** new versions install themselves, and every update is checked against Vexel's signature first.
+- **Safe updates:** new versions install themselves on Windows and Mac, and every update is checked against Vexel's signature first.
 
 ## Screenshots
 
@@ -96,9 +96,9 @@ From then on, Vexel updates itself: new versions download in the background and 
 
 1. Download **Vexel-mac.zip** from the [latest release](../../releases/latest) and open it.
 2. Drag **Vexel** to Applications.
-3. The first time, right-click Vexel and choose **Open**, then **Open** again. Vexel isn't notarized by Apple, so macOS asks once.
+3. The first time, right-click Vexel and choose **Open**, then **Open** again. Vexel isn't notarized by Apple (that needs a paid Apple developer account), so macOS asks once.
 
-The Mac version doesn't update itself yet: it tells you when there's a new version and links to the download.
+From then on Vexel updates itself, like the Windows version: new versions download in the background, are checked against Vexel's signature, and install when you restart. Updates don't bring the macOS prompt back.
 
 ### Cloud gaming (no console needed)
 
@@ -155,7 +155,7 @@ Typing, Turn off, Restart and Jump back in use the console's remote features (th
 
 ### Shortcuts
 
-Add Vexel as a game in Steam ("Add a non-Steam game"), Armoury Crate or Playnite, with launch options:
+Add Vexel as a game in Steam ("Add a non-Steam game"), Armoury Crate or Playnite, with launch options. If Vexel is already open, the shortcut hands the stream to it instead of opening a second copy.
 
 | Launch options | What it does |
 |---|---|

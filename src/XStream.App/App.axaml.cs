@@ -251,6 +251,20 @@ public partial class App : Application
             window.Closing += (_, _) => { if (vm.Stream.IsRunning) launcher.Stop(); };
             desktop.Exit += (_, _) => { launcher.Stop(); launcher.DropStandby(); _pad.Dispose(); _xbox.Dispose(); };
 
+            // Another launch handed over (a shortcut, or Vexel opened again): come to the front and start its stream.
+            SingleInstance.Listen(args => Dispatcher.UIThread.Post(async () =>
+            {
+                Console.Error.WriteLine($"Hand-over from another launch: {(args.Length == 0 ? "(no arguments)" : string.Join(' ', args))}");
+                if (!window.IsVisible) window.Show();
+                if (window.WindowState == WindowState.Minimized) window.WindowState = settings.Current.LauncherFullscreen ? WindowState.FullScreen : WindowState.Normal;
+                window.Activate();
+                var handed = LaunchArgs.Parse(args);
+                if (!handed.Any || !vm.IsSignedIn) return;
+                if (vm.Stream.IsRunning) { vm.Stream.ReturnToGameCommand.Execute(null); return; } // already streaming: back to it
+                await vm.LaunchAsync(handed);
+            }));
+            desktop.Exit += (_, _) => SingleInstance.Stop();
+
             window.Opened += async (_, _) =>
             {
                 if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_STREAM") is { Length: > 0 } demo)

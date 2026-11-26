@@ -160,7 +160,7 @@ public sealed record AppSettings
         }
     }
 
-    public const int CurrentVersion = 3;
+    public const int CurrentVersion = 4;
 
     /// <summary>
     /// Every setting is written to the file, so a changed default never reached anyone who already had one. Settings
@@ -178,6 +178,8 @@ public sealed record AppSettings
             };
         if (s.SettingsVersion < 3 && s.Resolution == StreamResolution.Auto) // 0.4.3: back to the highest resolution
             s = s with { Resolution = StreamResolution.Max };
+        if (s.SettingsVersion < 4) // 0.4.8: gyro aim off by default (it could be saved as on without being chosen)
+            s = s with { GyroAim = false };
         return s with { SettingsVersion = CurrentVersion };
     }
 

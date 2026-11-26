@@ -35,6 +35,9 @@ internal static class Program
         // An update downloaded last time: install it and open the new version instead (before any window).
         if (Services.Updater.TryInstallPending()) return 0;
 
+        // Already running: hand this launch (e.g. a shortcut's --stream) to that copy instead of opening a second one.
+        if (Services.SingleInstance.TryForward(args)) return 0;
+
         return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
 

@@ -13,7 +13,8 @@ namespace XStream.App.Services;
 /// exe in place: the running file is renamed (Windows allows that), the new one takes its name, it's started, and
 /// this copy exits. The old file is deleted on the next launch. Never touches a running stream.
 ///
-/// Only the single-file Windows build updates itself; a dev build (dotnet run) just reports what's available.
+/// The single-file Windows build and the Mac app (Vexel.app, from latest-mac.json) update themselves; a dev build
+/// (dotnet run) just reports what's available.
 /// </summary>
 public sealed class Updater(SettingsStore settings)
 {
@@ -22,6 +23,16 @@ public sealed class Updater(SettingsStore settings)
     /// that scripts/publish-windows.sh writes, e.g. https://github.com/OWNER/xstream/releases/latest/download/latest.json
     /// </summary>
     public const string DefaultFeed = "https://github.com/tjrchampion/xstream/releases/latest/download/latest.json";
+    /// <summary>The Mac app's feed (latest-mac.json, for Vexel-mac.zip; signed with the same key).</summary>
+    public const string DefaultMacFeed = "https://github.com/tjrchampion/xstream/releases/latest/download/latest-mac.json";
+
+    /// <summary>The Mac app bundle this process runs from (…/Vexel.app), or null (Windows, dev builds).</summary>
+    public static string? MacBundle =>
+        OperatingSystem.IsMacOS() && Environment.ProcessPath is { } p && p.Contains(".app/Contents/MacOS/", StringComparison.Ordinal)
+            ? p[..(p.IndexOf(".app/Contents/MacOS/", StringComparison.Ordinal) + 4)] : null;
+
+    /// <summary>What a release file is called here: Vexel.exe on Windows, Vexel-mac.zip on the Mac.</summary>
+    private static string Ext => MacBundle is not null ? ".zip" : ".exe";
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -37,7 +48,7 @@ public sealed class Updater(SettingsStore settings)
     /// <summary>Raised (on a background thread) when Ready or Status changes.</summary>
     public event Action? Changed;
 
-    public string Feed => settings.Current.UpdateFeedUrl is { Length: > 0 } u ? u : DefaultFeed;
+    public string Feed => settings.Current.UpdateFeedUrl is { Length: > 0 } u ? u : MacBundle is not null ? DefaultMacFeed : DefaultFeed;
     public bool Configured => Feed.Length > 0;
 
     /// <summary>
@@ -46,9 +57,10 @@ public sealed class Updater(SettingsStore settings)
     /// never showed an install button.
     /// </summary>
     public static bool CanSelfUpdate =>
-        OperatingSystem.IsWindows() && Environment.ProcessPath is { } p
-        && p.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
-        && string.IsNullOrEmpty(Assembly.GetEntryAssembly()?.Location); // single-file publish (not dotnet run)
+        (OperatingSystem.IsWindows() && Environment.ProcessPath is { } p
+         && p.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+         && string.IsNullOrEmpty(Assembly.GetEntryAssembly()?.Location)) // single-file publish (not dotnet run)
+        || MacBundle is not null;                                        // Vexel.app (replaced as a whole bundle)
 
     /// <summary>A verified update is downloaded and this build can install it.</summary>
     public bool CanInstall => Ready is not null && CanSelfUpdate;
@@ -65,6 +77,8 @@ public sealed class Updater(SettingsStore settings)
         try
         {
             if (Environment.ProcessPath is { } self && File.Exists(self + ".old")) File.Delete(self + ".old");
+            if (MacBundle is { } app && Directory.Exists(app + ".old")) Directory.Delete(app + ".old", recursive: true);
+            if (Directory.Exists(Path.Combine(UpdatesDir, "unpack"))) Directory.Delete(Path.Combine(UpdatesDir, "unpack"), recursive: true);
         }
         catch { /* still locked by a closing process: next time */ }
         try
@@ -93,7 +107,7 @@ public sealed class Updater(SettingsStore settings)
             foreach (var json in Directory.EnumerateFiles(UpdatesDir, "Vexel-*.json").OrderByDescending(f => f))
             {
                 var m = UpdateManifest.Parse(File.ReadAllText(json));
-                string exe = Path.ChangeExtension(json, ".exe");
+                string exe = Path.ChangeExtension(json, Ext);
                 if (!UpdateSignature.Valid(m, out _) || !m.IsNewerThan(Current) || !m.Matches(exe)) continue;
                 Log($"Installing {m.Version}, downloaded earlier, at launch");
                 if (Install(exe, out var error)) return true;
@@ -125,7 +139,9 @@ public sealed class Updater(SettingsStore settings)
             if (!Uri.TryCreate(manifest.Url, UriKind.Absolute, out var url) || (url.Scheme != Uri.UriSchemeHttps && !url.IsLoopback))
             { SetStatus("Ignored an update with an insecure download link."); return; }
 
-            string file = Path.Combine(UpdatesDir, $"Vexel-{manifest.Version}.exe");
+            if (!url.AbsolutePath.EndsWith(Ext, StringComparison.OrdinalIgnoreCase))
+            { SetStatus($"Ignored an update that isn't a {(Ext == ".zip" ? "Mac" : "Windows")} build."); return; }
+            string file = Path.Combine(UpdatesDir, $"Vexel-{manifest.Version}{Ext}");
             if (!manifest.Matches(file))
             {
                 SetStatus($"Downloading Vexel {manifest.Version}…");
@@ -179,10 +195,11 @@ public sealed class Updater(SettingsStore settings)
         return false;
     }
 
-    /// <summary>Swap the running exe for <paramref name="newExe"/> and start it (the caller then exits).</summary>
+    /// <summary>Swap the running exe (or Mac app) for <paramref name="newExe"/> and start it (the caller then exits).</summary>
     private static bool Install(string newExe, out string? error)
     {
         error = null;
+        if (MacBundle is { } bundle) return InstallMac(newExe, bundle, out error);
         if (Environment.ProcessPath is not { } self) { error = "unknown exe path"; return false; }
         string old = self + ".old";
         try
@@ -191,10 +208,43 @@ public sealed class Updater(SettingsStore settings)
             File.Move(self, old);                 // a running exe can be renamed, not overwritten
             try { File.Copy(newExe, self); }
             catch { File.Move(old, self); throw; } // put it back: never leave the user without an exe
+            SingleInstance.Stop(); // the new version must not hand itself over to this one
             Process.Start(new ProcessStartInfo(self) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(self)! });
             return true;
         }
         catch (Exception ex) { error = ex.Message; return false; }
+    }
+
+    /// <summary>
+    /// Mac: unpack Vexel-mac.zip (already verified), move the running Vexel.app aside to Vexel.app.old (a running
+    /// app can be moved; its open files stay valid), put the new one in its place, and open it. Downloads made by
+    /// Vexel itself aren't quarantined, so the new version opens without the "unidentified developer" prompt.
+    /// </summary>
+    private static bool InstallMac(string zip, string bundle, out string? error)
+    {
+        error = null;
+        string unpack = Path.Combine(UpdatesDir, "unpack");
+        string old = bundle + ".old";
+        try
+        {
+            if (Directory.Exists(unpack)) Directory.Delete(unpack, recursive: true);
+            Directory.CreateDirectory(unpack);
+            using (var ditto = Process.Start(new ProcessStartInfo("/usr/bin/ditto", ["-x", "-k", zip, unpack]) { UseShellExecute = false }))
+            {
+                ditto!.WaitForExit(60_000);
+                if (ditto.ExitCode != 0) { error = "couldn't unpack the update"; return false; }
+            }
+            string fresh = Path.Combine(unpack, "Vexel.app");
+            if (!File.Exists(Path.Combine(fresh, "Contents", "MacOS", "XStream"))) { error = "the update has no Vexel.app inside"; return false; }
+            if (Directory.Exists(old)) Directory.Delete(old, recursive: true);
+            Directory.Move(bundle, old);
+            try { Directory.Move(fresh, bundle); }
+            catch { Directory.Move(old, bundle); throw; } // put it back: never leave the user without the app
+            SingleInstance.Stop(); // the new version must not hand itself over to this one
+            Process.Start(new ProcessStartInfo("/usr/bin/open", ["-n", bundle]) { UseShellExecute = false });
+            return true;
+        }
+        catch (Exception ex) { error = ex.Message + (ex is UnauthorizedAccessException or IOException ? " (is Vexel in a folder you can write to?)" : ""); return false; }
     }
 
     private void SetStatus(string s)
