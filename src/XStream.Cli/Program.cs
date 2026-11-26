@@ -22,6 +22,7 @@ using XStream.WebRtc;
 //   xstream pad                        controller test: live state, poll rate, input pipeline latency
 //   xstream video-test [file.h264]     decode + window test (built-in test pattern if no file)
 //   video-test --screenshot            saves one picture to Pictures/XStream after 2 s (checks the screenshot path)
+//   video-test --kbm                   keyboard & mouse as a controller: click to capture, prints the pad it makes (sends nothing)
 //   play/video-test options: --windowed  --headless (no video)  --software (no GPU decode)  --vsync
 
 var dir = AppPaths.Root;
@@ -121,6 +122,8 @@ try
                 Sharpen = args.FirstOrDefault(a => a.StartsWith("--clarity=")) is { } c ? int.Parse(c["--clarity=".Length..]) : (int)settings.Clarity,
                 HardwareDecode = !args.Contains("--software") && settings.HardwareDecode,
                 Headless = args.Contains("--headless"),
+                // --enhance=0|1: Enhance off/on for this session (A/B).
+                Enhance = args.FirstOrDefault(a => a.StartsWith("--enhance=")) is { } en ? en != "--enhance=0" : settings.Enhance,
             };
 
             var player = new PlayerSession();
@@ -145,11 +148,19 @@ try
                 _ = Task.Delay(TimeSpan.FromSeconds(double.Parse(secs["--seconds=".Length..], System.Globalization.CultureInfo.InvariantCulture))).ContinueWith(_ => player.Stop());
             return player.Run(options, client, () => auth.GetTransferTokenAsync(tokens));
         }
+        case "mics":
+            // The microphones Vexel can use (Settings > Sound and controls > Which microphone).
+            foreach (var m in XStream.Core.Audio.Microphone.Devices()) Console.WriteLine(m);
+            break;
+        case "link":
+            // This device's connection as the connection check sees it (wired / Wi-Fi band, signal, link speed).
+            Console.WriteLine(XStream.Core.Diagnostics.LocalLink.Detect() is var l ? $"{l.Describe()}  (channel {l.Channel}, {l.RssiDbm} dBm)" : "");
+            break;
         case "video-test":
         {
             // Plays an H.264 file (or a built-in test pattern) through the real receive path:
             // RTP packets -> frame assembler -> decoder -> window, paced at 60 fps. No console needed.
-            var file = args.Skip(1).Where((a, k) => !a.StartsWith("--") && args[k] is not ("--size" or "--clarity")).FirstOrDefault();
+            var file = args.Skip(1).Where((a, k) => !a.StartsWith("--") && args[k] is not ("--size" or "--clarity" or "--enhance" or "--overlay")).FirstOrDefault();
             var stream = file is not null ? File.ReadAllBytes(file) : TestPattern.Stream(80, 45, 600, 60); // 1280x720, 10 s
             var sw = System.Diagnostics.Stopwatch.StartNew();
             double Now() => sw.Elapsed.TotalMilliseconds;
@@ -159,22 +170,77 @@ try
             using var window = new VideoWindow(mailbox, Now, new VideoWindowOptions { Title = "XStream video test", Fullscreen = !args.Contains("--windowed"), VSync = args.Contains("--vsync"), StartHidden = args.Contains("--hidden"), Width = size.W, Height = size.H });
             // --clarity 0-3: Clarity boost level.
             if (args.SkipWhile(a => a != "--clarity").Skip(1).FirstOrDefault() is { } cl) window.Sharpen = int.Parse(cl);
+            // --enhance 0|1: edge-aware upscaling when the picture is enlarged (on by default).
+            if (args.SkipWhile(a => a != "--enhance").Skip(1).FirstOrDefault() is { } en) window.Enhance = en != "0";
+            // --overlay stats|detailed|menu: draw the stream overlay with made-up numbers (checks its layout).
+            StreamOverlay? demoOverlay = null;
+            var rnd = new Random(1);
+            if (args.SkipWhile(a => a != "--overlay").Skip(1).FirstOrDefault() is { } ov)
+            {
+                var demo = AppSettings.Load() with { ShowStatsHud = ov != "menu", StatsDetailed = ov == "detailed" };
+                demoOverlay = new StreamOverlay("Xbox Series X", demo, false, consoleControl: true, clips: true);
+                demoOverlay.SetRoute("Home network");
+                window.Overlay = demoOverlay;
+                window.KeyDown = demoOverlay.OnKey;
+                if (ov == "menu") demoOverlay.OnKey(0x1B);
+                // Sample connection tips and a muted mic, to check how they're drawn.
+                demoOverlay.SetTips(XStream.Core.Diagnostics.ConnectionCheck.Analyze(
+                    Enumerable.Range(0, 20).Select(_ => new XStream.Core.Diagnostics.CheckSample(22, 50, 2.5, 9, 16)).ToList(),
+                    new XStream.Core.Diagnostics.LocalLink { Kind = "Wi-Fi", BandGHz = 2.4, SignalPct = 60 }, false, "Home network", 0));
+                demoOverlay.SetMic(true, true, false, false);
+            }
             window.FirstPicture += () => Console.WriteLine($"First picture shown after {Now():F0} ms (window {(args.Contains("--hidden") ? "was hidden until now" : "was already visible")})");
             var buffer = new PlayoutBuffer<AccessUnit> { TargetDelayMs = 0 };
             using var pipe = new VideoPipeline(buffer, new H264Decoder(!args.Contains("--software")), mailbox, Now);
             Console.WriteLine($"Decoder: {pipe.Decoder.Backend} ({H264Decoder.LibVersion}). Renderer: {window.RendererName}. Esc to quit.");
             pipe.Start();
+            // --kbm: keyboard and mouse drive a virtual controller (your settings' keys and sensitivity, mode On); the pad
+            // is printed when it changes, nothing is sent anywhere. Click to capture; F1 toggles a pretend menu (frees the mouse).
+            InputPump? kbmPump = null;
+            if (args.Contains("--kbm"))
+            {
+                var settings = AppSettings.Load();
+                var kbm = KeyboardMouseInput.FromSettings(settings);
+                kbm.Mode = KeyboardMouseMode.On;
+                bool menu = false;
+                kbm.Blocked = () => menu;
+                kbm.Hint += () => Console.WriteLine("Keyboard & mouse ready: click the window to capture. F1 toggles a pretend menu, Esc quits.");
+                window.Input = kbm;
+                window.KeyDown = sym => { if (sym == 0x4000003A) { menu = !menu; Console.WriteLine(menu ? "menu open (mouse freed)" : "menu closed"); return true; } return false; };
+                GamepadState lastPad = default; double lastPrintMs = 0;
+                var none = new NoPads();
+                kbmPump = new InputPump(none, new InputOptions { KeyboardMouse = kbm }, f =>
+                {
+                    var s = f[0];
+                    if (s == lastPad || Now() - lastPrintMs < 50) return;
+                    lastPad = s; lastPrintMs = Now();
+                    Console.WriteLine($"{(kbm.Captured ? "captured" : "free    ")}  buttons {s.Buttons,-30} L ({s.LeftX,5:F2},{s.LeftY,5:F2})  R ({s.RightX,5:F2},{s.RightY,5:F2})  LT {s.LeftTrigger:F0} RT {s.RightTrigger:F0}");
+                });
+                kbmPump.Start();
+            }
+            using var _kbmStop = kbmPump;
             var packets = H264Packetizer.Packetize(H264Packetizer.AccessUnits(stream)).ToList();
             var depack = new H264Depacketizer();
             int i = 0; double next = Now(), lastPrint = Now();
             bool shot = !args.Contains("--screenshot"); // --screenshot: save one picture after 2 s, then quit
             while (!window.QuitRequested && (i < packets.Count || Now() < next + 200))
             {
-                if (!shot && Now() > 2000)
+                if (!shot && Now() > (demoOverlay is null ? 2000 : 9000))
                 {
                     shot = true;
                     window.RequestScreenshot((px, w, h) =>
                     {
+                        if (demoOverlay is not null && w == StreamOverlay.CanvasWidth && h == StreamOverlay.CanvasHeight)
+                        {
+                            // The screenshot is the picture only: blend the overlay on top so its layout can be checked.
+                            var ovl = new byte[w * h * 4];
+                            demoOverlay.Render(ovl, w * 4);
+                            for (int q = 0; q < ovl.Length; q += 4)
+                            {
+                                int al = ovl[q + 3];
+                                for (int ch = 0; ch < 3; ch++) px[q + ch] = (byte)((ovl[q + ch] * al + px[q + ch] * (255 - al)) / 255);
+                            }
+                        }
                         Console.WriteLine($"Screenshot {w}x{h}: {Screenshots.Save(px, w, h, "video test")}");
                         Environment.Exit(0);
                     });
@@ -192,6 +258,12 @@ try
                 {
                     lastPrint = Now();
                     var d = window.TakeStats();
+                    demoOverlay?.UpdateStats(new LiveStats
+                    {
+                        Mbps = 38 + rnd.NextDouble() * 8, CapMbps = 50, PingMs = 4 + rnd.NextDouble(), JitterMs = 0.8, LossPct = 0.1, BufferMs = 12,
+                        Fps = d.Fps, NetToScreenP50Ms = d.ArrivalToPresentP50Ms + 6, NetToScreenP99Ms = d.ArrivalToPresentP99Ms + 9, DecodeMs = pipe.DecodeP50Ms,
+                        Link = "Connected", Pads = 1, PadHz = 250, PadP99Us = 300, AudioQueuedMs = 38,
+                    }, window.VideoSize);
                     Console.WriteLine($"{d.Fps,3:F0} fps  network->screen p50 {d.ArrivalToPresentP50Ms:F2} ms  p99 {d.ArrivalToPresentP99Ms:F2} ms  decode p50 {pipe.DecodeP50Ms:F2} ms  dropped-for-latency {d.Dropped}");
                 }
             }
@@ -261,5 +333,15 @@ static void PrintSummary(SessionSummary s, string file)
         Console.WriteLine($"  Controller:         read {s.InputPollHz:F0}x/s, change->send p50 {s.InputP50Us:F0} us, p99 {s.InputP99Us:F0} us, worst read gap {s.InputWorstGapMs:F1} ms");
     foreach (var (v, pct) in s.VerdictPct.OrderByDescending(kv => kv.Value)) Console.WriteLine($"    {pct,5:F1}%  {v}");
     Console.WriteLine("  Paste these into the test bench's session log, or upload the .csv there.");
+}
+
+/// <summary>video-test --kbm: no real controllers (keyboard and mouse are the only pad).</summary>
+sealed class NoPads : IGamepadBackend
+{
+    public string Name => "none";
+    public int MaxPads => 4;
+    public void Poll(Span<GamepadState> states, Span<bool> connected) => connected.Clear();
+    public void Rumble(int pad, float low, float high, float leftTrigger, float rightTrigger, int durationMs) { }
+    public void Dispose() { }
 }
 

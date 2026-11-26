@@ -16,6 +16,7 @@
     <DataTemplate DataType="vm:SessionsViewModel"><v:SessionsView /></DataTemplate>
     <DataTemplate DataType="vm:SettingsViewModel"><v:SettingsView /></DataTemplate>
     <DataTemplate DataType="vm:MappingViewModel"><v:MappingView /></DataTemplate>
+    <DataTemplate DataType="vm:FriendsViewModel"><v:FriendsView /></DataTemplate>
   </Window.DataTemplates>
 
   <Panel>

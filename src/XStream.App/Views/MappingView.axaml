@@ -8,9 +8,13 @@
     <DataTemplate x:Key="SlotFace" x:DataType="vm:ButtonSlotViewModel">
       <Panel>
         <Border Classes="face"><TextBlock Classes="face" Text="{Binding Label}" /></Border>
-        <Border Classes="badge" IsVisible="{Binding IsRemapped}" Classes.off="{Binding IsOff}">
+        <Border Classes="badge" IsVisible="{Binding ShowBadge}" Classes.off="{Binding IsOff}">
           <TextBlock Text="{Binding Badge}" />
         </Border>
+        <!-- Keyboard & mouse view: its keys, growing to the right from the button's top-right corner -->
+        <Canvas IsVisible="{Binding ShowKeys}" Width="0" Height="0" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,0,16,0">
+          <Border Classes="badge keytag" Classes.off="{Binding NoKeys}" Canvas.Top="-12"><TextBlock Text="{Binding KeyTag}" /></Border>
+        </Canvas>
       </Panel>
     </DataTemplate>
   </UserControl.Resources>
@@ -71,6 +75,7 @@
     </Style>
     <Style Selector="Button.slot Border.badge > TextBlock"><Setter Property="FontSize" Value="11" /><Setter Property="FontWeight" Value="Bold" /><Setter Property="Foreground" Value="#0C0E12" /></Style>
     <Style Selector="Button.slot Border.badge.off"><Setter Property="Background" Value="{StaticResource Muted}" /></Style>
+    <Style Selector="Button.slot Border.badge.keytag"><Setter Property="Margin" Value="0" /></Style>
 
     <!-- Choices in the side panel -->
     <Style Selector="Button.choice">
@@ -86,14 +91,34 @@
 
   <ScrollViewer>
     <StackPanel Margin="36,32,36,36" Spacing="22" MaxWidth="1240">
-      <StackPanel Spacing="4">
-        <TextBlock Classes="h1" Text="Mapping" />
-        <TextBlock Classes="muted" TextWrapping="Wrap"
-                   Text="Give each game its own controls. Vexel switches layouts by itself when the game changes, even mid-stream." />
-      </StackPanel>
+      <Grid ColumnDefinitions="*,Auto">
+        <StackPanel Spacing="4">
+          <TextBlock Classes="h1" Text="Mapping" />
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="Give each game its own controls. Vexel switches layouts by itself when the game changes, even mid-stream." />
+        </StackPanel>
+        <!-- Controller layouts, or the keys for playing with keyboard and mouse -->
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <Button Classes="ghost choice" Classes.current="{Binding !KeyboardView}" Padding="14,0" VerticalContentAlignment="Center" Content="Controller" Command="{Binding ShowControllerCommand}" />
+          <Button Classes="ghost choice" Classes.current="{Binding KeyboardView}" Padding="14,0" VerticalContentAlignment="Center" Content="Keyboard &amp; mouse" Command="{Binding ShowKeyboardCommand}" />
+        </StackPanel>
+      </Grid>
+
+      <!-- Keyboard & mouse: one layout for every game -->
+      <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding KeyboardView}">
+        <StackPanel Spacing="3">
+          <TextBlock Classes="h2" Text="Keyboard &amp; mouse" />
+          <TextBlock Classes="muted" TextWrapping="Wrap"
+                     Text="No controller? Your keys and mouse work a controller the console sees like any other. Click the picture to start playing; Esc frees the mouse and opens the stream menu. One layout for every game." />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+          <Border Classes="chip accent" VerticalAlignment="Center"><TextBlock Text="{Binding KeyChangedText}" /></Border>
+          <Button Classes="ghost" Content="Reset all keys" Command="{Binding ResetKeysCommand}" />
+        </StackPanel>
+      </Grid>
 
       <!-- Games: what's playing now, recent games, and the ones with their own layout -->
-      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" IsVisible="{Binding !KeyboardView}">
         <ItemsControl ItemsSource="{Binding Games}">
           <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="12" Margin="0,0,0,10" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
           <ItemsControl.ItemTemplate>
@@ -137,7 +162,7 @@
       </ScrollViewer>
 
       <!-- Which layout this is -->
-      <Grid ColumnDefinitions="*,Auto">
+      <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding !KeyboardView}">
         <StackPanel Spacing="3">
           <TextBlock Classes="h2" Text="{Binding Title}" />
           <TextBlock Classes="muted" Text="{Binding Scope}" TextWrapping="Wrap" />
@@ -157,8 +182,8 @@
                 <!-- Triggers (shown for orientation; they stay as they are) -->
                 <Path Fill="#20262E" Data="M 150,62 C 160,30 215,22 240,36 L 246,64 C 220,56 180,58 150,74 Z" />
                 <Path Fill="#20262E" Data="M 510,62 C 500,30 445,22 420,36 L 414,64 C 440,56 480,58 510,74 Z" />
-                <TextBlock Canvas.Left="186" Canvas.Top="32" Text="LT" FontSize="11" FontWeight="Bold" Foreground="{StaticResource Faint}" />
-                <TextBlock Canvas.Left="456" Canvas.Top="32" Text="RT" FontSize="11" FontWeight="Bold" Foreground="{StaticResource Faint}" />
+                <TextBlock Canvas.Left="186" Canvas.Top="32" Text="LT" FontSize="11" FontWeight="Bold" Foreground="{StaticResource Faint}" IsVisible="{Binding !KeyboardView}" />
+                <TextBlock Canvas.Left="456" Canvas.Top="32" Text="RT" FontSize="11" FontWeight="Bold" Foreground="{StaticResource Faint}" IsVisible="{Binding !KeyboardView}" />
                 <!-- Body -->
                 <Path Stroke="#3A434F" StrokeThickness="2"
                       Data="M 170,92 C 220,74 270,82 330,82 C 390,82 440,74 490,92 C 565,118 610,210 632,300 C 648,372 612,418 568,406 C 528,394 498,334 462,306 C 428,290 232,290 198,306 C 162,334 132,394 92,406 C 48,418 12,372 28,300 C 50,210 95,118 170,92 Z">
@@ -174,6 +199,11 @@
                 <Ellipse Canvas.Left="202" Canvas.Top="206" Width="108" Height="108" Fill="#12161B" />
                 <Ellipse Canvas.Left="408" Canvas.Top="104" Width="136" Height="136" Fill="#12161B" />
 
+                <!-- Triggers: keys can press them (keyboard & mouse view only) -->
+                <Button Classes="slot bumper small" Classes.selected="{Binding LT.IsSelected}" IsVisible="{Binding KeyboardView}"
+                        Canvas.Left="168" Canvas.Top="16" Width="56" Height="28" Content="{Binding LT}" Command="{Binding LT.PickCommand}" CommandParameter="{Binding LT}" />
+                <Button Classes="slot bumper small" Classes.selected="{Binding RT.IsSelected}" IsVisible="{Binding KeyboardView}"
+                        Canvas.Left="436" Canvas.Top="16" Width="56" Height="28" Content="{Binding RT}" Command="{Binding RT.PickCommand}" CommandParameter="{Binding RT}" />
                 <!-- Bumpers -->
                 <Button Classes="slot bumper" Classes.selected="{Binding LB.IsSelected}" Classes.remapped="{Binding LB.IsRemapped}"
                         Canvas.Left="150" Canvas.Top="66" Width="92" Height="30" Content="{Binding LB}" Command="{Binding LB.PickCommand}" CommandParameter="{Binding LB}" />
@@ -183,12 +213,12 @@
                 <Button Classes="slot" Classes.selected="{Binding LS.IsSelected}" Classes.remapped="{Binding LS.IsRemapped}"
                         Canvas.Left="166" Canvas.Top="144" Width="64" Height="64" Content="{Binding LS}" Command="{Binding LS.PickCommand}" CommandParameter="{Binding LS}" />
                 <Button Classes="slot" Classes.selected="{Binding RS.IsSelected}" Classes.remapped="{Binding RS.IsRemapped}"
-                        Canvas.Left="388" Canvas.Top="228" Width="64" Height="64" Content="{Binding RS}" Command="{Binding RS.PickCommand}" CommandParameter="{Binding RS}" />
+                        ZIndex="1" Canvas.Left="388" Canvas.Top="228" Width="64" Height="64" Content="{Binding RS}" Command="{Binding RS.PickCommand}" CommandParameter="{Binding RS}" />
                 <!-- D-pad -->
                 <Button Classes="slot square small" Classes.selected="{Binding Up.IsSelected}" Classes.remapped="{Binding Up.IsRemapped}"
                         Canvas.Left="236" Canvas.Top="212" Width="40" Height="34" Content="{Binding Up}" Command="{Binding Up.PickCommand}" CommandParameter="{Binding Up}" />
                 <Button Classes="slot square small" Classes.selected="{Binding Down.IsSelected}" Classes.remapped="{Binding Down.IsRemapped}"
-                        Canvas.Left="236" Canvas.Top="274" Width="40" Height="34" Content="{Binding Down}" Command="{Binding Down.PickCommand}" CommandParameter="{Binding Down}" />
+                        ZIndex="1" Canvas.Left="236" Canvas.Top="274" Width="40" Height="34" Content="{Binding Down}" Command="{Binding Down.PickCommand}" CommandParameter="{Binding Down}" />
                 <Button Classes="slot square small" Classes.selected="{Binding Left.IsSelected}" Classes.remapped="{Binding Left.IsRemapped}"
                         Canvas.Left="204" Canvas.Top="243" Width="40" Height="34" Content="{Binding Left}" Command="{Binding Left.PickCommand}" CommandParameter="{Binding Left}" />
                 <Button Classes="slot square small" Classes.selected="{Binding Right.IsSelected}" Classes.remapped="{Binding Right.IsRemapped}"
@@ -212,8 +242,38 @@
               </Canvas>
             </Viewbox>
 
+            <!-- Keyboard & mouse: the sticks' directions (the mouse always works the right stick as well) -->
+            <Border Background="{StaticResource Surface2}" CornerRadius="12" Padding="14,10" IsVisible="{Binding KeyboardView}">
+              <Grid ColumnDefinitions="*,*">
+                <StackPanel Spacing="10">
+                  <StackPanel Spacing="1">
+                    <TextBlock FontWeight="SemiBold" Text="Left stick" />
+                    <TextBlock Classes="caption" Text="Moving: up, down, left, right" />
+                  </StackPanel>
+                  <UniformGrid Columns="4" Margin="0,8,0,0">
+                    <Button Classes="slot square" Classes.selected="{Binding LUp.IsSelected}" Width="40" Height="34" HorizontalAlignment="Left" Content="{Binding LUp}" Command="{Binding LUp.PickCommand}" CommandParameter="{Binding LUp}" />
+                    <Button Classes="slot square" Classes.selected="{Binding LDown.IsSelected}" Width="40" Height="34" HorizontalAlignment="Left" Content="{Binding LDown}" Command="{Binding LDown.PickCommand}" CommandParameter="{Binding LDown}" />
+                    <Button Classes="slot square" Classes.selected="{Binding LLeft.IsSelected}" Width="40" Height="34" HorizontalAlignment="Left" Content="{Binding LLeft}" Command="{Binding LLeft.PickCommand}" CommandParameter="{Binding LLeft}" />
+                    <Button Classes="slot square" Classes.selected="{Binding LRight.IsSelected}" Width="40" Height="34" HorizontalAlignment="Left" Content="{Binding LRight}" Command="{Binding LRight.PickCommand}" CommandParameter="{Binding LRight}" />
+                  </UniformGrid>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Spacing="10">
+                  <StackPanel Spacing="1">
+                    <TextBlock FontWeight="SemiBold" Text="Right stick" />
+                    <TextBlock Classes="caption" Text="The mouse aims; keys are optional" />
+                  </StackPanel>
+                  <UniformGrid Columns="4" Margin="0,8,0,0">
+                    <Button Classes="slot square" Classes.selected="{Binding RUp.IsSelected}" Width="40" Height="34" HorizontalAlignment="Left" Content="{Binding RUp}" Command="{Binding RUp.PickCommand}" CommandParameter="{Binding RUp}" />
+                    <Button Classes="slot square" Classes.selected="{Binding RDown.IsSelected}" Width="40" Height="34" HorizontalAlignment="Left" Content="{Binding RDown}" Command="{Binding RDown.PickCommand}" CommandParameter="{Binding RDown}" />
+                    <Button Classes="slot square" Classes.selected="{Binding RLeft.IsSelected}" Width="40" Height="34" HorizontalAlignment="Left" Content="{Binding RLeft}" Command="{Binding RLeft.PickCommand}" CommandParameter="{Binding RLeft}" />
+                    <Button Classes="slot square" Classes.selected="{Binding RRight.IsSelected}" Width="40" Height="34" HorizontalAlignment="Left" Content="{Binding RRight}" Command="{Binding RRight.PickCommand}" CommandParameter="{Binding RRight}" />
+                  </UniformGrid>
+                </StackPanel>
+              </Grid>
+            </Border>
+
             <!-- Back paddles -->
-            <Border Background="{StaticResource Surface2}" CornerRadius="12" Padding="14,10">
+            <Border Background="{StaticResource Surface2}" CornerRadius="12" Padding="14,10" IsVisible="{Binding !KeyboardView}">
               <StackPanel Spacing="10">
                 <StackPanel Spacing="1">
                   <TextBlock FontWeight="SemiBold" Text="Back paddles" />
@@ -234,8 +294,74 @@
           </StackPanel>
         </Border>
 
+        <!-- Right (keyboard & mouse): bind the chosen button, when it's on, mouse feel -->
+        <StackPanel Grid.Column="2" Spacing="16" IsVisible="{Binding KeyboardView}">
+          <Border Classes="card" Padding="20">
+            <Panel>
+              <StackPanel Spacing="10" IsVisible="{Binding !HasKeySlot}">
+                <TextBlock Classes="h3" Text="Change a key" />
+                <TextBlock Classes="muted" TextWrapping="Wrap" FontSize="13"
+                           Text="Click a button on the controller, then press the key for it (or click a mouse button in the box). Each tag shows a button's keys. Esc, F3, F10, F11 and F12 stay Vexel's." />
+              </StackPanel>
+              <StackPanel Spacing="12" IsVisible="{Binding HasKeySlot}">
+                <Grid ColumnDefinitions="*,Auto">
+                  <StackPanel Spacing="2">
+                    <TextBlock Classes="h3" Text="{Binding KeySlotTitle}" TextWrapping="Wrap" />
+                    <TextBlock Classes="caption" Text="{Binding KeySlotKeys}" TextWrapping="Wrap" />
+                  </StackPanel>
+                  <Button Grid.Column="1" Classes="ghost" Padding="8" Command="{Binding CloseKeyCommand}" VerticalAlignment="Top" ToolTip.Tip="Done">
+                    <PathIcon Data="{StaticResource Icon.Close}" Width="12" Height="12" />
+                  </Button>
+                </Grid>
+                <!-- Takes the next key press anywhere on the page, and mouse clicks / the wheel here -->
+                <Border Name="KeyCatcher" Height="84" CornerRadius="12" BorderThickness="2" Cursor="Hand"
+                        Background="{StaticResource AccentSoft}" BorderBrush="{StaticResource Accent}">
+                  <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="2">
+                    <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Text="Press a key" />
+                    <TextBlock HorizontalAlignment="Center" Classes="caption" Text="or click here with a mouse button, or scroll" />
+                  </StackPanel>
+                </Border>
+                <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding KeyMessage}" IsVisible="{Binding KeyMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Button Classes="ghost" Content="No key" Command="{Binding ClearKeyCommand}" />
+                  <Button Classes="ghost" Command="{Binding DefaultKeyCommand}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <PathIcon Data="{StaticResource Icon.Refresh}" Width="13" Height="13" />
+                      <TextBlock Text="Default" />
+                    </StackPanel>
+                  </Button>
+                </StackPanel>
+              </StackPanel>
+            </Panel>
+          </Border>
+
+          <Border Classes="card" Padding="20">
+            <StackPanel Spacing="12">
+              <StackPanel Spacing="2">
+                <TextBlock Classes="h3" Text="Play with keyboard &amp; mouse" />
+                <TextBlock Classes="caption" TextWrapping="Wrap" Text="With a controller connected too, Always adds the keys to it; the other setting hands over to the controller." />
+              </StackPanel>
+              <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding KeyModeNames}" SelectedIndex="{Binding KeyModeIndex}" />
+              <StackPanel Spacing="6">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock FontSize="13" Text="Mouse sensitivity" />
+                  <TextBlock Grid.Column="1" Classes="mono" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Text="{Binding MouseSensitivityText}" />
+                </Grid>
+                <Slider Minimum="0.25" Maximum="4" SmallChange="0.05" LargeChange="0.25" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding MouseSensitivity}" />
+              </StackPanel>
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Spacing="1">
+                  <TextBlock FontSize="13" Text="Invert mouse up/down" />
+                  <TextBlock Classes="caption" Text="Mouse forward looks down" />
+                </StackPanel>
+                <ToggleSwitch Grid.Column="1" IsChecked="{Binding MouseInvertY}" OnContent="" OffContent="" VerticalAlignment="Center" />
+              </Grid>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
         <!-- Right: change the chosen button, quick layouts, gyro -->
-        <StackPanel Grid.Column="2" Spacing="16">
+        <StackPanel Grid.Column="2" Spacing="16" IsVisible="{Binding !KeyboardView}">
           <Border Classes="card" Padding="20">
             <Panel>
               <StackPanel Spacing="10" IsVisible="{Binding !HasSlot}">

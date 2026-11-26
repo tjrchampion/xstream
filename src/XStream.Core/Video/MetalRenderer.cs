@@ -18,6 +18,7 @@ namespace XStream.Core.Video;
 internal sealed unsafe class MetalRenderer : IVideoRenderer
 {
     public float ColorFlags { get; set; }
+    public bool Enhance { get; set; } = true;
     private const string Shaders = """
         #include <metal_stdlib>
         using namespace metal;
@@ -97,6 +98,90 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
             return clamp(c + p.sharpen * 4 * (c - box), min(mn, c), max(mx, c));
         }
 
+        // Enlarging the picture (a 720p stream on a 1080p or larger screen), with Enhance on: luma is upscaled
+        // edge-aware, after AMD FidelityFX Super Resolution 1's EASU (MIT licence; ffx_fsr1.h). Twelve source
+        // pixels give the local edge direction and strength; a Lanczos-like kernel is stretched along the edge,
+        // so lines and text stay sharp instead of going soft and stair-stepped. The result is clamped to the four
+        // nearest pixels (no ringing). Clarity then lifts it a little against plain bilinear, clamped the same way.
+        // Same as the Direct3D version.
+        static float easuTex(texture2d<float> ty, int2 q, int2 maxp) { return ty.read(uint2(clamp(q, int2(0), maxp))).r; }
+
+        static void easuSet(thread float2& dir, thread float& len, float w, float lA, float lB, float lC, float lD, float lE)
+        {
+            float dc = lD - lC, cb = lC - lB;
+            float lenX = max(abs(dc), abs(cb)); lenX = lenX > 0 ? 1.0 / lenX : 0;
+            float dirX = lD - lB;
+            dir.x += dirX * w;
+            lenX = saturate(abs(dirX) * lenX); len += lenX * lenX * w;
+            float ec = lE - lC, ca = lC - lA;
+            float lenY = max(abs(ec), abs(ca)); lenY = lenY > 0 ? 1.0 / lenY : 0;
+            float dirY = lE - lA;
+            dir.y += dirY * w;
+            lenY = saturate(abs(dirY) * lenY); len += lenY * lenY * w;
+        }
+
+        static void easuTap(thread float& aC, thread float& aW, float2 off, float2 dir, float2 len2, float lob, float clp, float c)
+        {
+            float2 v = float2(off.x * dir.x + off.y * dir.y, off.x * -dir.y + off.y * dir.x) * len2;
+            float d2 = min(dot(v, v), clp);
+            float wB = 2.0 / 5.0 * d2 - 1, wA = lob * d2 - 1;
+            wB *= wB; wA *= wA;
+            wB = 25.0 / 16.0 * wB - (25.0 / 16.0 - 1.0);
+            float w = wB * wA;
+            aC += c * w; aW += w;
+        }
+
+        static float lumaEnhance(texture2d<float> ty, float2 uv, constant Params& p)
+        {
+            float2 size = 1.0 / p.texel;
+            float2 pp = uv * size - 0.5;
+            float2 fp = floor(pp); pp -= fp;
+            int2 o = int2(fp), maxp = int2(size) - 1;
+            //    b c
+            //  e f g h
+            //  i j k l
+            //    n o
+            float b = easuTex(ty, o + int2(0, -1), maxp), c = easuTex(ty, o + int2(1, -1), maxp);
+            float e = easuTex(ty, o + int2(-1, 0), maxp), f = easuTex(ty, o, maxp), g = easuTex(ty, o + int2(1, 0), maxp), h = easuTex(ty, o + int2(2, 0), maxp);
+            float i = easuTex(ty, o + int2(-1, 1), maxp), j = easuTex(ty, o + int2(0, 1), maxp), k = easuTex(ty, o + int2(1, 1), maxp), l = easuTex(ty, o + int2(2, 1), maxp);
+            float n = easuTex(ty, o + int2(0, 2), maxp), oo = easuTex(ty, o + int2(1, 2), maxp);
+            float2 dir = 0; float len = 0;
+            easuSet(dir, len, (1 - pp.x) * (1 - pp.y), b, e, f, g, j);
+            easuSet(dir, len, pp.x * (1 - pp.y), c, f, g, h, k);
+            easuSet(dir, len, (1 - pp.x) * pp.y, f, i, j, k, n);
+            easuSet(dir, len, pp.x * pp.y, g, j, k, l, oo);
+            float dirR = dot(dir, dir);
+            bool zro = dirR < 1.0 / 32768.0;
+            dirR = zro ? 1 : rsqrt(dirR);
+            dir.x = zro ? 1 : dir.x;
+            dir *= dirR;
+            len = len * 0.5; len *= len;
+            float stretch = dot(dir, dir) / max(abs(dir.x), abs(dir.y));
+            float2 len2 = float2(1 + (stretch - 1) * len, 1 - 0.5 * len);
+            float lob = 0.5 + ((1.0 / 4.0 - 0.04) - 0.5) * len;
+            float clp = 1.0 / lob;
+            float aC = 0, aW = 0;
+            easuTap(aC, aW, float2( 0, -1) - pp, dir, len2, lob, clp, b);
+            easuTap(aC, aW, float2( 1, -1) - pp, dir, len2, lob, clp, c);
+            easuTap(aC, aW, float2(-1,  1) - pp, dir, len2, lob, clp, i);
+            easuTap(aC, aW, float2( 0,  1) - pp, dir, len2, lob, clp, j);
+            easuTap(aC, aW, float2( 0,  0) - pp, dir, len2, lob, clp, f);
+            easuTap(aC, aW, float2(-1,  0) - pp, dir, len2, lob, clp, e);
+            easuTap(aC, aW, float2( 1,  1) - pp, dir, len2, lob, clp, k);
+            easuTap(aC, aW, float2( 2,  1) - pp, dir, len2, lob, clp, l);
+            easuTap(aC, aW, float2( 2,  0) - pp, dir, len2, lob, clp, h);
+            easuTap(aC, aW, float2( 1,  0) - pp, dir, len2, lob, clp, g);
+            easuTap(aC, aW, float2( 1,  2) - pp, dir, len2, lob, clp, oo);
+            easuTap(aC, aW, float2( 0,  2) - pp, dir, len2, lob, clp, n);
+            float mn = min(min(f, g), min(j, k)), mx = max(max(f, g), max(j, k));
+            float r = clamp(aC / max(aW, 1e-5), mn, mx);
+            if (p.sharpen <= 0) return r;
+            float bil = mix(mix(f, g, pp.x), mix(j, k, pp.x), pp.y);
+            return clamp(r + p.sharpen * (r - bil), mn, mx); // EASU is already sharp: Clarity adds a little, not four times
+        }
+
+        static bool enlarging(constant Params& p) { float2 f = p.foot / p.texel; return p.pad2.x > 0.5 && f.x > 0 && f.x < 0.95 && f.y < 0.95; }
+
         static bool shrinking(constant Params& p, thread float2& f) { f = p.foot / p.texel; return (f.x > 1.02 || f.y > 1.02) && f.x < 3 && f.y < 3; }
 
         fragment float4 fsNv12(VOut i [[stage_in]], texture2d<float> ty [[texture(0)]], texture2d<float> tuv [[texture(1)]],
@@ -104,6 +189,7 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
         {
             float2 uv = p.uvOffset + i.uv * p.uvScale;
             float2 f;
+            if (enlarging(p)) return toRgb(lumaEnhance(ty, uv, p), tuv.sample(samp, uv, level(0)).rg, p);
             if (!shrinking(p, f)) return toRgb(luma(ty, uv, p), tuv.sample(samp, uv, level(0)).rg, p);
             float2 c = 0;
             for (int a = 0; a < 2; a++)
@@ -117,6 +203,7 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
         {
             float2 uv = p.uvOffset + i.uv * p.uvScale;
             float2 f;
+            if (enlarging(p)) return toRgb(lumaEnhance(ty, uv, p), float2(tu.sample(samp, uv, level(0)).r, tv.sample(samp, uv, level(0)).r), p);
             if (!shrinking(p, f)) return toRgb(luma(ty, uv, p), float2(tu.sample(samp, uv, level(0)).r, tv.sample(samp, uv, level(0)).r), p);
             float2 c = 0;
             for (int a = 0; a < 2; a++)
@@ -455,7 +542,7 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
     private ((int X, int Y, int W, int H) rect, Params prm) Layout(int sharpenLevel, VideoScaling scaling, Func<int, int, int, int, (int X, int Y, int W, int H)> fit)
     {
         (int X, int Y, int W, int H) rect = (0, 0, _outW, _outH);
-        var prm = new Params { TexelX = 1f / Math.Max(1, _w), TexelY = 1f / Math.Max(1, _h), Sharpen = Sharpen.Strength(sharpenLevel) / 16f, Pad = ColorFlags, ScaleX = 1, ScaleY = 1 };
+        var prm = new Params { TexelX = 1f / Math.Max(1, _w), TexelY = 1f / Math.Max(1, _h), Sharpen = Sharpen.Strength(sharpenLevel) / 16f, Pad = ColorFlags, ScaleX = 1, ScaleY = 1, Pad2 = Enhance && !SimpleScaling ? 1 : 0 };
         if (!HasPicture) return (rect, prm);
         if (scaling == VideoScaling.Fill)
         {
@@ -588,6 +675,8 @@ internal interface IVideoRenderer : IDisposable
     (int W, int H) OutputSize { get; }
     /// <summary>Colour signalling for the shader: bit 0 full range, bit 1 BT.601 (see <see cref="H264Format"/>).</summary>
     float ColorFlags { get; set; }
+    /// <summary>Edge-aware upscaling (FSR 1 EASU style) when the picture is enlarged.</summary>
+    bool Enhance { get; set; }
     void Upload(DecodedPicture p);
     void Render(int sharpenLevel, VideoScaling scaling, IVideoOverlay? overlay, Func<IVideoOverlay, byte[]?>? overlayPixels,
         Action<byte[], int, int>? screenshot, Func<int, int, int, int, (int X, int Y, int W, int H)> fit);

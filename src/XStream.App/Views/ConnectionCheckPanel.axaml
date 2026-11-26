@@ -1,0 +1,61 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:XStream.App.ViewModels"
+             xmlns:app="using:XStream.App"
+             x:Class="XStream.App.Views.ConnectionCheckPanel"
+             x:DataType="vm:ConnectionCheckViewModel">
+  <!-- Test connection: progress while the test stream runs, then the advice. -->
+  <Border Classes="card">
+    <StackPanel Spacing="14">
+          <Grid ColumnDefinitions="Auto,*,Auto">
+            <Border Width="40" Height="40" CornerRadius="12" Background="{StaticResource Surface2}" Margin="0,0,14,0">
+              <PathIcon Data="{StaticResource Icon.Wifi}" Width="18" Height="18" Foreground="{StaticResource Accent}" />
+            </Border>
+            <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+              <TextBlock Classes="label" Text="CONNECTION CHECK" />
+              <TextBlock Classes="h2" Text="{Binding ConsoleName, StringFormat='Checking {0}'}" IsVisible="{Binding IsRunning}" />
+              <TextBlock Classes="h2" Text="{Binding Headline}" IsVisible="{Binding HasResult}" TextWrapping="Wrap" />
+            </StackPanel>
+            <Button Grid.Column="2" Classes="ghost" Command="{Binding CloseCommand}" VerticalAlignment="Top">
+              <Panel>
+                <TextBlock Text="Cancel" IsVisible="{Binding IsRunning}" />
+                <TextBlock Text="Close" IsVisible="{Binding !IsRunning}" />
+              </Panel>
+            </Button>
+          </Grid>
+          <StackPanel Spacing="8" IsVisible="{Binding IsRunning}">
+            <ProgressBar Minimum="0" Maximum="100" Value="{Binding Fraction}" Height="4" MinHeight="4" HorizontalAlignment="Stretch" />
+            <TextBlock Classes="caption" Text="{Binding Status}" />
+            <TextBlock Classes="caption" TextWrapping="Wrap"
+                       Text="A short stream with no picture or sound measures delay, packet loss and timing. Nothing is sent to the console's controls." />
+          </StackPanel>
+          <StackPanel Spacing="12" IsVisible="{Binding HasResult}">
+            <TextBlock Classes="caption mono" Text="{Binding Numbers}" TextWrapping="Wrap" />
+            <ItemsControl ItemsSource="{Binding Findings}">
+              <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="10" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:FindingItem">
+                  <Grid ColumnDefinitions="Auto,*">
+                    <Ellipse Classes="dot" Margin="2,6,12,0" VerticalAlignment="Top"
+                             Classes.on="{Binding Kind, Converter={x:Static app:Conv.Is}, ConverterParameter=good}"
+                             Classes.sleep="{Binding Kind, Converter={x:Static app:Conv.Is}, ConverterParameter=fair}"
+                             Classes.bad="{Binding Kind, Converter={x:Static app:Conv.Is}, ConverterParameter=poor}" />
+                    <StackPanel Grid.Column="1" Spacing="2">
+                      <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                      <TextBlock Classes="caption" Text="{Binding Detail}" TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock Classes="caption" Text="{Binding LinkText}" TextWrapping="Wrap" />
+            <StackPanel Orientation="Horizontal" Spacing="12">
+              <Button Classes="primary" Command="{Binding ApplyCommand}" IsVisible="{Binding CanApply}">
+                <TextBlock Text="{Binding ApplyText}" TextWrapping="Wrap" />
+              </Button>
+              <TextBlock Text="{Binding Applied}" Foreground="{StaticResource Accent}" VerticalAlignment="Center" />
+            </StackPanel>
+          </StackPanel>
+        </StackPanel>
+  </Border>
+</UserControl>

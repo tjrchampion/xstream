@@ -126,13 +126,33 @@ public static class PlayerHost
                 return (await XboxLibrary.GetNowPlayingAsync(http, w.Auth, w.Xuid, ct))?.TitleId;
             };
         }
+        // Achievement pop-ups: console and cloud (read-only Xbox Live, same sign-in as the library).
+        session.Achievements = new AchievementWatcher(new XboxSocial(http, ct => store.GetWebTokenAsync(ct)), settings.Locale);
         if (cloudTitle is null)
             session.Remote =new ConsoleRemote(new XboxConsoleControl(http, async ct => (await store.GetWebTokenAsync(ct)).Authorization),
                 serverId, consoleName ?? "Xbox");
-        int code = session.Run(PlayerOptions.From(settings, serverId) with
+        // Connection check (the launcher's "Check connection"): a short stream with no picture, sound or controller,
+        // allowed to climb to a high bitrate, ended after XSTREAM_CHECK_SECONDS of streaming.
+        int check = int.TryParse(Environment.GetEnvironmentVariable("XSTREAM_CHECK_SECONDS"), out var cs) ? Math.Clamp(cs, 5, 60) : 0;
+        var options = PlayerOptions.From(settings, serverId) with
+        {
+            ConsoleName = consoleName ?? "Xbox", CloudTitleId = cloudTitle, Place = WindowPlace.Parse(place),
+        };
+        if (check > 0)
+        {
+            options = options with
             {
-                ConsoleName = consoleName ?? "Xbox", CloudTitleId = cloudTitle, Place = WindowPlace.Parse(place),
-            }, client,
+                Headless = true, Audio = false, CheckSeconds = check,
+                Settings = (options.Settings ?? settings) with { MaxMbps = 60 }, // the engine follows the settings' ceiling
+                Stability = options.Stability with { MaxKbps = 60_000, StartKbps = Math.Max(options.Stability.StartKbps, 20_000) },
+            };
+            session.StageChanged += (s, _) =>
+            {
+                if (s == PlayerStage.Streaming)
+                    Task.Delay(TimeSpan.FromSeconds(check)).ContinueWith(_ => session.Stop());
+            };
+        }
+        int code = session.Run(options, client,
             async () => await auth.GetTransferTokenAsync(store.Load() ?? tokens), Refresh);
         // Tell the launcher where the (windowed) video was, so it reappears in the same place: one window, not two.
         if (session.LastWindow is { } last) Emit(new PlayerEvent { Type = "window", Message = last.ToString() });

@@ -21,6 +21,7 @@ namespace XStream.Core.Video;
 internal sealed unsafe class D3D11Renderer : IVideoRenderer
 {
     public float ColorFlags { get; set; }
+    public bool Enhance { get; set; } = true;
     private const string Shaders = """
         Texture2D<float>  texY  : register(t0);
         Texture2D<float2> texUV : register(t1);
@@ -36,7 +37,7 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
             float2 uvScale;   // Fill crops the picture: uv = uvOffset + uv * uvScale
             float2 uvOffset;
             float2 foot;      // the source area one screen pixel covers, in UV units
-            float2 pad2;
+            float2 pad2;     // x: 1 = Enhance (edge-aware upscaling when enlarging)
         };
         struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 
@@ -126,12 +127,97 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
             return c / 4;
         }
 
+        // Enlarging the picture (a 720p stream on a 1080p or larger screen), with Enhance on: luma is upscaled
+        // edge-aware, after AMD FidelityFX Super Resolution 1's EASU (MIT licence; ffx_fsr1.h). Twelve source
+        // pixels give the local edge direction and strength; a Lanczos-like kernel is stretched along the edge,
+        // so lines and text stay sharp instead of going soft and stair-stepped. The result is clamped to the four
+        // nearest pixels (no ringing). Clarity then lifts it a little against plain bilinear, clamped the same way.
+        // Same as the Metal version.
+        float EasuTex(int2 q, int2 maxp) { return texY.Load(int3(clamp(q, 0, maxp), 0)); }
+
+        void EasuSet(inout float2 dir, inout float len, float w, float lA, float lB, float lC, float lD, float lE)
+        {
+            float dc = lD - lC, cb = lC - lB;
+            float lenX = max(abs(dc), abs(cb)); lenX = lenX > 0 ? 1.0 / lenX : 0;
+            float dirX = lD - lB;
+            dir.x += dirX * w;
+            lenX = saturate(abs(dirX) * lenX); len += lenX * lenX * w;
+            float ec = lE - lC, ca = lC - lA;
+            float lenY = max(abs(ec), abs(ca)); lenY = lenY > 0 ? 1.0 / lenY : 0;
+            float dirY = lE - lA;
+            dir.y += dirY * w;
+            lenY = saturate(abs(dirY) * lenY); len += lenY * lenY * w;
+        }
+
+        void EasuTap(inout float aC, inout float aW, float2 off, float2 dir, float2 len2, float lob, float clp, float c)
+        {
+            float2 v = float2(off.x * dir.x + off.y * dir.y, off.x * -dir.y + off.y * dir.x) * len2;
+            float d2 = min(dot(v, v), clp);
+            float wB = 2.0 / 5.0 * d2 - 1, wA = lob * d2 - 1;
+            wB *= wB; wA *= wA;
+            wB = 25.0 / 16.0 * wB - (25.0 / 16.0 - 1.0);
+            float w = wB * wA;
+            aC += c * w; aW += w;
+        }
+
+        float LumaEnhance(float2 uv)
+        {
+            float2 size = 1.0 / texel;
+            float2 pp = uv * size - 0.5;
+            float2 fp = floor(pp); pp -= fp;
+            int2 o = (int2)fp, maxp = (int2)size - 1;
+            //    b c
+            //  e f g h
+            //  i j k l
+            //    n o
+            float b = EasuTex(o + int2(0, -1), maxp), c = EasuTex(o + int2(1, -1), maxp);
+            float e = EasuTex(o + int2(-1, 0), maxp), f = EasuTex(o, maxp), g = EasuTex(o + int2(1, 0), maxp), h = EasuTex(o + int2(2, 0), maxp);
+            float i = EasuTex(o + int2(-1, 1), maxp), j = EasuTex(o + int2(0, 1), maxp), k = EasuTex(o + int2(1, 1), maxp), l = EasuTex(o + int2(2, 1), maxp);
+            float n = EasuTex(o + int2(0, 2), maxp), oo = EasuTex(o + int2(1, 2), maxp);
+            float2 dir = float2(0, 0); float len = 0;
+            EasuSet(dir, len, (1 - pp.x) * (1 - pp.y), b, e, f, g, j);
+            EasuSet(dir, len, pp.x * (1 - pp.y), c, f, g, h, k);
+            EasuSet(dir, len, (1 - pp.x) * pp.y, f, i, j, k, n);
+            EasuSet(dir, len, pp.x * pp.y, g, j, k, l, oo);
+            float dirR = dot(dir, dir);
+            bool zro = dirR < 1.0 / 32768.0;
+            dirR = zro ? 1 : rsqrt(dirR);
+            dir.x = zro ? 1 : dir.x;
+            dir *= dirR;
+            len = len * 0.5; len *= len;
+            float stretch = dot(dir, dir) / max(abs(dir.x), abs(dir.y));
+            float2 len2 = float2(1 + (stretch - 1) * len, 1 - 0.5 * len);
+            float lob = 0.5 + ((1.0 / 4.0 - 0.04) - 0.5) * len;
+            float clp = 1.0 / lob;
+            float aC = 0, aW = 0;
+            EasuTap(aC, aW, float2( 0, -1) - pp, dir, len2, lob, clp, b);
+            EasuTap(aC, aW, float2( 1, -1) - pp, dir, len2, lob, clp, c);
+            EasuTap(aC, aW, float2(-1,  1) - pp, dir, len2, lob, clp, i);
+            EasuTap(aC, aW, float2( 0,  1) - pp, dir, len2, lob, clp, j);
+            EasuTap(aC, aW, float2( 0,  0) - pp, dir, len2, lob, clp, f);
+            EasuTap(aC, aW, float2(-1,  0) - pp, dir, len2, lob, clp, e);
+            EasuTap(aC, aW, float2( 1,  1) - pp, dir, len2, lob, clp, k);
+            EasuTap(aC, aW, float2( 2,  1) - pp, dir, len2, lob, clp, l);
+            EasuTap(aC, aW, float2( 2,  0) - pp, dir, len2, lob, clp, h);
+            EasuTap(aC, aW, float2( 1,  0) - pp, dir, len2, lob, clp, g);
+            EasuTap(aC, aW, float2( 1,  2) - pp, dir, len2, lob, clp, oo);
+            EasuTap(aC, aW, float2( 0,  2) - pp, dir, len2, lob, clp, n);
+            float mn = min(min(f, g), min(j, k)), mx = max(max(f, g), max(j, k));
+            float r = clamp(aC / max(aW, 1e-5), mn, mx);
+            if (sharpen <= 0) return r;
+            float bil = lerp(lerp(f, g, pp.x), lerp(j, k, pp.x), pp.y);
+            return clamp(r + sharpen * (r - bil), mn, mx); // EASU is already sharp: Clarity adds a little, not four times
+        }
+
+        bool Enlarging() { float2 f = foot / texel; return pad2.x > 0.5 && f.x > 0 && f.x < 0.95 && f.y < 0.95; }
+
         bool Shrinking(out float2 f) { f = foot / texel; return (f.x > 1.02 || f.y > 1.02) && f.x < 3 && f.y < 3; }
 
         float4 PSNv12(VSOut i) : SV_Target
         {
             float2 uv = uvOffset + i.uv * uvScale;
             float2 f;
+            if (Enlarging()) return ToRgb(LumaEnhance(uv), texUV.SampleLevel(samp, uv, 0));
             if (!Shrinking(f)) return ToRgb(Luma(uv), texUV.SampleLevel(samp, uv, 0));
             return ToRgb(LumaShrink(uv, max(f, 1)), ChromaShrink(uv, foot, 0));
         }
@@ -140,6 +226,7 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
         {
             float2 uv = uvOffset + i.uv * uvScale;
             float2 f;
+            if (Enlarging()) return ToRgb(LumaEnhance(uv), float2(texU.SampleLevel(samp, uv, 0), texV.SampleLevel(samp, uv, 0)));
             if (!Shrinking(f)) return ToRgb(Luma(uv), float2(texU.SampleLevel(samp, uv, 0), texV.SampleLevel(samp, uv, 0)));
             return ToRgb(LumaShrink(uv, max(f, 1)), ChromaShrink(uv, foot, 1));
         }
@@ -388,7 +475,7 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
             {
                 TexelX = 1f / _w, TexelY = 1f / _h,
                 Sharpen = Sharpen.Strength(sharpenLevel) / 16f, Pad = ColorFlags,
-                ScaleX = 1, ScaleY = 1,
+                ScaleX = 1, ScaleY = 1, Pad2 = Enhance && !SimpleScaling ? 1 : 0,
             };
             switch (scaling)
             {

@@ -68,6 +68,7 @@ public partial class App : Application
             _pad.Refresh += () =>
             {
                 if (vm.IsSignedIn && vm.CurrentPage == vm.Consoles) vm.Consoles.RefreshCommand.Execute(null);
+                else if (vm.IsSignedIn && vm.CurrentPage == vm.Friends) vm.Friends.RefreshCommand.Execute(null);
                 else if (vm.CurrentPage == vm.SettingsPage) { vm.SettingsPage.Section = "System"; vm.SettingsPage.RunChecksCommand.Execute(null); }
             };
             vm.PropertyChanged += (_, e) =>
@@ -273,16 +274,35 @@ public partial class App : Application
                         if (vm.Consoles.Consoles.FirstOrDefault() is { } first && !vm.Stream.HasHero)
                             vm.Stream.Demo(demo, first.ServerId, first.Name);
                     };
+                // XSTREAM_DEMO_CHECK=1 (testing): show the Test connection panel (Sessions page) with a sample result (nothing runs).
+                if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_CHECK") is { Length: > 0 }) vm.Consoles.Check.Demo();
                 // XSTREAM_DEMO_PAGE=Mapping (testing): open on that page.
                 if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_PAGE") is { Length: > 0 } page && vm.Nav.FirstOrDefault(n => n.Title == page) is { } nav)
                     DispatcherTimer.RunOnce(() =>
                     {
                         vm.SelectedNav = nav;
+                        // XSTREAM_DEMO_SECTION=Sound (testing): on Settings, that tab.
+                        if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_SECTION") is { Length: > 0 } section) { vm.IsSignedIn = true; vm.SettingsPage.ShowSectionCommand.Execute(section); }
                         // XSTREAM_DEMO_SLOT=A (testing): on Mapping, open the second game and that button's picker (nothing is saved).
                         if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_SLOT") is { Length: > 0 } slot && vm.Mapping.Games.Count > 1)
                         {
                             vm.Mapping.SelectGameCommand.Execute(vm.Mapping.Games[1]);
                             vm.Mapping.PickSlotCommand.Execute(vm.Mapping.Slots.FirstOrDefault(x => x.Label == slot));
+                        }
+                        // XSTREAM_DEMO_KEYS=A (testing): on Mapping, the keyboard & mouse view with that button waiting for a key ("-": none;
+                        // "controller": the controller view). Shown even when signed out (a test data folder has no sign-in; the page needs none).
+                        if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_KEYS") is { Length: > 0 } key)
+                        {
+                            vm.IsSignedIn = true;
+                            vm.Mapping.KeyboardView = key != "controller";
+                            vm.Mapping.PickSlotCommand.Execute(vm.Mapping.KeySlots.FirstOrDefault(x => x.Label == key));
+                        }
+                        // XSTREAM_DEMO_TAB=Achievements (testing): on Friends, that tab; XSTREAM_DEMO_GAME=N also opens the Nth game's list.
+                        if (page == "Friends" && Environment.GetEnvironmentVariable("XSTREAM_DEMO_TAB") is { Length: > 0 } tab)
+                        {
+                            vm.Friends.ShowTabCommand.Execute(tab);
+                            if (int.TryParse(Environment.GetEnvironmentVariable("XSTREAM_DEMO_GAME"), out int n))
+                                DispatcherTimer.RunOnce(() => vm.Friends.OpenGameCommand.Execute(vm.Friends.Games.ElementAtOrDefault(n - 1)), TimeSpan.FromSeconds(2.5));
                         }
                     }, TimeSpan.FromSeconds(2));
                 // XSTREAM_DEMO_SHOT=file.png (testing): save the window as it looks after a few seconds, then quit.

@@ -80,14 +80,14 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] public partial bool Fullscreen { get; set; }
     [ObservableProperty] public partial bool VSync { get; set; }
     [ObservableProperty] public partial bool HardwareDecode { get; set; }
-    [ObservableProperty] public partial int ResolutionIndex { get; set; }
+    /// <summary>Quality: Sharpest (the console's top tier) or Fastest (720p). The console ignores 1080p at home, so only these two mean anything.</summary>
+    [ObservableProperty] public partial bool QualitySharpest { get; set; }
+    [ObservableProperty] public partial bool QualityFastest { get; set; }
+    [ObservableProperty] public partial bool Enhance { get; set; }
+    partial void OnEnhanceChanged(bool value) => Save(s => s with { Enhance = value });
     [ObservableProperty] public partial int ScalingIndex { get; set; }
     public string[] ScalingModes { get; } = ["Fit (whole picture, bars)", "Fill (trim edges, no bars)", "Stretch (no bars, slightly stretched)"];
     partial void OnScalingIndexChanged(int value) => Save(s => s with { Scaling = (XStream.Core.Video.VideoScaling)Math.Clamp(value, 0, 2) });
-    // Listed in this order; the enum's order (Max, R1080, R720, Auto) is what's stored.
-    public string[] Resolutions { get; } = ["Maximum (1440p / 4K where offered)", "Match display (1080p on 1080p screens)", "1080p", "720p (lowest delay, low bandwidth)"];
-    private static readonly XStream.Core.Xbox.StreamResolution[] ResolutionOrder =
-        [XStream.Core.Xbox.StreamResolution.Max, XStream.Core.Xbox.StreamResolution.Auto, XStream.Core.Xbox.StreamResolution.R1080, XStream.Core.Xbox.StreamResolution.R720];
     [ObservableProperty] public partial bool HideLauncherWhileStreaming { get; set; }
     [ObservableProperty] public partial bool ControllerNavigation { get; set; }
     [ObservableProperty] public partial bool LauncherFullscreen { get; set; }
@@ -95,7 +95,83 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] public partial bool MatchRefreshRate { get; set; }
     partial void OnMatchRefreshRateChanged(bool value) => Save(s => s with { MatchRefreshRate = value });
     [ObservableProperty] public partial bool Microphone { get; set; }
-    partial void OnMicrophoneChanged(bool value) => Save(s => s with { Microphone = value });
+    partial void OnMicrophoneChanged(bool value) { Save(s => s with { Microphone = value }); if (value) LoadMicDevices(); else StopMicTest(); }
+
+    // ---- Microphone: which one, push to talk, the controller button, and a level test ------------------
+    public System.Collections.ObjectModel.ObservableCollection<string> MicDevices { get; } = [DefaultMic];
+    private const string DefaultMic = "System default";
+    [ObservableProperty] public partial string? MicDevice { get; set; } = DefaultMic;
+    partial void OnMicDeviceChanged(string? value)
+    {
+        if (value is null) return;
+        Save(s => s with { MicDevice = value == DefaultMic ? "" : value });
+        if (MicTesting) { StopMicTest(); TestMic(); } // test the newly chosen one
+    }
+    [ObservableProperty] public partial bool PushToTalk { get; set; }
+    partial void OnPushToTalkChanged(bool value) => Save(s => s with { PushToTalk = value });
+    public string[] MicButtons { get; } = ["None", "Paddle 1 (upper right)", "Paddle 2 (lower right)", "Paddle 3 (upper left)", "Paddle 4 (lower left)", "Left stick click", "Right stick click", "View", "D-pad down"];
+    private static readonly string[] MicButtonNames = ["", "Paddle1", "Paddle2", "Paddle3", "Paddle4", "LeftThumb", "RightThumb", "View", "DPadDown"];
+    [ObservableProperty] public partial int MicButtonIndex { get; set; }
+    partial void OnMicButtonIndexChanged(int value) => Save(s => s with { MicButton = MicButtonNames[Math.Clamp(value, 0, MicButtonNames.Length - 1)] });
+
+    [ObservableProperty] public partial bool MicTesting { get; set; }
+    [ObservableProperty] public partial double MicLevel { get; set; }
+    [ObservableProperty] public partial string MicTestText { get; set; } = "";
+    private XStream.Core.Audio.Microphone? _micTest;
+    private Avalonia.Threading.DispatcherTimer? _micTimer;
+    private DateTime _micTestEnds;
+    private double _micPeak;
+
+    private void LoadMicDevices()
+    {
+        string want = _store.Current.MicDevice is { Length: > 0 } d ? d : DefaultMic;
+        try
+        {
+            var list = XStream.Core.Audio.Microphone.Devices();
+            bool was = _loading;
+            _loading = true; // filling the list must not save anything
+            MicDevices.Clear();
+            MicDevices.Add(DefaultMic);
+            foreach (var n in list) MicDevices.Add(n);
+            if (!MicDevices.Contains(want)) MicDevices.Add(want); // chosen before, not plugged in now
+            MicDevice = want;
+            _loading = was;
+        }
+        catch { /* no audio library: keep the default only */ }
+    }
+
+    [CommunityToolkit.Mvvm.Input.RelayCommand]
+    private void TestMic()
+    {
+        if (MicTesting) { StopMicTest(); return; }
+        try
+        {
+            var m = new XStream.Core.Audio.Microphone();
+            m.Start(_store.Current.MicDevice);
+            _micTest = m;
+            MicTesting = true;
+            _micPeak = 0;
+            _micTestEnds = DateTime.UtcNow.AddSeconds(15);
+            MicTestText = $"Listening on {m.Name}. Say something…";
+            _micTimer = new Avalonia.Threading.DispatcherTimer(TimeSpan.FromMilliseconds(50), Avalonia.Threading.DispatcherPriority.Normal, (_, _) =>
+            {
+                if (_micTest is not { } t || DateTime.UtcNow > _micTestEnds) { StopMicTest(); return; }
+                double level = Math.Min(100, Math.Sqrt(t.Level) * 100); // square root: speech sits mid-scale
+                MicLevel = Math.Max(level, MicLevel * 0.85);
+                _micPeak = Math.Max(_micPeak, level);
+                MicTestText = _micPeak > 25 ? $"Hearing you on {t.Name}." : $"Listening on {t.Name}. Say something…";
+            });
+        }
+        catch (Exception ex) { MicTesting = true; MicLevel = 0; MicTestText = "Couldn't open the microphone: " + ex.Message; _micTestEnds = DateTime.UtcNow; }
+    }
+
+    private void StopMicTest()
+    {
+        _micTimer?.Stop(); _micTimer = null;
+        _micTest?.Dispose(); _micTest = null;
+        MicTesting = false;
+        MicLevel = 0;
+    }
     [ObservableProperty] public partial bool DiscordStatus { get; set; }
     partial void OnDiscordStatusChanged(bool value) => Save(s => s with { DiscordStatus = value });
     [ObservableProperty] public partial bool AutoUpdate { get; set; }
@@ -118,6 +194,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     }
     [ObservableProperty] public partial bool ConnectionAlerts { get; set; }
     partial void OnConnectionAlertsChanged(bool value) => Save(s => s with { ConnectionAlerts = value });
+    [ObservableProperty] public partial bool AchievementAlerts { get; set; }
+    partial void OnAchievementAlertsChanged(bool value) => Save(s => s with { AchievementAlerts = value });
     [ObservableProperty] public partial bool AutoConnect { get; set; }
     partial void OnAutoConnectChanged(bool value) => Save(s => s with { AutoConnect = value });
     public bool IsWindows => OperatingSystem.IsWindows();
@@ -181,7 +259,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnFullscreenChanged(bool value) => Save(s => s with { Fullscreen = value });
     partial void OnVSyncChanged(bool value) => Save(s => s with { VSync = value });
     partial void OnHardwareDecodeChanged(bool value) => Save(s => s with { HardwareDecode = value });
-    partial void OnResolutionIndexChanged(int value) => Save(s => s with { Resolution = ResolutionOrder[Math.Clamp(value, 0, ResolutionOrder.Length - 1)] });
+    partial void OnQualitySharpestChanged(bool value) { if (value) Save(s => s with { Resolution = XStream.Core.Xbox.StreamResolution.Max }); }
+    partial void OnQualityFastestChanged(bool value) { if (value) Save(s => s with { Resolution = XStream.Core.Xbox.StreamResolution.R720 }); }
     partial void OnHideLauncherWhileStreamingChanged(bool value) => Save(s => s with { HideLauncherWhileStreaming = value });
     partial void OnControllerNavigationChanged(bool value) => Save(s => s with { ControllerNavigation = value });
 
@@ -239,16 +318,22 @@ public sealed partial class SettingsViewModel : ObservableObject
         Fullscreen = s.Fullscreen;
         VSync = s.VSync;
         HardwareDecode = s.HardwareDecode;
-        ResolutionIndex = Math.Max(0, Array.IndexOf(ResolutionOrder, s.Resolution));
+        QualityFastest = s.Resolution == XStream.Core.Xbox.StreamResolution.R720;
+        QualitySharpest = !QualityFastest;
+        Enhance = s.Enhance;
         ScalingIndex = (int)s.Scaling;
         HideLauncherWhileStreaming = s.HideLauncherWhileStreaming;
         ControllerNavigation = s.ControllerNavigation;
         LauncherFullscreen = s.LauncherFullscreen;
         MatchRefreshRate = s.MatchRefreshRate;
         Microphone = s.Microphone;
+        PushToTalk = s.PushToTalk;
+        MicButtonIndex = Math.Max(0, Array.IndexOf(MicButtonNames, s.MicButton));
+        if (s.Microphone && MicDevices.Count == 1) LoadMicDevices();
         DiscordStatus = s.DiscordStatus;
         AutoConnect = s.AutoConnect;
         ConnectionAlerts = s.ConnectionAlerts;
+        AchievementAlerts = s.AchievementAlerts;
         AutoUpdate = s.AutoUpdate;
         Audio = s.Audio;
         Volume = s.Volume;

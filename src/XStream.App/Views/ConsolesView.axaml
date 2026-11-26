@@ -196,6 +196,37 @@
 
             <!-- After the session -->
             <TextBlock Text="{Binding Stream.SummaryLine}" FontSize="15" IsVisible="{Binding Stream.ShowSummary}" TextWrapping="Wrap" />
+            <!-- Connection tips from the stream's own numbers -->
+            <Border Classes="banner" Margin="0,-4,0,0">
+              <Border.IsVisible>
+                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                  <Binding Path="Stream.ShowSummary" />
+                  <Binding Path="Stream.HasSummaryTips" />
+                </MultiBinding>
+              </Border.IsVisible>
+              <StackPanel Spacing="10">
+                <TextBlock Classes="label" Text="CONNECTION TIPS" />
+                <ItemsControl ItemsSource="{Binding Stream.SummaryTips}">
+                  <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="8" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:FindingItem">
+                      <Grid ColumnDefinitions="Auto,*">
+                        <Ellipse Classes="dot" Margin="2,6,12,0" VerticalAlignment="Top"
+                                 Classes.sleep="{Binding Kind, Converter={x:Static app:Conv.Is}, ConverterParameter=fair}"
+                                 Classes.bad="{Binding Kind, Converter={x:Static app:Conv.Is}, ConverterParameter=poor}" />
+                        <StackPanel Grid.Column="1" Spacing="2">
+                          <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                          <TextBlock Classes="caption" Text="{Binding Detail}" TextWrapping="Wrap" />
+                        </StackPanel>
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Button Classes="primary" HorizontalAlignment="Left" Command="{Binding Stream.ApplyTipsCommand}" IsVisible="{Binding Stream.CanApplyTips}">
+                  <TextBlock Text="{Binding Stream.TipsApplyText}" TextWrapping="Wrap" />
+                </Button>
+              </StackPanel>
+            </Border>
             <Border Classes="banner bad" Margin="0,-4,0,0">
               <Border.IsVisible>
                 <MultiBinding Converter="{x:Static BoolConverters.And}">

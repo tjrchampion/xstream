@@ -32,8 +32,11 @@ public sealed partial class MainViewModel : ObservableObject
         SignIn = new SignInViewModel(xbox);
         Consoles = new ConsolesViewModel(xbox, settings, Stream, _art);
         Cloud = new CloudViewModel(xbox, settings, Stream);
+        Friends = new FriendsViewModel(xbox, settings);
         Stream.ProfileProvider = () => settings.Current.Profile;
-        Sessions = new SessionsViewModel();
+        Stream.CurrentSettings = () => settings.Current;
+        Stream.SaveSettings = change => settings.Update(change);
+        Sessions = new SessionsViewModel { Check = Consoles.Check, RunTest = Consoles.TestLastAsync };
         SettingsPage = new SettingsViewModel(settings) { Stream = Stream };
         SettingsPage.Updates = Updates;
         SettingsPage.InstallUpdateRequested += RestartToUpdate;
@@ -52,6 +55,7 @@ public sealed partial class MainViewModel : ObservableObject
         [
             new("Consoles", "Icon.Console", Consoles),
             new("Cloud", "Icon.Cloud", Cloud),
+            new("Friends", "Icon.Friends", Friends),
             new("Mapping", "Icon.Gamepad", Mapping),
             new("Sessions", "Icon.History", Sessions),
             new("Settings", "Icon.Settings", SettingsPage),
@@ -99,6 +103,7 @@ public sealed partial class MainViewModel : ObservableObject
     public SignInViewModel SignIn { get; }
     public ConsolesViewModel Consoles { get; }
     public CloudViewModel Cloud { get; }
+    public FriendsViewModel Friends { get; }
     public SessionsViewModel Sessions { get; }
     public SettingsViewModel SettingsPage { get; }
     public ObservableCollection<NavItem> Nav { get; }
@@ -115,6 +120,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (value?.Page == Consoles && !Consoles.Loaded && IsSignedIn) _ = Consoles.RefreshAsync();
         // The cloud library: shown from the cache straight away, refreshed when the page is opened.
         if (value?.Page == Cloud && IsSignedIn && !Cloud.IsLoading) _ = Cloud.RefreshAsync();
+        if (value?.Page == Friends && IsSignedIn) Friends.Opened();
     }
 
     public async Task StartupAsync()
@@ -148,6 +154,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (Stream.StartFailed && !Stream.IsRunning) { Stream.DismissCommand.Execute(null); return; }
         if (!IsSignedIn) { SignIn.CancelCommand.Execute(null); return; }
         if (Stream.HasResult && !Stream.IsRunning) { Stream.DismissCommand.Execute(null); return; }
+        if (CurrentPage == Friends && Friends.Back()) return;
         if (SelectedNav != Nav[0]) SelectedNav = Nav[0];
     }
 
@@ -164,6 +171,7 @@ public sealed partial class MainViewModel : ObservableObject
         _xbox.SignOut();
         _art.Forget();
         CloudLibrary.Forget();
+        Friends.Forget();
         Consoles.Consoles.Clear();
         Consoles.Loaded = false;
         IsSignedIn = false;

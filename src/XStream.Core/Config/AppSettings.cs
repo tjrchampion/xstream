@@ -69,11 +69,18 @@ public sealed record AppSettings
     public bool TriggerRumble { get; init; }
     /// <summary>Small stats readout over the video (toggle from the in-stream menu too).</summary>
     public bool ShowStatsHud { get; init; }
+    /// <summary>The stats readout as a detailed panel (latency breakdown, network, picture) instead of one line.</summary>
+    public bool StatsDetailed { get; init; }
     public bool Audio { get; init; } = true;
     /// <summary>Game audio volume, 0-100%.</summary>
     public int Volume { get; init; } = 100;
     /// <summary>Sharpening applied before the picture is scaled up to the display.</summary>
     public ClarityLevel Clarity { get; init; } = ClarityLevel.Low;
+    /// <summary>
+    /// Enhance: when the stream is smaller than the screen (720p on a 1080p+ display, 1440p on 4K), upscale it
+    /// edge-aware (FSR 1 style) instead of bilinear, so text and edges stay sharp.
+    /// </summary>
+    public bool Enhance { get; init; } = true;
     /// <summary>How a 16:9 stream fills a screen of another shape (e.g. a 16:10 Mac): Fit (bars), Fill (trim edges), Stretch.</summary>
     public VideoScaling Scaling { get; init; } = VideoScaling.Fit;
 
@@ -81,12 +88,20 @@ public sealed record AppSettings
     public bool MatchRefreshRate { get; init; } = OperatingSystem.IsWindows();
     /// <summary>Send the microphone to the console for party and game chat.</summary>
     public bool Microphone { get; init; }
+    /// <summary>Push to talk: the mic only sends while <see cref="MicButton"/> (or F9) is held. Off: open mic, F9 / the button mutes.</summary>
+    public bool PushToTalk { get; init; }
+    /// <summary>Controller button for the mic ("" = none): toggles mute, or is held to talk. Paddle1-4 suit it best (they aren't sent to the game).</summary>
+    public string MicButton { get; init; } = "";
+    /// <summary>Microphone to use (its name as the system lists it); "" = the system default.</summary>
+    public string MicDevice { get; init; } = "";
     /// <summary>Show "Playing … via Vexel" on Discord while streaming.</summary>
     public bool DiscordStatus { get; init; } = true;
     /// <summary>Discord application id for the status (overrides the built-in one).</summary>
     public string? DiscordAppId { get; init; }
     /// <summary>Short in-stream messages when the connection or frame rate suffers (and when it recovers), and low battery.</summary>
     public bool ConnectionAlerts { get; init; } = true;
+    /// <summary>"Achievement unlocked: Name · 20G" over the game when one unlocks during a stream.</summary>
+    public bool AchievementAlerts { get; init; } = true;
     /// <summary>Check for, download and offer new versions automatically (Windows build).</summary>
     public bool AutoUpdate { get; init; } = true;
     /// <summary>Release feed (latest.json) override; empty uses the built-in one.</summary>
@@ -114,6 +129,14 @@ public sealed record AppSettings
     public double GyroSensitivity { get; init; } = 1;
     /// <summary>Gyro only while this button is held ("" = always on). Usually LeftShoulder or a paddle.</summary>
     public string GyroHoldButton { get; init; } = "";
+    /// <summary>Play with keyboard and mouse in the stream window (a virtual controller). Auto: only while no controller is connected.</summary>
+    public XStream.Core.Input.KeyboardMouseMode KeyboardMouse { get; init; } = XStream.Core.Input.KeyboardMouseMode.Auto;
+    /// <summary>Keyboard-and-mouse keys, as changes from the default layout ("A=Space,RightTrigger=MouseLeft"; see KeyboardBindings).</summary>
+    public string KeyboardMouseBindings { get; init; } = "";
+    /// <summary>Mouse aim speed on the right stick (1 = default; 0.25 to 4).</summary>
+    public double MouseSensitivity { get; init; } = 1;
+    /// <summary>Mouse forward looks down.</summary>
+    public bool MouseInvertY { get; init; }
     /// <summary>
     /// Per-game controller setups: used instead of the ones above while that game is running (the stream switches
     /// when the game changes). Keyed by Xbox title id, or "cloud:ID" for a cloud game.
@@ -160,7 +183,7 @@ public sealed record AppSettings
         }
     }
 
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
 
     /// <summary>
     /// Every setting is written to the file, so a changed default never reached anyone who already had one. Settings
@@ -180,6 +203,8 @@ public sealed record AppSettings
             s = s with { Resolution = StreamResolution.Max };
         if (s.SettingsVersion < 4) // 0.4.8: gyro aim off by default (it could be saved as on without being chosen)
             s = s with { GyroAim = false };
+        if (s.SettingsVersion < 5 && s.Resolution is StreamResolution.R1080 or StreamResolution.Auto) // 0.5.0: Quality is Sharpest or Fastest
+            s = s with { Resolution = StreamResolution.Max }; // the console ignored 1080p at home and sent its top tier anyway
         return s with { SettingsVersion = CurrentVersion };
     }
 

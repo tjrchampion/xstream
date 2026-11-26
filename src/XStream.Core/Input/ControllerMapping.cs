@@ -65,6 +65,9 @@ public sealed class ControllerMapping
         return TryButton(name, out var b) && (pressed & b) != 0;
     }
 
+    /// <summary>An Xbox button by name (not a paddle).</summary>
+    public static bool IsButton(string name, out GamepadButtons b) => TryButton(name, out b);
+
     private static bool TryTarget(string name, out GamepadButtons b)
     {
         if (name.Equals("None", StringComparison.OrdinalIgnoreCase)) { b = GamepadButtons.None; return true; }

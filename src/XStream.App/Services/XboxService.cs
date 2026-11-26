@@ -68,6 +68,10 @@ public sealed class XboxService : IDisposable
         return (tokens.CloudOffering ?? "xgpuweb", games, recent.Select(r => r.TitleId).ToList());
     }
 
+    /// <summary>Friends, presence and achievements (read-only Xbox Live). A new one after signing out (it keeps the sign-in).</summary>
+    public XboxSocial Social => _social ??= new XboxSocial(_http, ct => _store.GetWebTokenAsync(ct));
+    private XboxSocial? _social;
+
     // ---- Console remote control (power, launching games) -----------------------------------------------
     private XboxConsoleControl? _control;
     private IReadOnlyList<ControlledConsole>? _controlled;
@@ -95,7 +99,7 @@ public sealed class XboxService : IDisposable
     /// <summary>Downloads a URL's bytes (game art).</summary>
     public Task<byte[]> DownloadAsync(string url, CancellationToken ct) => _http.GetByteArrayAsync(url, ct);
 
-    public void SignOut() { _controlled = null; _store.SignOut(); }
+    public void SignOut() { _controlled = null; _social = null; _store.SignOut(); }
 
     public void Dispose() => _http.Dispose();
 }

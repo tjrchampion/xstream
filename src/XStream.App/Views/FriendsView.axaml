@@ -1,0 +1,288 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:XStream.App.ViewModels"
+             x:Class="XStream.App.Views.FriendsView"
+             x:DataType="vm:FriendsViewModel">
+  <UserControl.Resources>
+    <StreamGeometry x:Key="Icon.Trophy">M20.2,2H19.5H18C17.1,2 16,3 16,4H8C8,3 6.9,2 6,2H4.5H3.8H2V11C2,12 3,13 4,13H6.2C6.6,15 7.9,16.7 11,17V19.1C8.8,19.3 8,20.4 8,21.7V22H16V21.7C16,20.4 15.2,19.3 13,19.1V17C16.1,16.7 17.4,15 17.8,13H20C21,13 22,12 22,11V2H20.2M4,11V4H6V6V11C5.1,11 4.3,11 4,11M20,11C19.7,11 18.9,11 18,11V6V4H20V11Z</StreamGeometry>
+    <StreamGeometry x:Key="Icon.Lock">M12,17A2,2 0 0,0 14,15C14,13.89 13.1,13 12,13A2,2 0 0,0 10,15A2,2 0 0,0 12,17M18,8A2,2 0 0,1 20,10V20A2,2 0 0,1 18,22H6A2,2 0 0,1 4,20V10C4,8.89 4.9,8 6,8H7V6A5,5 0 0,1 12,1A5,5 0 0,1 17,6V8H18M12,3A3,3 0 0,0 9,6V8H15V6A3,3 0 0,0 12,3Z</StreamGeometry>
+    <StreamGeometry x:Key="Icon.Star">M12,17.27L18.18,21L16.54,13.64L22,8.94L14.81,8.27L12,2L9.19,8.27L2,8.94L7.45,13.64L5.82,21L12,17.27Z</StreamGeometry>
+  </UserControl.Resources>
+
+  <UserControl.Styles>
+    <!-- Tabs (as on Settings) -->
+    <Style Selector="Border.tabs">
+      <Setter Property="Background" Value="{StaticResource Surface2}" /><Setter Property="CornerRadius" Value="14" /><Setter Property="Padding" Value="4" />
+    </Style>
+    <Style Selector="Button.tab">
+      <Setter Property="Background" Value="Transparent" /><Setter Property="BorderThickness" Value="0" /><Setter Property="CornerRadius" Value="10" />
+      <Setter Property="Padding" Value="16,10" /><Setter Property="Foreground" Value="{StaticResource Muted}" /><Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.tab PathIcon"><Setter Property="Width" Value="14" /><Setter Property="Height" Value="14" /></Style>
+    <Style Selector="Button.tab:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#14FFFFFF" /><Setter Property="Foreground" Value="{StaticResource Text}" />
+    </Style>
+    <Style Selector="Button.tab.on /template/ ContentPresenter#PART_ContentPresenter, Button.tab.on:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource AccentSoft}" /><Setter Property="Foreground" Value="{StaticResource Accent}" />
+    </Style>
+
+    <!-- Cards that can be focused with the controller (friends, games, achievements) -->
+    <Style Selector="Button.item">
+      <Setter Property="Background" Value="{StaticResource Surface}" /><Setter Property="BorderBrush" Value="{StaticResource Line}" />
+      <Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="14" /><Setter Property="Padding" Value="14,12" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" /><Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="FontWeight" Value="Normal" />
+    </Style>
+    <Style Selector="Button.item.static"><Setter Property="Cursor" Value="Arrow" /></Style>
+    <Style Selector="Button.item:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource Surface2}" /><Setter Property="BorderBrush" Value="{StaticResource Surface3}" />
+    </Style>
+    <Style Selector="Button.item:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource Surface2}" />
+    </Style>
+    <Style Selector="Button.item.static:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.item.static:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource Surface}" /><Setter Property="BorderBrush" Value="{StaticResource Line}" />
+    </Style>
+    <Style Selector="Button.item:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="BorderBrush" Value="{StaticResource Accent}" /><Setter Property="BorderThickness" Value="2.5" />
+    </Style>
+    <Style Selector="Button.item.offline Grid.body"><Setter Property="Opacity" Value="0.72" /></Style>
+    <Style Selector="Button.item.locked Grid.body"><Setter Property="Opacity" Value="0.7" /></Style>
+
+    <Style Selector="TextBlock.playing"><Setter Property="Foreground" Value="{StaticResource Accent}" /></Style>
+    <Style Selector="ProgressBar.score">
+      <Setter Property="Height" Value="6" /><Setter Property="MinHeight" Value="6" /><Setter Property="CornerRadius" Value="3" />
+      <Setter Property="Background" Value="{StaticResource Surface3}" /><Setter Property="Foreground" Value="{StaticResource Accent}" />
+      <Setter Property="Minimum" Value="0" /><Setter Property="Maximum" Value="100" />
+    </Style>
+    <Style Selector="ProgressBar.score /template/ Border#PART_Indicator"><Setter Property="CornerRadius" Value="3" /></Style>
+    <Style Selector="ProgressBar.thin"><Setter Property="Height" Value="4" /><Setter Property="MinHeight" Value="4" /></Style>
+  </UserControl.Styles>
+
+  <UserControl.DataTemplates>
+    <!-- A friend: gamerpic with a presence dot, gamertag, what they're doing -->
+    <DataTemplate DataType="vm:FriendViewModel">
+      <Button Classes="item static" Classes.offline="{Binding !IsOnline}" Width="300" Height="78">
+        <Grid Classes="body" ColumnDefinitions="Auto,*">
+          <Panel Width="48" Height="48" VerticalAlignment="Center">
+            <Border CornerRadius="24" ClipToBounds="True" Background="{StaticResource Surface3}">
+              <Panel>
+                <TextBlock Text="{Binding Initial}" FontSize="18" FontWeight="Bold" Foreground="{StaticResource Muted}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding !HasPicture}" />
+                <Image Source="{Binding Picture}" Stretch="UniformToFill" RenderOptions.BitmapInterpolationMode="HighQuality" />
+              </Panel>
+            </Border>
+            <Border Width="15" Height="15" CornerRadius="8" Background="{StaticResource Surface}" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                    Margin="0,0,-2,-2" IsVisible="{Binding IsOnline}">
+              <Ellipse Classes="dot good" Width="9" Height="9" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+          </Panel>
+          <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center" Spacing="2">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Text="{Binding Gamertag}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" MaxWidth="200" />
+              <PathIcon Data="{StaticResource Icon.Star}" Width="11" Height="11" Foreground="{StaticResource Warn}" IsVisible="{Binding IsFavorite}"
+                        ToolTip.Tip="Favourite" VerticalAlignment="Center" />
+            </StackPanel>
+            <TextBlock Text="{Binding Status}" FontSize="12.5" Classes="muted" Classes.playing="{Binding IsPlaying}" TextTrimming="CharacterEllipsis" />
+            <TextBlock Text="{Binding Detail}" Classes="caption faint" TextTrimming="CharacterEllipsis" IsVisible="{Binding HasDetail}" />
+          </StackPanel>
+        </Grid>
+      </Button>
+    </DataTemplate>
+
+    <!-- A recently played game with its gamerscore progress -->
+    <DataTemplate DataType="vm:GameProgressViewModel">
+      <Button Classes="item" Command="{Binding OpenCommand}" CommandParameter="{Binding}" Padding="12">
+        <Grid ColumnDefinitions="Auto,*">
+          <Border Width="72" Height="72" CornerRadius="10" ClipToBounds="True" Background="{StaticResource Surface3}">
+            <Panel>
+              <PathIcon Data="{StaticResource Icon.Gamepad}" Width="26" Height="26" Foreground="#55FFFFFF" IsVisible="{Binding !HasArt}" />
+              <Image Source="{Binding Art}" Stretch="UniformToFill" RenderOptions.BitmapInterpolationMode="HighQuality" />
+            </Panel>
+          </Border>
+          <StackPanel Grid.Column="1" Margin="14,0,4,0" VerticalAlignment="Center" Spacing="6">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Text="{Binding Name}" FontSize="14.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+              <Border Grid.Column="1" Classes="chip accent" Margin="8,0,0,0" IsVisible="{Binding IsComplete}"><TextBlock Text="Completed" /></Border>
+            </Grid>
+            <ProgressBar Classes="score" Value="{Binding Percent}" />
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="caption" TextTrimming="CharacterEllipsis">
+                <Run Text="{Binding CountText}" /><Run Text=" · " /><Run Text="{Binding PlayedText}" />
+              </TextBlock>
+              <TextBlock Grid.Column="1" FontSize="12.5" FontWeight="SemiBold" Margin="8,0,0,0">
+                <Run Text="{Binding ScoreText}" /><Run Text="  " /><Run Text="{Binding PercentText}" Foreground="{StaticResource Accent}" />
+              </TextBlock>
+            </Grid>
+          </StackPanel>
+        </Grid>
+      </Button>
+    </DataTemplate>
+
+    <!-- One achievement: icon, name, description, date or gamerscore -->
+    <DataTemplate DataType="vm:AchievementViewModel">
+      <Button Classes="item static" Classes.locked="{Binding !Unlocked}" Padding="10">
+        <Grid Classes="body" ColumnDefinitions="Auto,*,Auto">
+          <Border Width="112" Height="63" CornerRadius="8" ClipToBounds="True" Background="{StaticResource Surface3}">
+            <Panel>
+              <PathIcon Data="{StaticResource Icon.Trophy}" Width="22" Height="22" Foreground="#55FFFFFF" IsVisible="{Binding !HasIcon}" />
+              <Image Source="{Binding Icon}" Stretch="UniformToFill" RenderOptions.BitmapInterpolationMode="HighQuality" />
+              <Border Background="#99000000" IsVisible="{Binding !Unlocked}">
+                <PathIcon Data="{StaticResource Icon.Lock}" Width="16" Height="16" Foreground="#CCFFFFFF" />
+              </Border>
+            </Panel>
+          </Border>
+          <StackPanel Grid.Column="1" Margin="14,0,10,0" VerticalAlignment="Center" Spacing="3">
+            <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+            <TextBlock Text="{Binding Description}" Classes="caption" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasProgress}" Margin="0,3,0,0">
+              <ProgressBar Classes="score thin" Width="140" Value="{Binding ProgressPercent}" VerticalAlignment="Center" />
+              <TextBlock Classes="caption" Text="{Binding ProgressText}" />
+            </StackPanel>
+          </StackPanel>
+          <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right" Spacing="4">
+            <Border Classes="chip" Classes.accent="{Binding Unlocked}" HorizontalAlignment="Right" IsVisible="{Binding HasScore}">
+              <TextBlock Text="{Binding ScoreText}" />
+            </Border>
+            <TextBlock Classes="caption" Text="{Binding DateText}" HorizontalAlignment="Right" />
+          </StackPanel>
+        </Grid>
+      </Button>
+    </DataTemplate>
+  </UserControl.DataTemplates>
+
+  <ScrollViewer>
+    <StackPanel Margin="36,32,36,36" Spacing="22" MaxWidth="1240">
+      <Grid ColumnDefinitions="*,Auto">
+        <StackPanel Spacing="4">
+          <TextBlock Classes="h1" Text="Friends" />
+          <TextBlock Classes="muted" TextWrapping="Wrap" Text="Who's online and what they're playing, and how you're doing in your games." />
+        </StackPanel>
+        <Button Grid.Column="1" Classes="ghost" Command="{Binding RefreshCommand}" VerticalAlignment="Top"
+                Width="40" Height="40" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                ToolTip.Tip="Refresh (Y)" AutomationProperties.Name="Refresh">
+          <PathIcon Data="{StaticResource Icon.Refresh}" Width="16" Height="16" />
+        </Button>
+      </Grid>
+
+      <Border Classes="tabs" HorizontalAlignment="Left">
+        <StackPanel Orientation="Horizontal" Spacing="4">
+          <Button Classes="tab" Classes.on="{Binding IsFriendsTab}" Command="{Binding ShowTabCommand}" CommandParameter="Friends">
+            <StackPanel Orientation="Horizontal" Spacing="8"><PathIcon Data="{StaticResource Icon.Friends}" /><TextBlock Text="Friends" /></StackPanel>
+          </Button>
+          <Button Classes="tab" Classes.on="{Binding IsAchievementsTab}" Command="{Binding ShowTabCommand}" CommandParameter="Achievements">
+            <StackPanel Orientation="Horizontal" Spacing="8"><PathIcon Data="{StaticResource Icon.Trophy}" /><TextBlock Text="Achievements" /></StackPanel>
+          </Button>
+        </StackPanel>
+      </Border>
+
+      <!-- ===== Friends ===== -->
+      <StackPanel Spacing="18" IsVisible="{Binding IsFriendsTab}">
+        <Border Classes="banner bad" IsVisible="{Binding HasFriendsError}">
+          <Grid ColumnDefinitions="Auto,*">
+            <PathIcon Data="{StaticResource Icon.Alert}" Foreground="{StaticResource Bad}" Width="16" Height="16" Margin="0,0,10,0" />
+            <TextBlock Grid.Column="1" Text="{Binding FriendsError}" TextWrapping="Wrap" VerticalAlignment="Center" />
+          </Grid>
+        </Border>
+        <StackPanel Spacing="10" IsVisible="{Binding IsLoadingFriends}">
+          <ProgressBar IsIndeterminate="True" HorizontalAlignment="Stretch" Height="3" MinHeight="3" />
+          <TextBlock Classes="caption" Text="Checking who's online…" />
+        </StackPanel>
+
+        <Border Classes="card" IsVisible="{Binding NoFriends}">
+          <StackPanel Spacing="6">
+            <TextBlock Classes="h3" Text="No friends yet" />
+            <TextBlock Classes="muted" TextWrapping="Wrap" Text="People you follow on Xbox show up here. Add friends from your console or the Xbox app." />
+          </StackPanel>
+        </Border>
+
+        <StackPanel Spacing="12" IsVisible="{Binding FriendsLoaded}">
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Classes="label" Text="ONLINE" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Classes="caption" Text="{Binding FriendsSummary}" />
+          </Grid>
+          <Border Classes="tile" IsVisible="{Binding NobodyOnline}">
+            <TextBlock Classes="muted" Text="None of your friends are online right now." />
+          </Border>
+          <ItemsControl ItemsSource="{Binding Online}" IsVisible="{Binding HasOnline}">
+            <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel ItemSpacing="12" LineSpacing="12" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+          </ItemsControl>
+        </StackPanel>
+
+        <StackPanel Spacing="12" IsVisible="{Binding HasOffline}">
+          <TextBlock Classes="label" Text="OFFLINE" Margin="0,6,0,0" />
+          <ItemsControl ItemsSource="{Binding Offline}">
+            <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel ItemSpacing="12" LineSpacing="12" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+          </ItemsControl>
+        </StackPanel>
+      </StackPanel>
+
+      <!-- ===== Achievements: recently played games ===== -->
+      <StackPanel Spacing="18" IsVisible="{Binding ShowGames}">
+        <Border Classes="banner bad" IsVisible="{Binding HasGamesError}">
+          <Grid ColumnDefinitions="Auto,*">
+            <PathIcon Data="{StaticResource Icon.Alert}" Foreground="{StaticResource Bad}" Width="16" Height="16" Margin="0,0,10,0" />
+            <TextBlock Grid.Column="1" Text="{Binding GamesError}" TextWrapping="Wrap" VerticalAlignment="Center" />
+          </Grid>
+        </Border>
+        <StackPanel Spacing="10" IsVisible="{Binding IsLoadingGames}">
+          <ProgressBar IsIndeterminate="True" HorizontalAlignment="Stretch" Height="3" MinHeight="3" />
+          <TextBlock Classes="caption" Text="Loading your games…" />
+        </StackPanel>
+        <Border Classes="card" IsVisible="{Binding NoGames}">
+          <StackPanel Spacing="6">
+            <TextBlock Classes="h3" Text="No achievements yet" />
+            <TextBlock Classes="muted" TextWrapping="Wrap" Text="Games you've played that have achievements show up here." />
+          </StackPanel>
+        </Border>
+        <StackPanel Spacing="12" IsVisible="{Binding GamesLoaded}">
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Classes="label" Text="RECENTLY PLAYED" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Classes="caption" Text="{Binding GamesSummary}" />
+          </Grid>
+          <ItemsControl ItemsSource="{Binding Games}">
+            <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="2" ColumnSpacing="12" RowSpacing="12" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+          </ItemsControl>
+        </StackPanel>
+      </StackPanel>
+
+      <!-- ===== Achievements: one game ===== -->
+      <StackPanel Spacing="18" IsVisible="{Binding ShowGame}">
+        <Border Classes="card" Padding="16">
+          <Grid ColumnDefinitions="Auto,Auto,*">
+            <Button Classes="ghost" Command="{Binding CloseGameCommand}" VerticalAlignment="Center" Margin="0,0,16,0" ToolTip.Tip="All games (B)">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <PathIcon Data="{StaticResource Icon.ChevronLeft}" Width="16" Height="16" />
+                <TextBlock Text="All games" />
+              </StackPanel>
+            </Button>
+            <Border Grid.Column="1" Width="64" Height="64" CornerRadius="10" ClipToBounds="True" Background="{StaticResource Surface3}">
+              <Image Source="{Binding SelectedGame.Art}" Stretch="UniformToFill" RenderOptions.BitmapInterpolationMode="HighQuality" />
+            </Border>
+            <StackPanel Grid.Column="2" Margin="14,0,0,0" VerticalAlignment="Center" Spacing="6">
+              <TextBlock Classes="h2" Text="{Binding SelectedGame.Name}" TextTrimming="CharacterEllipsis" />
+              <ProgressBar Classes="score" Value="{Binding SelectedGame.Percent}" HorizontalAlignment="Stretch" />
+              <TextBlock Classes="caption" Text="{Binding GameSummary}" />
+            </StackPanel>
+          </Grid>
+        </Border>
+        <Border Classes="banner bad" IsVisible="{Binding HasAchievementsError}">
+          <Grid ColumnDefinitions="Auto,*">
+            <PathIcon Data="{StaticResource Icon.Alert}" Foreground="{StaticResource Bad}" Width="16" Height="16" Margin="0,0,10,0" />
+            <TextBlock Grid.Column="1" Text="{Binding AchievementsError}" TextWrapping="Wrap" VerticalAlignment="Center" />
+          </Grid>
+        </Border>
+        <StackPanel Spacing="10" IsVisible="{Binding IsLoadingAchievements}">
+          <ProgressBar IsIndeterminate="True" HorizontalAlignment="Stretch" Height="3" MinHeight="3" />
+          <TextBlock Classes="caption" Text="Loading achievements…" />
+        </StackPanel>
+        <Border Classes="tile" IsVisible="{Binding NoAchievements}">
+          <TextBlock Classes="muted" TextWrapping="Wrap" Text="No achievement list for this game. Older Xbox 360 games keep theirs on the console." />
+        </Border>
+        <ItemsControl ItemsSource="{Binding Achievements}">
+          <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="10" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+        </ItemsControl>
+      </StackPanel>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

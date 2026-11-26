@@ -119,6 +119,22 @@
           </StackPanel>
         </Border>
 
+        <!-- This device's or the console's connection: worth fixing (checked as the stream starts) -->
+        <Border IsVisible="{Binding HasLinkWarnings}" Background="#33F5B841" BorderBrush="#80F5B841" BorderThickness="1"
+                CornerRadius="10" Padding="14,10" Margin="0,14,0,0" HorizontalAlignment="Left" MaxWidth="900">
+          <ItemsControl ItemsSource="{Binding LinkWarnings}">
+            <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="6" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="x:String">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <PathIcon Data="{StaticResource Icon.Wifi}" Width="15" Height="15" Foreground="{StaticResource Warn}" />
+                  <TextBlock Text="{Binding}" FontSize="14" Foreground="#F2FFFFFF" TextWrapping="Wrap" VerticalAlignment="Center" />
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </Border>
+
         <!-- Tip + cancel -->
         <!-- The start failed: say why, right here (whatever page Stream was pressed on) -->
         <StackPanel IsVisible="{Binding StartFailed}" Margin="0,22,0,0" Spacing="22">

@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:XStream.App.ViewModels"
              xmlns:app="using:XStream.App"
+             xmlns:views="using:XStream.App.Views"
              x:Class="XStream.App.Views.SessionsView"
              x:DataType="vm:SessionsViewModel">
   <UserControl.Styles>
@@ -15,13 +16,26 @@
           <TextBlock Classes="muted" Text="How each stream went: freezes, bitrate, ping and loss." />
           <TextBlock Classes="caption" Foreground="{StaticResource Accent}" Text="{Binding Totals}" Margin="0,4,0,0" />
         </StackPanel>
-        <Button Grid.Column="1" Classes="ghost" Command="{Binding OpenLogsCommand}" VerticalAlignment="Center">
-          <StackPanel Orientation="Horizontal" Spacing="8">
-            <PathIcon Data="{StaticResource Icon.Folder}" />
-            <TextBlock Text="Open logs folder" />
-          </StackPanel>
-        </Button>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+          <Button Classes="ghost" Command="{Binding TestConnectionCommand}"
+                  ToolTip.Tip="A 12-second test stream (no picture) to your console that measures the connection and suggests settings">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <PathIcon Data="{StaticResource Icon.Wifi}" />
+              <TextBlock Text="Test connection" />
+            </StackPanel>
+          </Button>
+          <Button Classes="ghost" Command="{Binding OpenLogsCommand}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <PathIcon Data="{StaticResource Icon.Folder}" />
+              <TextBlock Text="Open logs folder" />
+            </StackPanel>
+          </Button>
+        </StackPanel>
       </Grid>
+
+      <Panel IsVisible="{Binding Check.IsOpen, FallbackValue=False}">
+        <views:ConnectionCheckPanel DataContext="{Binding Check}" />
+      </Panel>
 
       <Border Classes="card" IsVisible="{Binding IsEmpty}" Padding="36">
         <StackPanel Spacing="10" HorizontalAlignment="Center">

@@ -33,6 +33,10 @@ public sealed record InputOptions
     public GyroAim? Gyro { get; init; }
     /// <summary>Gyro only while this button (or PaddleN) is held; "" = always.</summary>
     public string GyroHold { get; init; } = "";
+    /// <summary>Keyboard and mouse as a virtual controller (its Mode decides when; null = off).</summary>
+    public KeyboardMouseInput? KeyboardMouse { get; init; }
+    /// <summary>Microphone button (Xbox button or PaddleN; "" = none): reported through <see cref="InputPump.MicButtonChanged"/>, never sent to the game.</summary>
+    public string MicButton { get; init; } = "";
 }
 
 /// <summary>Live numbers for the overlay and session log.</summary>
@@ -82,6 +86,7 @@ public sealed class InputPump : IDisposable
         _send = send;
         _padChanged = padChanged;
         _setup = new Setup(options.Mapping, options.Gyro, options.GyroHold);
+        _micButton = options.MicButton;
         if (options.Gyro is not null) backend.EnableGyro(true);
     }
 
@@ -95,6 +100,15 @@ public sealed class InputPump : IDisposable
         if (gyro is not null) _backend.EnableGyro(true);
         _setup = new Setup(mapping, gyro, gyroHold);
     }
+
+    /// <summary>The microphone button went down (true) or up (false) on any pad. Raised on the input thread.</summary>
+    public Action<bool>? MicButtonChanged { get; set; }
+    private volatile string _micButton = "";
+    private readonly bool[] _micHeld = new bool[8];
+    private bool _micAny;
+
+    /// <summary>Change the microphone button (settings changed).</summary>
+    public void SetMicButton(string name) => _micButton = name ?? "";
 
     public double NowMs => _sw.Elapsed.TotalMilliseconds;
     public IGamepadBackend Backend => _backend;
@@ -152,6 +166,7 @@ public sealed class InputPump : IDisposable
         _steps++;
 
         _backend.Poll(_raw, _conn);
+        MixKeyboardMouse(nowMs);
         long t0 = Stopwatch.GetTimestamp();
 
         bool changed = false;
@@ -225,6 +240,16 @@ public sealed class InputPump : IDisposable
         var setup = _setup;
         if (setup.Gyro is { } gyro && extras.HasGyro && (setup.GyroHold.Length == 0 || ControllerMapping.Held(setup.GyroHold, b, extras.Paddles)))
             (rx, ry) = GyroAim.Combine(rx, ry, gyro.Stick(extras.GyroPitch, extras.GyroYaw));
+        if (_micButton is { Length: > 0 } mic)
+        {
+            // The mic button talks to Vexel, not the game: read it before remapping and take it out.
+            bool held = ControllerMapping.Held(mic, b, extras.Paddles);
+            if (ControllerMapping.IsButton(mic, out var mb)) b &= ~mb;
+            if (index < _micHeld.Length) _micHeld[index] = held;
+            bool any = false;
+            foreach (var h in _micHeld) any |= h;
+            if (any != _micAny) { _micAny = any; MicButtonChanged?.Invoke(any); }
+        }
         if (!setup.Mapping.IsIdentity) b = setup.Mapping.Apply(b, extras.Paddles);
 
         const GamepadButtons combo = GamepadButtons.View | GamepadButtons.Menu;
@@ -235,7 +260,29 @@ public sealed class InputPump : IDisposable
         }
         else _comboSince[index] = double.NaN;
 
-        return new GamepadState(index, b, lx, ly, rx, ry, lt, rt);
+        var state = new GamepadState(index, b, lx, ly, rx, ry, lt, rt);
+        // Keyboard and mouse go in after the pad's deadzones and remapping: they have their own layout and anti-deadzone.
+        return index == _kbmPad ? KeyboardMouseInput.Merge(state, _kbm) : state;
+    }
+
+    private int _kbmPad = -1;
+    private GamepadState _kbm;
+
+    /// <summary>
+    /// Keyboard and mouse as a controller: On merges it into the first connected pad (or is pad 0 when there's none);
+    /// Auto only while no real pad is connected, so plugging one in hands over without the console seeing a change.
+    /// </summary>
+    private void MixKeyboardMouse(double nowMs)
+    {
+        _kbmPad = -1;
+        if (_o.KeyboardMouse is not { } km) return;
+        int first = Array.IndexOf(_conn, true);
+        bool on = km.Mode == KeyboardMouseMode.On || (km.Mode == KeyboardMouseMode.Auto && first < 0);
+        km.Active = on;
+        if (!on) return;
+        _kbm = km.Read(nowMs);
+        _kbmPad = first < 0 ? 0 : first;
+        if (first < 0) { _conn[0] = true; _raw[0] = default; }
     }
 
     private bool Differs(in GamepadState a, in GamepadState b)

@@ -2,6 +2,7 @@ using SkiaSharp;
 using XStream.Core.Config;
 using XStream.Core.Stability;
 using XStream.Core.Video;
+using XStream.Core.Diagnostics;
 using XStream.Core.Xbox;
 
 namespace XStream.Player;
@@ -27,9 +28,9 @@ public sealed class StreamOverlay : IVideoOverlay
     private enum Item
     {
         Resume, XboxButton, Type,
-        Profile, MaxBitrate,
-        Picture, Clarity, Fullscreen, Stats,
-        Volume, Microphone, Rumble, TriggerRumble,
+        Profile, MaxBitrate, Tips,
+        Picture, Clarity, Enhance, Fullscreen, Stats,
+        Volume, Microphone, Party, Rumble, TriggerRumble,
         Screenshot, SaveClip, MoreSettings, Disconnect, TurnOff,
     }
 
@@ -41,9 +42,9 @@ public sealed class StreamOverlay : IVideoOverlay
         var l = new List<(Item, string?)> { (Item.Resume, null), (Item.XboxButton, null) };
         if (console) l.Add((Item.Type, null));
         l.AddRange([
-            (Item.Profile, "STREAM"), (Item.MaxBitrate, null),
-            (Item.Picture, "PICTURE"), (Item.Clarity, null), (Item.Fullscreen, null), (Item.Stats, null),
-            (Item.Volume, "SOUND & CONTROLLER"), (Item.Microphone, null), (Item.Rumble, null), (Item.TriggerRumble, null),
+            (Item.Profile, "STREAM"), (Item.MaxBitrate, null), (Item.Tips, null),
+            (Item.Picture, "PICTURE"), (Item.Clarity, null), (Item.Enhance, null), (Item.Fullscreen, null), (Item.Stats, null),
+            (Item.Volume, "SOUND & CONTROLLER"), (Item.Microphone, null), (Item.Party, null), (Item.Rumble, null), (Item.TriggerRumble, null),
             (Item.Screenshot, "")]);
         if (clips) l.Add((Item.SaveClip, null));
         l.AddRange([(Item.MoreSettings, null), (Item.Disconnect, null)]);
@@ -90,6 +91,19 @@ public sealed class StreamOverlay : IVideoOverlay
     public event Action? ScreenshotRequested;
     /// <summary>"Save last 30 s" (or F10): the session writes the instant-replay buffer to a video file.</summary>
     public event Action? SaveClipRequested;
+    /// <summary>"Party &amp; Discord chat…": show the console's guide (its Parties &amp; chats) and how to bring Discord voice in.</summary>
+    public event Action? PartyRequested;
+    /// <summary>F9 down (true) / up (false): toggles mute, or push to talk.</summary>
+    public event Action<bool>? MicKey;
+    private bool _f9Down;
+
+    /// <summary>Key released (from the window).</summary>
+    public void OnKeyUp(int sym)
+    {
+        if (sym != 0x40000042) return; // F9
+        lock (_gate) { if (!_f9Down) return; _f9Down = false; }
+        MicKey?.Invoke(false);
+    }
     /// <summary>"End and turn off Xbox": stop the stream and switch the console off.</summary>
     public event Action? TurnOffRequested;
     /// <summary>Typing on the console: the whole text so far (sent as it changes), and whether typing finished.</summary>
@@ -113,7 +127,9 @@ public sealed class StreamOverlay : IVideoOverlay
 
     public bool MenuOpen { get { lock (_gate) return _menu; } }
     public bool Away { get { lock (_gate) return _away; } }
-    public bool Visible { get { lock (_gate) return _typing is not null || _menu || _s.ShowStatsHud || _barUntilMs > 0 || _away || _toastUntilMs > 0 || _reconnecting is not null; } }
+    /// <summary>The menu, typing, the launcher's settings or the reconnect screen has the input (keyboard-and-mouse play pauses).</summary>
+    public bool HoldsInput { get { lock (_gate) return _menu || _typing is not null || _away || _reconnecting is not null; } }
+    public bool Visible { get { lock (_gate) return _typing is not null || _menu || _s.ShowStatsHud || _barUntilMs > 0 || _away || _toastUntilMs > 0 || _reconnecting is not null || MicShown; } }
 
     /// <summary>Show (text) or hide (null) the "Reconnecting…" screen. While it's up, B or a tap on Disconnect ends the stream.</summary>
     public void SetReconnecting(string? detail)
@@ -139,6 +155,24 @@ public sealed class StreamOverlay : IVideoOverlay
     }
 
     private string _route = "";
+    private const int HistorySeconds = 60;
+    private CheckResult? _tips;
+    private bool _micOn, _micMuted, _micTalking, _micPtt;
+
+    /// <summary>Connection tips from the stream's own numbers (shown in the menu; "Suggested settings" applies them).</summary>
+    public void SetTips(CheckResult? tips) { lock (_gate) { _tips = tips; _dirty = true; } }
+
+    /// <summary>Microphone state for the small indicator: shown while muted (or push-to-talk idle) and while you talk.</summary>
+    public void SetMic(bool on, bool muted, bool talking, bool pushToTalk)
+    {
+        lock (_gate)
+        {
+            if (on == _micOn && muted == _micMuted && talking == _micTalking && pushToTalk == _micPtt) return;
+            _micOn = on; _micMuted = muted; _micTalking = talking; _micPtt = pushToTalk; _dirty = true;
+        }
+    }
+    private bool MicShown => _micOn && (_micMuted || _micTalking);
+    private readonly Queue<LiveStats> _history = new();
     /// <summary>"Home network" / "Internet" / "Relayed", shown under the console name in the menu.</summary>
     public void SetRoute(string route)
     {
@@ -152,6 +186,8 @@ public sealed class StreamOverlay : IVideoOverlay
         {
             _stats = s;
             _videoSize = videoSize;
+            _history.Enqueue(s);
+            while (_history.Count > HistorySeconds) _history.Dequeue();
             if (_menu || _s.ShowStatsHud) _dirty = true;
         }
     }
@@ -305,7 +341,7 @@ public sealed class StreamOverlay : IVideoOverlay
     public bool OnKey(int sym)
     {
         const int Esc = 27, Enter = 13, Space = 32, Up = 0x40000052, Down = 0x40000051, Left = 0x40000050, Right = 0x4000004F,
-            F3 = 0x4000003C, F10 = 0x40000043, F11 = 0x40000044, F12 = 0x40000045;
+            F3 = 0x4000003C, F9 = 0x40000042, F10 = 0x40000043, F11 = 0x40000044, F12 = 0x40000045;
         lock (_gate) if (_away) return true;
         if (TypingKey(sym)) return true;
         switch (sym)
@@ -313,7 +349,12 @@ public sealed class StreamOverlay : IVideoOverlay
             case F10: SaveClipRequested?.Invoke(); return true;
             case Esc: ToggleMenu(); return true;
             case F11: ToggleFullscreen(); return true;
-            case F3: Set(s => s with { ShowStatsHud = !s.ShowStatsHud }); return true;
+            case F3: Set(NextStats(1)); return true;
+            case F9:
+                bool first;
+                lock (_gate) { first = !_f9Down; _f9Down = true; }
+                if (first) MicKey?.Invoke(true); // held keys repeat: only the first press counts
+                return true;
             case F12: ScreenshotRequested?.Invoke(); return true;
         }
         if (!MenuOpen) return false;
@@ -424,13 +465,33 @@ public sealed class StreamOverlay : IVideoOverlay
             case Item.Picture: Set(s => s with { Scaling = (VideoScaling)Cycle((int)s.Scaling, 3, dir) }); break;
             case Item.Clarity: Set(s => s with { Clarity = (ClarityLevel)(activate ? Cycle((int)s.Clarity, 4, 1) : Math.Clamp((int)s.Clarity + dir, 0, 3)) }); break;
             case Item.Fullscreen: ToggleFullscreen(); break;
-            case Item.Stats: Set(s => s with { ShowStatsHud = !s.ShowStatsHud }); break;
+            case Item.Enhance: Set(s => s with { Enhance = !s.Enhance }); break;
+            case Item.Stats: Set(NextStats(activate ? 1 : dir)); break;
             case Item.Volume:
                 Set(s => s with { Audio = true, Volume = activate ? (s.Volume >= 100 ? 0 : Math.Min(100, s.Volume + 10)) : Math.Clamp(s.Volume + dir * 10, 0, 100) });
                 break;
             case Item.Rumble: Set(s => s with { RumbleStrength = Step(RumbleSteps, s.RumbleStrength, dir, activate) }); break;
             case Item.TriggerRumble: Set(s => s with { TriggerRumble = !s.TriggerRumble }); break;
-            case Item.Microphone: Set(s => s with { Microphone = !s.Microphone }); break;
+            case Item.Microphone:
+                // Off -> On (open mic) -> Push to talk -> Off.
+                Set(s => !s.Microphone ? s with { Microphone = true, PushToTalk = false }
+                    : !s.PushToTalk ? s with { PushToTalk = true } : s with { Microphone = false, PushToTalk = false });
+                break;
+            case Item.Party:
+                if (!activate) break;
+                CloseMenu();
+                PartyRequested?.Invoke();
+                break;
+            case Item.Tips:
+                if (!activate) break;
+                CheckResult? tips;
+                lock (_gate) tips = _tips;
+                if (tips is not null && ConnectionAdvisor.Suggestion(tips, _s).Length > 0)
+                {
+                    Set(s => ConnectionAdvisor.Apply(tips, s));
+                    ShowToast(tips.RecommendFastest ? "Saved. Bitrate changes now; Fastest (720p) from the next stream" : "Suggested settings saved", 4000);
+                }
+                break;
             case Item.Screenshot: if (activate) { CloseMenu(); ScreenshotRequested?.Invoke(); } break;
             case Item.SaveClip: if (activate) { CloseMenu(); SaveClipRequested?.Invoke(); } break;
             case Item.Type: if (activate) { CloseMenu(); StartTyping(); TouchKeyboardWanted?.Invoke(); } break;
@@ -485,11 +546,16 @@ public sealed class StreamOverlay : IVideoOverlay
             else if (away) DrawAway(c);
             else
             {
-                if (s.ShowStatsHud && !menu) DrawHud(c, st, size);
+                if (s.ShowStatsHud && !menu)
+                {
+                    if (s.StatsDetailed) { LiveStats[] hist; string route; lock (_gate) { hist = _history.ToArray(); route = _route; } DrawHudDetailed(c, st, size, s, hist, route); }
+                    else DrawHud(c, st, size);
+                }
                 if (bar && !menu) DrawBar(c);
                 if (menu) DrawMenu(c, st, size, selected, s, fullscreen);
                 else if (typing is not null) DrawTyping(c, typing);
             }
+            if (!menu && reconnecting is null && !away) DrawMic(c);
             if (toast is not null) DrawToast(c, toast, toastKind);
             c.Flush();
         }
@@ -523,6 +589,116 @@ public sealed class StreamOverlay : IVideoOverlay
             c.DrawText(parts[i], tx, ty, font);
             tx += font.MeasureText(parts[i]);
         }
+    }
+
+    /// <summary>
+    /// Detailed stats (F3 twice, or Stats on screen: Detailed): where the delay goes, how the network is doing,
+    /// what the picture is, and the controller, with the last minute of bitrate and network-to-screen time.
+    /// </summary>
+    private static void DrawHudDetailed(SKCanvas c, LiveStats? s, (int w, int h) size, AppSettings cfg, LiveStats[] hist, string route)
+    {
+        float x = 40, y = 36, w = 520, pad = 26, row = 34;
+        var sections = new List<(string title, (string k, string v, SKColor color)[] rows)>();
+        if (s is not null)
+        {
+            SKColor Lvl(double v, double warn, double bad) => v >= bad ? Bad : v >= warn ? Warn : Text;
+            sections.Add(("LATENCY", [
+                ("Ping (round trip)", $"{s.PingMs:F0} ms", Lvl(s.PingMs, 40, 80)),
+                ("Network to screen", $"{s.NetToScreenP50Ms:F1} ms  (worst {s.NetToScreenP99Ms:F0})", Lvl(s.NetToScreenP50Ms, 25, 50)),
+                ("Decode", $"{s.DecodeMs:F1} ms", Lvl(s.DecodeMs, 8, 14)),
+                ("Jitter", $"{s.JitterMs:F1} ms", Lvl(s.JitterMs, 8, 15)),
+            ]));
+            sections.Add(("NETWORK", [
+                ("Bitrate", s.CapMbps > 0 ? $"{s.Mbps:F1} Mbps  (cap {s.CapMbps:F0})" : $"{s.Mbps:F1} Mbps", Text),
+                ("Packet loss", $"{s.LossPct:F1} %", Lvl(s.LossPct, 0.5, 2)),
+                ("Buffer", $"{s.BufferMs:F0} ms", Text),
+            ]));
+            string res = size.h > 0 ? $"{size.w}×{size.h}" : "–";
+            string look = (cfg.Enhance ? "Enhance on" : "Enhance off") + " · Clarity " + ClarityNames[Math.Clamp((int)cfg.Clarity, 0, 3)];
+            sections.Add(("PICTURE", [
+                ("Stream", $"{res} · {s.Fps:F0} fps", Lvl(60 - s.Fps, 5, 15)),
+                ("Look", look, Text),
+                ("Sound behind", $"{s.AudioQueuedMs:F0} ms", Lvl(s.AudioQueuedMs, 120, 250)),
+            ]));
+            if (s.Pads > 0)
+                sections.Add(("CONTROLLER", [("Input", $"{s.Pads} pad{(s.Pads == 1 ? "" : "s")} · {s.PadHz:F0} Hz · {s.PadP99Us / 1000:F1} ms to send", Text)]));
+        }
+        float h = pad + 44 + sections.Sum(sec => 44 + sec.rows.Length * row) + (hist.Length > 1 ? 150 : 0) + pad - 10;
+        using (var bg = Fill(new SKColor(0x0C, 0x0E, 0x12, 0xE8))) c.DrawRoundRect(x, y, w, h, 22, 22, bg);
+        using var head = Font(Bold, 26, Text);
+        using var key = Font(Regular, 23, Muted);
+        using var val = Font(Bold, 23, Text);
+        using var sec = Font(Bold, 16, Faint);
+        float cy = y + pad + 22;
+        using (var dot = Fill(Quality(s))) c.DrawCircle(x + pad + 7, cy - 8, 8, dot);
+        string title = s is null ? "Connecting…" : (s.Link.Length > 0 ? s.Link : "Streaming") + (route.Length > 0 ? " · " + route : "");
+        c.DrawText(Trim(title, head, w - pad * 2 - 26), x + pad + 26, cy, head);
+        cy += 22;
+        foreach (var (stitle, rows) in sections)
+        {
+            cy += 40;
+            c.DrawText(stitle, x + pad, cy, sec);
+            cy += 4;
+            foreach (var (k, v, color) in rows)
+            {
+                cy += row;
+                c.DrawText(k, x + pad, cy, key);
+                val.Color = color;
+                string vv = Trim(v, val, w - pad * 2 - key.MeasureText(k) - 16);
+                c.DrawText(vv, x + w - pad - val.MeasureText(vv), cy, val);
+            }
+        }
+        if (hist.Length > 1)
+        {
+            // Last minute: bitrate (green, against the cap) and network-to-screen time (amber).
+            cy += 24;
+            c.DrawText("LAST MINUTE", x + pad, cy + 16, sec);
+            using var legend = Font(Regular, 17, Muted);
+            string l2 = "— to screen";
+            c.DrawText(l2, x + w - pad - legend.MeasureText(l2), cy + 16, legend);
+            legend.Color = Accent;
+            string l1 = "— bitrate   ";
+            c.DrawText(l1, x + w - pad - legend.MeasureText(l2) - legend.MeasureText(l1), cy + 16, legend);
+            var area = new SKRect(x + pad, cy + 28, x + w - pad, cy + 118);
+            using (var tile = Fill(Tile)) c.DrawRoundRect(area, 10, 10, tile);
+            double maxMbps = Math.Max(5, hist.Max(v => Math.Max(v.Mbps, v.CapMbps)));
+            double maxMs = Math.Max(20, hist.Max(v => v.NetToScreenP50Ms));
+            void Line(Func<LiveStats, double> pick, double max, SKColor color)
+            {
+                using var path = new SKPath();
+                for (int i = 0; i < hist.Length; i++)
+                {
+                    float px = area.Left + 6 + (area.Width - 12) * (HistorySeconds - hist.Length + i) / (HistorySeconds - 1);
+                    float py = area.Bottom - 6 - (float)(Math.Clamp(pick(hist[i]) / max, 0, 1) * (area.Height - 12));
+                    if (i == 0) path.MoveTo(px, py); else path.LineTo(px, py);
+                }
+                using var pen = new SKPaint { Color = color, IsStroke = true, StrokeWidth = 3, IsAntialias = true, StrokeJoin = SKStrokeJoin.Round };
+                c.DrawPath(path, pen);
+            }
+            Line(v => v.Mbps, maxMbps, Accent);
+            Line(v => v.NetToScreenP50Ms, maxMs, Warn);
+        }
+    }
+
+    /// <summary>Bottom-left mic pill: "Muted" (red), "Hold to talk" (push to talk, idle) or a green light while you talk.</summary>
+    private void DrawMic(SKCanvas c)
+    {
+        bool on, muted, talking, ptt;
+        lock (_gate) { on = _micOn; muted = _micMuted; talking = _micTalking; ptt = _micPtt; }
+        if (!on || !(muted || talking)) return;
+        string text = talking && !muted ? "" : ptt ? "Hold to talk" : "Mic muted";
+        using var f = Font(Bold, 24, Text);
+        float h = 52, w = text.Length == 0 ? h : 64 + f.MeasureText(text) + 22, x = 40, y = CanvasHeight - h - 40;
+        var color = talking && !muted ? Accent : ptt ? Muted : Bad;
+        using (var bg = Fill(new SKColor(0x0C, 0x0E, 0x12, 0xD0))) c.DrawRoundRect(x, y, w, h, h / 2, h / 2, bg);
+        // A microphone: capsule, cradle and stand.
+        float cx = x + h / 2, cy = y + h / 2 - 3;
+        using var ink = new SKPaint { Color = color, IsAntialias = true, StrokeWidth = 3.5f, IsStroke = true, StrokeCap = SKStrokeCap.Round };
+        using (var fill = Fill(color)) c.DrawRoundRect(cx - 6, cy - 13, 12, 20, 6, 6, fill);
+        c.DrawArc(new SKRect(cx - 11, cy - 6, cx + 11, cy + 13), 0, 180, false, ink);
+        c.DrawLine(cx, cy + 13, cx, cy + 18, ink);
+        if (muted) using (var slash = new SKPaint { Color = Bad, IsAntialias = true, StrokeWidth = 4, StrokeCap = SKStrokeCap.Round }) c.DrawLine(cx - 14, cy - 14, cx + 14, cy + 18, slash);
+        if (text.Length > 0) c.DrawText(text, x + 60, y + h / 2 + 9, f);
     }
 
     /// <summary>Bottom-centre bar shown after a tap: big touch targets, within thumb reach on a handheld.</summary>
@@ -705,7 +881,25 @@ public sealed class StreamOverlay : IVideoOverlay
             c.DrawText(tiles[i].unit, tx + 22 + v.MeasureText(tiles[i].value) + 8, ty + 98, u);
         }
         y += 2 * th + 16 + 50;
-        if (st is not null && st.Verdict.Length > 0)
+        CheckResult? tips;
+        lock (_gate) tips = _tips;
+        if (tips is { Level: not CheckLevel.Good })
+        {
+            // Connection tips (from this stream's numbers): the worst two, with what to do.
+            using (var label = Font(Bold, 18, tips.Level == CheckLevel.Poor ? Bad : Warn)) c.DrawText("CONNECTION TIPS", lx, y, label);
+            float ty = y + 36;
+            using var tt = Font(Bold, 23, Text);
+            using var td = Font(Regular, 20, Muted);
+            foreach (var f in tips.Findings.Where(f => f.Level != CheckLevel.Good).Take(2))
+            {
+                using (var dot = Fill(f.Level == CheckLevel.Poor ? Bad : Warn)) c.DrawCircle(lx + 7, ty - 8, 6, dot);
+                c.DrawText(Trim(f.Title, tt, lw - 24), lx + 24, ty, tt);
+                ty = DrawWrapped(c, f.Detail, lx + 24, ty + 30, lw - 24, td, 2) + 46;
+            }
+            if (ConnectionAdvisor.Suggestion(tips, s).Length > 0)
+                using (var hint = Font(Regular, 20, Accent)) c.DrawText("Suggested settings (right) applies a fix", lx + 24, ty - 6, hint);
+        }
+        else if (st is not null && st.Verdict.Length > 0)
         {
             using (var dot = Fill(Quality(st))) c.DrawCircle(lx + 8, y - 8, 7, dot);
             using var vt = Font(Regular, 23, Text);
@@ -720,7 +914,7 @@ public sealed class StreamOverlay : IVideoOverlay
         }
 
         // ---- Right column: settings
-        float rx = px + 640, rw = pw - 640 - 52, ry = py + 34, ih = Layout.Length switch { > 17 => 38, > 15 => 41, _ => 46 };
+        float rx = px + 640, rw = pw - 640 - 52, ry = py + 34, ih = Layout.Length switch { > 20 => 33, > 18 => 35, > 17 => 38, > 15 => 41, _ => 46 };
         using (var div = Fill(new SKColor(0x26, 0x2B, 0x33))) c.DrawRect(px + 610, py + 40, 1.5f, ph - 80, div);
         for (int i = 0; i < Layout.Length; i++)
         {
@@ -745,7 +939,7 @@ public sealed class StreamOverlay : IVideoOverlay
             using var f = Font(Bold, 27, danger ? Bad : sel ? Accent : Text);
             c.DrawText(Label(item), r.Left + 24, r.MidY + 9, f);
 
-            string? value = Value(item, s, fullscreen);
+            string? value = item == Item.Tips ? TipsValue(s) : Value(item, s, fullscreen);
             if (value is not null)
             {
                 bool off = value is "Off" or "0%";
@@ -777,11 +971,14 @@ public sealed class StreamOverlay : IVideoOverlay
         Item.Picture => "Picture",
         Item.Clarity => "Clarity boost",
         Item.Fullscreen => "Full screen",
+        Item.Enhance => "Enhance (sharper when enlarged)",
         Item.Stats => "Stats on screen",
         Item.Volume => "Volume",
         Item.Rumble => "Rumble",
         Item.TriggerRumble => "Trigger rumble",
         Item.Microphone => "Microphone (chat)",
+        Item.Party => "Party & Discord chat…",
+        Item.Tips => "Suggested settings",
         Item.Screenshot => "Take screenshot",
         Item.SaveClip => "Save last 30 seconds",
         Item.Type => "Type on the console",
@@ -791,7 +988,23 @@ public sealed class StreamOverlay : IVideoOverlay
     };
 
     private static bool Adjustable(Item item) => item is Item.Profile or Item.MaxBitrate or Item.Picture or Item.Clarity
-        or Item.Volume or Item.Rumble;
+        or Item.Volume or Item.Rumble or Item.Stats;
+
+    /// <summary>Stats readout: Off → Simple → Detailed → Off (dir -1 goes the other way).</summary>
+    private static Func<AppSettings, AppSettings> NextStats(int dir) => s =>
+    {
+        int now = !s.ShowStatsHud ? 0 : s.StatsDetailed ? 2 : 1, next = ((now + dir) % 3 + 3) % 3;
+        return s with { ShowStatsHud = next > 0, StatsDetailed = next == 2 };
+    };
+
+    private string TipsValue(AppSettings s)
+    {
+        CheckResult? t;
+        lock (_gate) t = _tips;
+        if (t is null) return "Checking…";
+        string sug = ConnectionAdvisor.Suggestion(t, s);
+        return sug.Length > 0 ? sug : t.Level == CheckLevel.Good ? "All good" : "None";
+    }
 
     private static string? Value(Item item, AppSettings s, bool fullscreen) => item switch
     {
@@ -800,15 +1013,17 @@ public sealed class StreamOverlay : IVideoOverlay
         Item.Picture => s.Scaling switch { VideoScaling.Fill => "Fill", VideoScaling.Stretch => "Stretch", _ => "Fit" },
         Item.Clarity => ClarityNames[Math.Clamp((int)s.Clarity, 0, 3)],
         Item.Fullscreen => fullscreen ? "On" : "Off",
-        Item.Stats => s.ShowStatsHud ? "On" : "Off",
+        Item.Enhance => s.Enhance ? "On" : "Off",
+        Item.Stats => !s.ShowStatsHud ? "Off" : s.StatsDetailed ? "Detailed" : "Simple",
         Item.Volume => s.Audio ? $"{s.Volume}%" : "Off",
-        Item.Microphone => s.Microphone ? "On" : "Off",
+        Item.Microphone => !s.Microphone ? "Off" : s.PushToTalk ? "Push to talk" : "On",
         Item.Rumble => s.RumbleStrength <= 0 ? "Off" : $"{s.RumbleStrength}%",
         Item.TriggerRumble => s.TriggerRumble ? "On" : "Off",
         _ => null,
     };
 
-    private static void DrawWrapped(SKCanvas c, string text, float x, float y, float max, SKPaint p, int maxLines)
+    /// <summary>Draws text wrapped to <paramref name="max"/> wide (at most <paramref name="maxLines"/>); returns the last line's baseline.</summary>
+    private static float DrawWrapped(SKCanvas c, string text, float x, float y, float max, SKPaint p, int maxLines)
     {
         var words = text.Split(' ');
         string line = "";
@@ -818,7 +1033,7 @@ public sealed class StreamOverlay : IVideoOverlay
             string trial = line.Length == 0 ? w : line + " " + w;
             if (p.MeasureText(trial) > max && line.Length > 0)
             {
-                if (++lines == maxLines) { c.DrawText(Trim(line + "…", p, max), x, y, p); return; }
+                if (++lines == maxLines) { c.DrawText(Trim(line + "…", p, max), x, y, p); return y; }
                 c.DrawText(line, x, y, p);
                 y += p.TextSize * 1.35f;
                 line = w;
@@ -826,6 +1041,7 @@ public sealed class StreamOverlay : IVideoOverlay
             else line = trial;
         }
         if (line.Length > 0) c.DrawText(line, x, y, p);
+        return y;
     }
 
     private static string Trim(string text, SKPaint p, float max)

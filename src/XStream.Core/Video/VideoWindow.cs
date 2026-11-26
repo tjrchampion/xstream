@@ -61,6 +61,16 @@ public interface IVideoOverlay
     void Render(Span<byte> rgba, int stride);
 }
 
+/// <summary>
+/// Sees the window's raw SDL events first (keyboard-and-mouse play). Called on the window's thread: OnEvent with each
+/// SDL_Event's bytes (true = used, the window ignores it), Tick once per loop.
+/// </summary>
+public interface IWindowInput
+{
+    bool OnEvent(ReadOnlySpan<byte> ev);
+    void Tick();
+}
+
 public sealed record VideoWindowOptions
 {
     public string Title { get; init; } = "Vexel";
@@ -107,7 +117,7 @@ public sealed unsafe class VideoWindow : IDisposable
     private const uint RendererAccelerated = 0x2, RendererPresentVsync = 0x4;
     private const int TextureStreaming = 1;
     private const uint PixelFormatNv12 = 0x3231564E, PixelFormatIyuv = 0x56555949;
-    private const uint EventQuit = 0x100, EventKeyDown = 0x300, EventTextInput = 0x303, EventMouseButtonDown = 0x401;
+    private const uint EventQuit = 0x100, EventKeyDown = 0x300, EventKeyUp = 0x301, EventTextInput = 0x303, EventMouseButtonDown = 0x401;
     private const uint PixelFormatAbgr8888 = 0x16762004; // R,G,B,A bytes in memory on little-endian
     private const int WindowPosCentered = 0x2FFF0000;
 
@@ -201,15 +211,22 @@ public sealed unsafe class VideoWindow : IDisposable
     public IVideoOverlay? Overlay { get; set; }
     /// <summary>Key presses (SDL keycode). Return true if handled; otherwise Esc quits.</summary>
     public Func<int, bool>? KeyDown { get; set; }
+    /// <summary>Key released (SDL keycode): push-to-talk.</summary>
+    public Action<int>? KeyUp { get; set; }
     /// <summary>Text typed in the window (UTF-8 from SDL text input: the keyboard's own layout, IME and touch keyboard included).</summary>
     public Action<string>? TextInput { get; set; }
     /// <summary>Left clicks, in overlay coordinates (0..Overlay.Width/Height).</summary>
     public Action<int, int>? Click { get; set; }
+    /// <summary>Gets every event before the window does (keyboard and mouse driving the controller).</summary>
+    public IWindowInput? Input { get; set; }
     /// <summary>Size of the stream's pictures (0 until the first one).</summary>
     public (int Width, int Height) VideoSize => (_texW, _texH);
     public bool IsFullscreen => _fullscreen;
     /// <summary>Clarity boost level 0-3 (see <see cref="Video.Sharpen"/>). Safe to change from any thread.</summary>
     public int Sharpen { get => _sharpen; set => _sharpen = Math.Clamp(value, 0, 3); }
+    /// <summary>Edge-aware upscaling when the picture is enlarged (GPU renderers). Safe to change from any thread.</summary>
+    public bool Enhance { get => _enhance; set { _enhance = value; if (_gpu is { } g) g.Enhance = value; } }
+    private volatile bool _enhance = true;
 
     /// <summary>The stream's own colour signalling (from its SPS): the GPU renderers convert to RGB to match. Any thread.</summary>
     public H264Format? Format
@@ -320,15 +337,18 @@ public sealed unsafe class VideoWindow : IDisposable
     public void PumpOnce(int waitMs)
     {
         byte* ev = stackalloc byte[64];
+        var input = Input;
         while (SDL_PollEvent(ev) != 0)
         {
             uint type = *(uint*)ev;
+            if (input?.OnEvent(new ReadOnlySpan<byte>(ev, 64)) == true) continue;
             if (type == EventQuit) QuitRequested = true;
             else if (type == EventKeyDown)
             {
                 int sym = *(int*)(ev + 20); // keysym.sym
                 if (KeyDown?.Invoke(sym) != true && sym == 27) QuitRequested = true; // Esc
             }
+            else if (type == EventKeyUp) KeyUp?.Invoke(*(int*)(ev + 20));
             else if (type == EventTextInput && TextInput is { } typed)
             {
                 var text = Marshal.PtrToStringUTF8((IntPtr)(ev + 12)) ?? ""; // SDL_TextInputEvent.text[32]
@@ -349,6 +369,7 @@ public sealed unsafe class VideoWindow : IDisposable
                 }
             }
         }
+        input?.Tick();
         UpdateCursor();
         bool redraw = Overlay?.NeedsRender == true || _rescaled;
         if (!_mailbox.Wait(redraw ? 0 : waitMs))

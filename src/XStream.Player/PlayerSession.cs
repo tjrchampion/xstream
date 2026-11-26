@@ -34,6 +34,8 @@ public sealed record PlayerOptions
     public bool HardwareDecode { get; init; } = true;
     /// <summary>No video window: still connects, measures, and logs.</summary>
     public bool Headless { get; init; }
+    /// <summary>Connection check: no controller either (nothing reaches the console), and Ended after this many seconds of streaming.</summary>
+    public int CheckSeconds { get; init; }
     public string WindowTitle { get; init; } = "Vexel";
     /// <summary>The launcher window's client area (screen coordinates) to open the video window over; null: centred.</summary>
     public WindowPlace? Place { get; init; }
@@ -50,6 +52,7 @@ public sealed record PlayerOptions
     public int Volume { get; init; } = 100;
     /// <summary>Clarity boost (sharpening before the upscale to the display): 0 off, 1 low, 2 medium, 3 high.</summary>
     public int Sharpen { get; init; } = 1;
+    public bool Enhance { get; init; } = true;
     public VideoScaling Scaling { get; init; } = VideoScaling.Fit;
     /// <summary>The full settings the session started with (the in-stream menu shows and edits them).</summary>
     public AppSettings? Settings { get; init; }
@@ -58,7 +61,7 @@ public sealed record PlayerOptions
     {
         ServerId = serverId, Stability = s.ToStabilityOptions(), Fullscreen = s.Fullscreen, VSync = s.VSync,
         HardwareDecode = s.HardwareDecode, RumbleStrength = s.RumbleStrength, TriggerRumble = s.TriggerRumble,
-        ShowStatsHud = s.ShowStatsHud, Audio = s.Audio, Volume = s.Volume, Sharpen = (int)s.Clarity, Scaling = s.Scaling, Settings = s,
+        ShowStatsHud = s.ShowStatsHud, Audio = s.Audio, Volume = s.Volume, Sharpen = (int)s.Clarity, Enhance = s.Enhance, Scaling = s.Scaling, Settings = s,
     };
 }
 
@@ -122,6 +125,8 @@ public sealed class PlayerSession
     public ConsoleRemote? Remote { get; set; }
     /// <summary>The game running on the console now (Xbox title id, null if none): its controller profile is used.</summary>
     public Func<CancellationToken, Task<string?>>? NowPlaying { get; set; }
+    /// <summary>Watches for achievements unlocked during the stream (null: no pop-ups).</summary>
+    public AchievementWatcher? Achievements { get; set; }
     /// <summary>"End and turn off Xbox" was chosen: the console is switched off after the stream closes.</summary>
     public bool TurnOffAfter { get; private set; }
 
@@ -265,6 +270,8 @@ public sealed class PlayerSession
             VideoWindow? window = null;
             FrameMailbox? mailbox = null;
             StreamOverlay? overlay = null;
+            string streamRoute = "";
+            KeyboardMouseInput? kbm = null;
             if (!o.Headless)
             {
                 try
@@ -277,17 +284,25 @@ public sealed class PlayerSession
                         Width = o.Place is { W: >= 320 } p ? p.W : 1280, Height = o.Place is { H: >= 200 } q ? q.H : 720,
                     });
                     window.Sharpen = o.Sharpen;
+                    window.Enhance = o.Enhance;
                     window.Scaling = o.Scaling;
                     var remote = o.IsCloud ? null : Remote;
                     overlay = new StreamOverlay(o.ConsoleName, live, o.Fullscreen, consoleControl: remote is not null, clips: replay is not null);
                     window.Overlay = overlay;
                     window.KeyDown = overlay.OnKey;
+                    window.KeyUp = overlay.OnKeyUp;
                     window.Click = overlay.OnClick;
                     overlay.DisconnectRequested += Stop;
                     overlay.MoreSettingsRequested += () => MoreSettingsRequested?.Invoke();
                     overlay.CameBack += () => ReturnedToGame?.Invoke();
                     var win = window; var ov0 = overlay;
-                    window.TextInput = overlay.OnText;
+                    // Keyboard and mouse as a controller: pauses while the menu / typing / launcher has the input.
+                    // While it's in use, typed letters are game keys: typing to the console is from the menu only.
+                    var km = kbm = KeyboardMouseInput.FromSettings(live);
+                    km.Blocked = () => ov0.HoldsInput;
+                    km.Hint += () => ov0.ShowToast("Keyboard and mouse: click the picture to play. Esc for the menu", 5000);
+                    window.Input = km;
+                    window.TextInput = t => { if (!km.Active || ov0.Typing) ov0.OnText(t); };
                     if (replay is not null)
                         overlay.SaveClipRequested += () => Task.Run(() =>
                         {
@@ -336,7 +351,7 @@ public sealed class PlayerSession
                 catch (Exception ex)
                 {
                     Log?.Invoke("No video window (" + ex.Message + "). Install FFmpeg + SDL2. Streaming without picture.");
-                    window?.Dispose(); window = null; mailbox = null; overlay = null;
+                    window?.Dispose(); window = null; mailbox = null; overlay = null; kbm = null;
                 }
             }
             bool closed = false;
@@ -344,6 +359,19 @@ public sealed class PlayerSession
             // Controller: read at 1 kHz on its own thread, sent the instant anything changes (to whichever
             // connection is live; nothing goes out while reconnecting).
             InputPump? pump = null;
+            // Microphone controls: F9 or the mic button mutes (open mic) or is held to talk (push to talk); the
+            // stream menu mutes it while open.
+            bool micMuted = false, micKeyHeld = false, micButtonHeld = false;
+            double micTalkUntil = 0;
+            void MicPress(bool down, bool fromButton)
+            {
+                if (fromButton) micButtonHeld = down; else micKeyHeld = down;
+                if (live.PushToTalk || !down || !live.Microphone) return;
+                micMuted = !micMuted;
+                overlay?.ShowToast(micMuted ? "Microphone muted" : "Microphone on", 1500, micMuted ? ToastKind.Warn : ToastKind.Good);
+                Log?.Invoke(micMuted ? "Microphone muted" : "Microphone unmuted");
+            }
+            bool MicGated() => (overlay?.MenuOpen ?? false) || (live.PushToTalk ? !(micKeyHeld || micButtonHeld) : micMuted);
             string? gameKey = null;                       // the game running now (for its controller profile)
             ControllerProfile activeController = live.DefaultController;
             // Use the profile for the current game (if it changed, or the profiles were edited in the launcher).
@@ -359,6 +387,7 @@ public sealed class PlayerSession
             }
             IGamepadBackend? backend = null;
             var padToastsFrom = DateTime.MaxValue; // set when the pump starts (+3 s: it reports the pads already plugged in)
+            if (o.CheckSeconds <= 0)
             try
             {
                 // Controller setup: the game's own profile if it has one (cloud: known now; console: from presence,
@@ -421,22 +450,34 @@ public sealed class PlayerSession
                 {
                     Redundancy = XboxPeer.UnreliableInputSupported ? 1 : 0, NexusComboMs = 0,
                     Mapping = mapping, Gyro = activeController.GyroAim ? new GyroAim(activeController.GyroSensitivity) : null,
-                    GyroHold = activeController.GyroHoldButton,
-                }, Track, PadChanged);
+                    GyroHold = activeController.GyroHoldButton, KeyboardMouse = kbm, MicButton = live.MicButton,
+                }, Track, PadChanged) { MicButtonChanged = held => MicPress(held, fromButton: true) };
                 Log?.Invoke($"Controller: {backend.Name}, {activeController.GameName}: {activeController.Summary}");
+                // Press and release the Xbox button on every connected pad (the menu just closed, so the console has
+                // a neutral pad; no real buttons are held).
+                void PressXbox()
+                {
+                    var f = lastFrame;
+                    if (f.Length == 0) f = [new GamepadState(0, GamepadButtons.None, 0, 0, 0, 0, 0, 0)];
+                    if (cur is not { } p) return;
+                    p.SendGamepad(f.Select(x => new GamepadState(x.Index, GamepadButtons.Nexus, 0, 0, 0, 0, 0, 0)).ToArray());
+                    _ = Task.Delay(150).ContinueWith(_ => cur?.SendGamepad(f.Select(x => new GamepadState(x.Index, GamepadButtons.None, 0, 0, 0, 0, 0, 0)).ToArray()));
+                }
                 if (ov is not null)
-                    ov.XboxButtonRequested += () =>
+                {
+                    ov.XboxButtonRequested += () => { PressXbox(); Log?.Invoke("Xbox button pressed from the stream menu"); };
+                    // Party chat runs on the console: open its guide (Parties & chats is there) and say how Discord joins in.
+                    ov.PartyRequested += () =>
                     {
-                        // Press and release the Xbox button on every connected pad (the menu just closed, so the
-                        // console has a neutral pad; no real buttons are held).
-                        var f = lastFrame;
-                        if (f.Length == 0 || cur is not { } p) return;
-                        p.SendGamepad(f.Select(x => new GamepadState(x.Index, GamepadButtons.Nexus, 0, 0, 0, 0, 0, 0)).ToArray());
-                        _ = Task.Delay(150).ContinueWith(_ => cur?.SendGamepad(f.Select(x => new GamepadState(x.Index, GamepadButtons.None, 0, 0, 0, 0, 0, 0)).ToArray()));
-                        Log?.Invoke("Xbox button pressed from the stream menu");
+                        PressXbox();
+                        ov.ShowToast((live.Microphone ? "" : "Turn the microphone on in this menu to talk. ")
+                            + "Guide open: Parties & chats is there. Discord: join a voice channel in the Discord app and choose Transfer to Xbox", 9000);
+                        Log?.Invoke("Party: opened the console guide");
                     };
+                }
             }
             catch (Exception ex) { Log?.Invoke("No controller input (" + ex.Message + "). Streaming without it."); }
+            if (overlay is not null) overlay.MicKey += down => MicPress(down, fromButton: false);
 
             // Game audio: Opus from the console -> decoder -> speakers, kept ~40 ms behind (more on Smooth).
             XStream.Core.Audio.AudioPlayer? audio = null;
@@ -455,6 +496,7 @@ public sealed class PlayerSession
 
             // Microphone (party chat): only open while the setting is on, so the OS mic indicator matches.
             XStream.Core.Audio.Microphone? mic = null;
+            string micDevice = "";
             void UpdateMic(bool on)
             {
                 if (o.Headless) return;
@@ -463,8 +505,9 @@ public sealed class PlayerSession
                     if (on && mic is null)
                     {
                         var m = new XStream.Core.Audio.Microphone();
-                        m.Frame += f => { if (!ending) cur?.SendMicrophone(f); };
-                        m.Start();
+                        m.Frame += f => { if (!ending && !MicGated()) cur?.SendMicrophone(f); };
+                        m.Start(live.MicDevice);
+                        micDevice = live.MicDevice;
                         mic = m;
                         Log?.Invoke("Microphone on (" + m.DeviceInfo + ")");
                     }
@@ -487,15 +530,18 @@ public sealed class PlayerSession
             void ApplySettings(AppSettings next)
             {
                 live = next;
-                if (window is not null) { window.Sharpen = (int)next.Clarity; window.Scaling = next.Scaling; }
+                if (window is not null) { window.Sharpen = (int)next.Clarity; window.Enhance = next.Enhance; window.Scaling = next.Scaling; }
                 if (audio is not null)
                 {
                     audio.Volume = next.Audio ? Math.Clamp(next.Volume, 0, 100) / 100f : 0;
                     audio.TargetMs = next.Profile switch { StreamProfile.Competitive => 30, StreamProfile.Smooth => 80, _ => 40 };
                 }
                 cur?.Engine.Retune(next.Profile, next.MaxMbps * 1000);
+                if (next.Microphone && mic is not null && next.MicDevice != micDevice) UpdateMic(false); // another microphone chosen
                 if (next.Microphone != (mic is not null)) UpdateMic(next.Microphone);
+                pump?.SetMicButton(next.MicButton);
                 overlay?.Sync(next);
+                kbm?.Configure(next);
                 ApplyController(announce: true);
             }
             // Console streams: which game is running (presence), every 20 s, so its controller profile follows it.
@@ -516,6 +562,10 @@ public sealed class PlayerSession
                         catch (OperationCanceledException) { return; }
                     }
                 }) { IsBackground = true, Name = "xstream-game" }.Start();
+            // Achievements unlocked during the stream pop up over the game (console: the title above; cloud: looked up).
+            if (Achievements is { } achievements && overlay is { } achOverlay)
+                achievements.Start(o.IsCloud ? null : () => gameKey, () => live.AchievementAlerts && !ending,
+                    a => achOverlay.ShowToast(a.UnlockText, 6000, ToastKind.Good), m => Log?.Invoke(m), _cts.Token);
             if (overlay is not null)
                 overlay.SettingsChanged += change =>
                 {
@@ -552,6 +602,7 @@ public sealed class PlayerSession
             bool profileEachSecond = profileMode is "1" or "true" or "alloc";
             if (profileMode == "alloc") profiler.TrackAllocationTypes();
             var health = new StreamHealth();
+            var advisor = new ConnectionAdvisor(); // connection tips from this stream's own numbers
             int batteryWarned = 101; // lowest level already announced (20, 10, 5)
             AppSettings Settings() => live;
             LinkState lastLink = LinkState.Connecting;
@@ -564,6 +615,14 @@ public sealed class PlayerSession
                     if (bad && Stage == PlayerStage.Streaming) SetStage(PlayerStage.Reconnecting, $"Connection trouble: {s.Link}");
                     else if (s.Link == LinkState.Connected && Stage == PlayerStage.Reconnecting && !reconnecting) SetStage(PlayerStage.Streaming, "Back to normal");
                     lastLink = s.Link;
+                }
+                if (overlay is not null)
+                {
+                    // Mic indicator (10 times a second): muted / hold to talk, or lit while you talk.
+                    var m = mic;
+                    bool gated = MicGated();
+                    if (m is not null && !gated && m.Level > 0.06f) micTalkUntil = Now() + 300;
+                    overlay.SetMic(m is not null, gated, m is not null && !gated && Now() < micTalkUntil, Settings().PushToTalk);
                 }
                 if (tick++ % 10 != 0) return; // once a second
                 var prof = profiler.Tick();
@@ -614,6 +673,15 @@ public sealed class PlayerSession
                         }
                     }
                     else if (tick % 300 == 1 && XStream.Core.Native.WindowsStreaming.Battery() is { OnBattery: false }) batteryWarned = 101;
+                }
+                if (Stage == PlayerStage.Streaming && !reconnecting && s.Link == LinkState.Connected && o.CheckSeconds <= 0)
+                {
+                    if (advisor.Tick(new XStream.Core.Diagnostics.CheckSample(live.Mbps, live.CapMbps, live.LossPct, live.PingMs, live.JitterMs), streamRoute))
+                    {
+                        Log?.Invoke("Connection tips: " + string.Join("; ", advisor.Latest!.Findings.Where(f => f.Level != XStream.Core.Diagnostics.CheckLevel.Good).Select(f => f.Title)));
+                        if (cfg.ConnectionAlerts) overlay?.ShowToast("Connection could be better: tips in the stream menu", 6000, ToastKind.Warn);
+                    }
+                    overlay?.SetTips(advisor.Latest);
                 }
                 Stats?.Invoke(live);
             }
@@ -711,6 +779,7 @@ public sealed class PlayerSession
                     Remb = p.RembNegotiated, Nack = p.NackNegotiated, LogPath = logPath, Route = p.Route,
                 });
                 overlay?.SetRoute(p.Route);
+                streamRoute = p.Route;
             }
 
             // Close the live connection (tells the service the session is over) and its decoder.
@@ -898,6 +967,7 @@ public sealed class PlayerSession
                              $"{audio.CaughtUpMs:F0} ms of built-up lag removed, {audio.Resyncs} resets");
             audio?.Dispose();
             LastWindow = window?.WindowedRect is { } r ? new WindowPlace(r.X, r.Y, r.W, r.H) : null;
+            kbm?.Release(); // the mouse back to the desktop
             window?.Dispose();
             backend?.Dispose();
             AppDomain.CurrentDomain.UnhandledException -= onCrash;

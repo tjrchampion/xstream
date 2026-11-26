@@ -135,6 +135,8 @@ public sealed partial class ConsolesViewModel : ObservableObject
         _settings = settings;
         _art = art;
         Stream = stream;
+        Check = new ConnectionCheckViewModel(settings);
+        Check.RunningChanged += _ => { StartStreamCommand.NotifyCanExecuteChanged(); PlayGameCommand.NotifyCanExecuteChanged(); CheckConnectionCommand.NotifyCanExecuteChanged(); };
         art.Changed += () => Avalonia.Threading.Dispatcher.UIThread.Post(() => { ShowGames(); ShowRecent(); NotifyController(); });
         settings.Changed += _ => NotifyController();
         // While streaming a console, keep "what's running" current (the header's game and its controller layout).
@@ -146,7 +148,7 @@ public sealed partial class ConsolesViewModel : ObservableObject
             var c = Consoles.FirstOrDefault(c => c.ServerId == id);
             if (c is not null && StartStreamCommand.CanExecute(c)) StartStreamCommand.Execute(c);
         };
-        stream.RunningChanged += _ => { SyncCards(); StartStreamCommand.NotifyCanExecuteChanged(); PlayGameCommand.NotifyCanExecuteChanged(); };
+        stream.RunningChanged += _ => { SyncCards(); StartStreamCommand.NotifyCanExecuteChanged(); PlayGameCommand.NotifyCanExecuteChanged(); CheckConnectionCommand.NotifyCanExecuteChanged(); };
         Consoles.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasRecentGames));
         stream.PropertyChanged += (_, e) =>
         {
@@ -155,6 +157,27 @@ public sealed partial class ConsolesViewModel : ObservableObject
     }
 
     public StreamViewModel Stream { get; }
+    /// <summary>"Check connection": a short test stream and advice.</summary>
+    public ConnectionCheckViewModel Check { get; }
+
+    [RelayCommand(CanExecute = nameof(CanCheck))]
+    private async Task CheckConnectionAsync(ConsoleItemViewModel? c)
+    {
+        if (c is null || !CanCheck(c)) return;
+        await Check.StartAsync(c.ServerId, c.Name, c.WirelessWarning);
+    }
+
+    private bool CanCheck(ConsoleItemViewModel? c) => !Stream.IsRunning && !Check.IsRunning;
+
+    /// <summary>Test connection to the last used console (else the first): from the Sessions page.</summary>
+    public async Task TestLastAsync()
+    {
+        if (!Loaded) await RefreshAsync();
+        var c = Consoles.FirstOrDefault(x => x.ServerId == _settings.Current.LastServerId) ?? Consoles.FirstOrDefault();
+        if (c is null) { Check.ShowMessage("No console to test", "Vexel couldn't find a console on this account. Refresh the Consoles page and try again."); return; }
+        if (Stream.IsRunning) { Check.ShowMessage("A stream is running", "End the stream first: the test needs the console to itself."); return; }
+        await CheckConnectionAsync(c);
+    }
     public ObservableCollection<ConsoleItemViewModel> Consoles { get; } = [];
     private readonly Avalonia.Threading.DispatcherTimer _presence;
 
@@ -307,7 +330,7 @@ public sealed partial class ConsolesViewModel : ObservableObject
         await PlayOnAsync(c, game.ProductId, game.TitleId, game.Name);
     }
 
-    private bool CanPlayGame(RecentGameViewModel? game) => !Stream.IsRunning;
+    private bool CanPlayGame(RecentGameViewModel? game) => !Stream.IsRunning && !Check.IsRunning;
 
     /// <summary>Launch by store id, then stream (the stream wakes the console if needed; the game opens as it connects).</summary>
     public async Task PlayOnAsync(ConsoleItemViewModel c, string productId, string titleId, string name)
@@ -354,7 +377,7 @@ public sealed partial class ConsolesViewModel : ObservableObject
         Stream.Start(console, _settings.Current.Profile);
     }
 
-    private bool CanStream(ConsoleItemViewModel? console) => !Stream.IsRunning;
+    private bool CanStream(ConsoleItemViewModel? console) => !Stream.IsRunning && !Check.IsRunning;
 
     /// <summary>Connect on launch: stream the last used console if it's there and can be woken.</summary>
     public void StreamLast(string? serverId)

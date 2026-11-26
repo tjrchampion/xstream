@@ -35,15 +35,27 @@ Vexel streams your Xbox console over your home network. It's built for playing w
   - controller input sent the instant it changes
   - no frames queued for display
 - **Clear feedback:** short messages when the network, frame rate or battery needs attention, and when things are back to normal.
-- **Sharper picture:** an optional halo-free Clarity boost before the picture is scaled to your screen, plus Fit, Fill and Stretch for screens that aren't 16:9.
+- **Sharper picture:**
+  - **Quality:** Sharpest (1440p, 4K where offered) or Fastest (720p, about 10 ms quicker and far less data)
+  - **Enhance:** a stream smaller than your screen is enlarged edge-aware, in the style of AMD FSR 1, so text and edges stay crisp
+  - an optional halo-free Clarity boost, plus Fit, Fill and Stretch for screens that aren't 16:9
+- **Connection advice:**
+  - while connecting, a warning if this device is on 2.4 GHz or weak Wi-Fi, or the console is on Wi-Fi;
+  - about 20 seconds in, if the stream's own numbers show trouble, a short message and **Connection tips** in the stream menu, with **Suggested settings** to apply a fix;
+  - the tips again in the summary after the stream;
+  - **Test connection** on the Sessions page runs a 12-second test stream before you play.
+- **Stats on screen:** F3 (or the stream menu) shows a one-line readout; press again for a detailed panel with where the delay goes, the network, the picture, the controller and the last minute as a graph.
 - **Play from anywhere:** at home or away. Vexel finds a direct path to your console over the internet, and shows which route it's using.
 - **Type on the console:** type with a keyboard, or the touch keyboard on a handheld, and the text goes straight into the console's text box (search, sign-ins, messages), updating as you type.
 - **Console control:** turn your Xbox off or restart it from its card, or end a stream with "End and turn off Xbox". Pick a recent game under **Jump back in** to start it on the console and stream it as it opens.
 - **Picks up after sleep:** put a handheld to sleep mid-game and the stream reconnects by itself when it wakes, once Wi-Fi is back.
 - **Instant replay:** keep the last 30 seconds and save them as an MP4 clip (F10, or the stream menu). Off by default.
+- **Keyboard and mouse:** play without a controller. WASD and the mouse drive the sticks, clicks are the triggers, and every key can be changed on the Mapping page. On by default when no controller is connected; click the picture to start.
 - **Your controller, your layout:** the **Mapping** page shows your games with their art and a picture of the controller: click a button to change what it does. Give each game its own layout and Vexel switches to it by itself when that game starts, even mid-stream. Elite / DualSense Edge back paddles, and gyro aiming on a DualSense, DualShock 4 or Switch Pro controller.
 - **Launch shortcuts:** add Vexel to Steam, Armoury Crate or Playnite with `--stream` and go straight into a stream (see [Shortcuts](#shortcuts)).
-- **Game audio, party chat, rumble and screenshots.**
+- **Party chat and Discord:** your mic goes to the console, so Xbox party chat works, and so does Discord voice moved to the Xbox (Discord app: join a voice channel, then Transfer to Xbox). F9 or a controller button (a back paddle suits it) mutes, or is held to talk with push to talk. The stream menu mutes the mic while open, and a small icon shows when you're muted or talking. Pick the microphone and test its level in Settings. **Party & Discord chat…** in the stream menu opens the console's guide.
+- **Friends and achievements:** the **Friends** page shows who's online and what they're playing, and your games' achievements and gamerscore. Unlocks pop up while you stream.
+- **Game audio, rumble and screenshots.**
 - **Made for the ROG Ally:**
   - runs the 120 Hz panel at the stream's 60 Hz
   - keeps the device awake
@@ -147,6 +159,7 @@ Vexel works over the internet as well as on your home network. You don't need to
 | Save the last 30 seconds (instant replay on) | Stream menu → Save last 30 seconds | F10 |
 | Type on the console | Stream menu → Type on the console (opens the touch keyboard) | Just start typing; Enter finishes, Esc closes |
 | Full screen / stats readout | Stream menu | F11 / F3 |
+| Mute the mic (or hold it, with push to talk) | Microphone button (Settings) | F9 |
 | Leave the launcher's full screen | | F11 |
 
 While the stream menu is open, the console gets no controller input, so you can change settings mid-game safely.

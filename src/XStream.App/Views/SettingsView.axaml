@@ -82,6 +82,38 @@
         </StackPanel>
       </Border>
 
+      <!-- Quality -->
+      <Border Classes="card">
+        <StackPanel Spacing="16">
+          <StackPanel Spacing="3">
+            <TextBlock Classes="h2" Text="Quality" />
+            <TextBlock Classes="caption" TextWrapping="Wrap" Text="What the console sends. Applies from the next stream." />
+          </StackPanel>
+          <UniformGrid Rows="1" ColumnSpacing="12">
+            <RadioButton Classes="profile" GroupName="quality" IsChecked="{Binding QualitySharpest}">
+              <StackPanel Spacing="6">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="h3" Text="Sharpest" />
+                  <PathIcon Grid.Column="1" Data="{StaticResource Icon.Check}" Width="15" Height="15" Foreground="{StaticResource Accent}" IsVisible="{Binding QualitySharpest}" />
+                </Grid>
+                <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Text="1440p, 4K where offered" />
+                <TextBlock Classes="caption" TextWrapping="Wrap" Text="The console's top tier: the most detail. Needs a strong network and a maximum bitrate of 30 Mbps or more." />
+              </StackPanel>
+            </RadioButton>
+            <RadioButton Classes="profile" GroupName="quality" IsChecked="{Binding QualityFastest}">
+              <StackPanel Spacing="6">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="h3" Text="Fastest" />
+                  <PathIcon Grid.Column="1" Data="{StaticResource Icon.Check}" Width="15" Height="15" Foreground="{StaticResource Accent}" IsVisible="{Binding QualityFastest}" />
+                </Grid>
+                <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Text="720p, about 10 ms quicker" />
+                <TextBlock Classes="caption" TextWrapping="Wrap" Text="Quicker from button to picture and far less data, for busy Wi-Fi and handhelds. Enhance keeps it crisp on a bigger screen." />
+              </StackPanel>
+            </RadioButton>
+          </UniformGrid>
+        </StackPanel>
+      </Border>
+
       <!-- Bitrate -->
       <Border Classes="card">
         <StackPanel Spacing="6">
@@ -119,6 +151,23 @@
               <TextBlock Classes="caption" TextWrapping="Wrap" Text="A short message over the game when the connection or frame rate suffers, when it recovers, and when the battery runs low." />
             </StackPanel>
             <ToggleSwitch Grid.Column="1" IsChecked="{Binding ConnectionAlerts}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Achievement alerts" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Shows achievements you unlock while streaming, with their gamerscore (checked about every 30 seconds)." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding AchievementAlerts}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Enhance" />
+              <TextBlock Classes="caption" TextWrapping="Wrap"
+                         Text="When the stream is smaller than your screen (720p on a 1080p display, 1440p on 4K), enlarge it edge-aware, in the style of AMD FSR 1, so text and edges stay sharp instead of soft. Costs well under a millisecond." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding Enhance}" />
           </Grid>
           <Separator />
           <Grid Classes="row" ColumnDefinitions="*,Auto">
@@ -163,14 +212,6 @@
               <TextBlock Classes="caption" TextWrapping="Wrap" Text="The console always sends 16:9. On a 16:10 screen (MacBooks) Fit shows bars; Fill covers the screen by trimming the sides (about 5-7% each); Stretch covers it with everything visible, but 11-15% taller. Switch live from the stream menu." />
             </StackPanel>
             <ComboBox Grid.Column="1" MinWidth="250" VerticalAlignment="Center" ItemsSource="{Binding ScalingModes}" SelectedIndex="{Binding ScalingIndex}" />
-          </Grid>
-          <Separator />
-          <Grid Classes="row" ColumnDefinitions="*,Auto">
-            <StackPanel>
-              <TextBlock FontWeight="SemiBold" Text="Resolution" />
-              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Maximum lets the console send its highest tier; it needs a strong network and a high maximum bitrate (30+ Mbps). 720p is the lowest-delay choice: about 10 ms less from button to picture (the console encodes and we decode a smaller picture), but noticeably softer. Consoles streaming at home may ignore 1080p and send their top tier." />
-            </StackPanel>
-            <ComboBox Grid.Column="1" MinWidth="250" VerticalAlignment="Center" ItemsSource="{Binding Resolutions}" SelectedIndex="{Binding ResolutionIndex}" />
           </Grid>
           <Separator />
           <Grid Classes="row" ColumnDefinitions="*,Auto">
@@ -223,10 +264,48 @@
           <Grid Classes="row" ColumnDefinitions="*,Auto">
             <StackPanel>
               <TextBlock FontWeight="SemiBold" Text="Microphone (party and game chat)" />
-              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Sends this device's microphone to the console so friends in your party hear you. Toggle it from the stream menu too." />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Sends this device's microphone to the console, for Xbox party chat and for Discord voice moved to the Xbox (Discord app: join a voice channel, then Transfer to Xbox). F9 mutes it during a stream; the stream menu mutes it while open." />
             </StackPanel>
             <ToggleSwitch Grid.Column="1" IsChecked="{Binding Microphone}" />
           </Grid>
+          <StackPanel Spacing="0" IsVisible="{Binding Microphone}">
+            <Separator />
+            <Grid Classes="row" ColumnDefinitions="*,Auto">
+              <StackPanel>
+                <TextBlock FontWeight="SemiBold" Text="Which microphone" />
+                <TextBlock Classes="caption" TextWrapping="Wrap" Text="Pick your headset rather than the built-in mic for less echo. Test it to see the level move as you talk." />
+              </StackPanel>
+              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <ComboBox MinWidth="240" ItemsSource="{Binding MicDevices}" SelectedItem="{Binding MicDevice}" />
+                <Button Classes="ghost" Command="{Binding TestMicCommand}">
+                  <Panel>
+                    <TextBlock Text="Test" IsVisible="{Binding !MicTesting}" />
+                    <TextBlock Text="Stop" IsVisible="{Binding MicTesting}" />
+                  </Panel>
+                </Button>
+              </StackPanel>
+            </Grid>
+            <StackPanel Spacing="4" IsVisible="{Binding MicTesting}" Margin="0,0,0,10">
+              <ProgressBar Minimum="0" Maximum="100" Value="{Binding MicLevel}" Height="6" MinHeight="6" HorizontalAlignment="Stretch" />
+              <TextBlock Classes="caption" Text="{Binding MicTestText}" />
+            </StackPanel>
+            <Separator />
+            <Grid Classes="row" ColumnDefinitions="*,Auto">
+              <StackPanel>
+                <TextBlock FontWeight="SemiBold" Text="Push to talk" />
+                <TextBlock Classes="caption" TextWrapping="Wrap" Text="Only send while F9 or the microphone button is held. Off: an open mic that F9 or the button mutes and unmutes." />
+              </StackPanel>
+              <ToggleSwitch Grid.Column="1" IsChecked="{Binding PushToTalk}" />
+            </Grid>
+            <Separator />
+            <Grid Classes="row" ColumnDefinitions="*,Auto">
+              <StackPanel>
+                <TextBlock FontWeight="SemiBold" Text="Microphone button" />
+                <TextBlock Classes="caption" TextWrapping="Wrap" Text="A controller button for the mic (it's kept from the game). Back paddles on an Elite or DualSense Edge suit it best." />
+              </StackPanel>
+              <ComboBox Grid.Column="1" MinWidth="220" VerticalAlignment="Center" ItemsSource="{Binding MicButtons}" SelectedIndex="{Binding MicButtonIndex}" />
+            </Grid>
+          </StackPanel>
         </StackPanel>
       </Border>
 

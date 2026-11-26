@@ -48,9 +48,18 @@ public sealed partial class ButtonSlotViewModel(string source, string label, IRe
     public bool IsPaddle => Source.StartsWith("Paddle", StringComparison.Ordinal);
 
     /// <summary>What it does: a button name, "None" (off), or "" (itself).</summary>
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(IsRemapped), nameof(IsOff), nameof(Badge), nameof(Describe))]
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(IsRemapped), nameof(IsOff), nameof(Badge), nameof(Describe), nameof(ShowBadge))]
     public partial string Target { get; set; } = "";
     [ObservableProperty] public partial bool IsSelected { get; set; }
+
+    /// <summary>Keyboard & mouse view: the tag shows this button's keys instead of its remapping.</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ShowBadge))] public partial bool ShowKeys { get; set; }
+    /// <summary>Its keys, short ("Space", "LMB / C"), "" when none.</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(KeyTag), nameof(NoKeys))] public partial string Keys { get; set; } = "";
+    public string KeyTag => Keys.Length == 0 ? "none" : Keys;
+    public bool NoKeys => Keys.Length == 0;
+    /// <summary>The remapping tag (controller view only).</summary>
+    public bool ShowBadge => !ShowKeys && IsRemapped;
 
     public bool IsRemapped => Target.Length > 0;
     public bool IsOff => Target == "None";
@@ -96,8 +105,9 @@ public sealed partial class MappingViewModel : ObservableObject
         Choices = [.. new[] { "A", "B", "X", "Y", "LeftShoulder", "RightShoulder", "LeftThumb", "RightThumb", "DPadUp", "DPadDown",
                               "DPadLeft", "DPadRight", "View", "Menu", "Nexus" }
             .Select(t => new TargetChoice(t, Short(t), ChooseCommand)), new TargetChoice("None", "Off", ChooseCommand)];
+        InitKeyboard();
         art.Changed += () => Avalonia.Threading.Dispatcher.UIThread.Post(RefreshGames);
-        store.Changed += _ => { if (!_saving) { RefreshGames(); LoadSelected(); } };
+        store.Changed += _ => { if (!_saving) { RefreshGames(); LoadSelected(); LoadKeyboard(); } };
         RefreshGames();
         Select(Games.FirstOrDefault());
     }
@@ -209,6 +219,7 @@ public sealed partial class MappingViewModel : ObservableObject
     [RelayCommand]
     private void PickSlot(ButtonSlotViewModel? slot)
     {
+        if (KeyboardView && slot is not null) { PickKey(slot); return; }
         foreach (var s in Slots) s.IsSelected = s == slot;
         Slot = slot;
         MarkCurrent();

@@ -3,6 +3,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using XStream.App.Services;
+using XStream.Core.Config;
 using XStream.Core.Stability;
 using XStream.Player;
 
@@ -153,7 +154,7 @@ public sealed partial class StreamViewModel : ObservableObject
         launcher.StageChanged += OnStage;
         launcher.Stats += OnStats;
         launcher.Info += i => Info = i;
-        launcher.Summary += (s, path) => { Summary = s; SummaryPath = path; };
+        launcher.Summary += (s, path) => { Summary = s; SummaryPath = path; ShowTips(); };
         launcher.Log += AddLog;
         launcher.Exited += OnExited;
         launcher.OpenSettingsRequested += () => IsAway = true;
@@ -164,7 +165,67 @@ public sealed partial class StreamViewModel : ObservableObject
     public void Start(ConsoleItemViewModel console, StreamProfile profile)
     {
         IsCloud = false;
-        Begin(console.ServerId, console.Name, profile);
+        Begin(console.ServerId, console.Name, profile, console.WirelessWarning);
+    }
+
+    // ---- Connection advice: this device's link while connecting, tips from the stream's numbers afterwards ----
+    private readonly List<XStream.Core.Diagnostics.CheckSample> _samples = [];
+    private Task<XStream.Core.Diagnostics.LocalLink>? _link;
+    private bool _consoleOnWifi;
+    /// <summary>Shown on the connecting screen: things about this device's or the console's connection worth fixing.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<string> LinkWarnings { get; } = [];
+    public bool HasLinkWarnings => LinkWarnings.Count > 0;
+    /// <summary>After the stream: what got in the way, worst first (empty when it went fine).</summary>
+    public System.Collections.ObjectModel.ObservableCollection<FindingItem> SummaryTips { get; } = [];
+    public bool HasSummaryTips => SummaryTips.Count > 0;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CanApplyTips))] public partial string TipsApplyText { get; set; } = "";
+    public bool CanApplyTips => TipsApplyText.Length > 0;
+    private XStream.Core.Diagnostics.CheckResult? _tips;
+    /// <summary>Applies the suggested settings (the shell saves them).</summary>
+    public Action<Func<AppSettings, AppSettings>>? SaveSettings { get; set; }
+    public Func<AppSettings>? CurrentSettings { get; set; }
+
+    private async void CheckLinkAsync(bool consoleOnWifi)
+    {
+        LinkWarnings.Clear();
+        OnPropertyChanged(nameof(HasLinkWarnings));
+        _consoleOnWifi = consoleOnWifi;
+        var task = _link = Task.Run(XStream.Core.Diagnostics.LocalLink.Detect);
+        var l = await task;
+        if (_link != task) return;
+        if (l.IsWifi && l.BandGHz is > 0 and < 3) LinkWarnings.Add("This device is on 2.4 GHz Wi-Fi: join your router's 5 GHz network for a smoother stream");
+        if (l.IsWifi && l.SignalQuality is >= 0 and < 50) LinkWarnings.Add($"Weak Wi-Fi signal ({l.SignalQuality}%): move closer to the router if the picture stutters");
+        if (consoleOnWifi) LinkWarnings.Add("The console is on Wi-Fi: an Ethernet cable to the router helps most");
+        OnPropertyChanged(nameof(HasLinkWarnings));
+    }
+
+    private void ShowTips()
+    {
+        SummaryTips.Clear();
+        TipsApplyText = "";
+        _tips = null;
+        if (_samples.Count >= 15 && _link is { IsCompletedSuccessfully: true } link)
+        {
+            var r = XStream.Core.Diagnostics.ConnectionCheck.Analyze(_samples, link.Result, _consoleOnWifi, Info?.Route ?? "");
+            if (r.Level != XStream.Core.Diagnostics.CheckLevel.Good)
+            {
+                _tips = r;
+                foreach (var f in r.Findings.Where(f => f.Level != XStream.Core.Diagnostics.CheckLevel.Good).Take(4))
+                    SummaryTips.Add(new FindingItem(f.Title, f.Detail, f.Level == XStream.Core.Diagnostics.CheckLevel.Poor ? "poor" : "fair"));
+                if (CurrentSettings?.Invoke() is { } s && ConnectionAdvisor.Suggestion(r, s) is { Length: > 0 } sug)
+                    TipsApplyText = "Use suggested settings: " + sug;
+            }
+        }
+        OnPropertyChanged(nameof(HasSummaryTips));
+    }
+
+    [RelayCommand]
+    private void ApplyTips()
+    {
+        if (_tips is not { } r) return;
+        SaveSettings?.Invoke(s => ConnectionAdvisor.Apply(r, s));
+        TipsApplyText = "";
+        AddLog("Applied the suggested settings");
     }
 
     /// <summary>Start an Xbox Cloud Gaming session for a game. <paramref name="heroArt"/>: its wide art for the connecting screen.</summary>
@@ -186,10 +247,13 @@ public sealed partial class StreamViewModel : ObservableObject
     public string FirstPhaseLabel => IsCloud ? "Get a server" : "Wake console";
     partial void OnIsCloudChanged(bool value) => OnPropertyChanged(nameof(FirstPhaseLabel));
 
-    private void Begin(string serverId, string name, StreamProfile profile)
+    private void Begin(string serverId, string name, StreamProfile profile, bool consoleOnWifi = false)
     {
         if (IsRunning) return;
         Reset();
+        _samples.Clear();
+        SummaryTips.Clear(); TipsApplyText = ""; OnPropertyChanged(nameof(HasSummaryTips));
+        CheckLinkAsync(consoleOnWifi);
         _everStreamed = _cancelled = false;
         StartFailed = false;
         ConsoleName = name;
@@ -346,6 +410,7 @@ public sealed partial class StreamViewModel : ObservableObject
     {
         Live = s;
         Verdict = s.Verdict;
+        if (s.Link is "Connected" && IsStreaming) _samples.Add(new(s.Mbps, s.CapMbps, s.LossPct, s.PingMs, s.JitterMs));
         VerdictKind = s.Link is "Connected"
             ? (s.LossPct > 2 || s.PingMs > 80 || s.JitterMs > 15 ? "warn" : "good")
             : s.Link is "Failed" ? "bad" : "warn";

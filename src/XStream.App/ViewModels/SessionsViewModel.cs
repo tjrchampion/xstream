@@ -34,6 +34,13 @@ public sealed class SessionItemViewModel(PastSession p)
 /// <summary>Past sessions, newest first, from the logs folder.</summary>
 public sealed partial class SessionsViewModel : ObservableObject
 {
+    /// <summary>Test connection (set by the shell): the Consoles page's check, run against the last used console.</summary>
+    [ObservableProperty] public partial ConnectionCheckViewModel? Check { get; set; }
+    public Func<Task>? RunTest { get; set; }
+
+    [CommunityToolkit.Mvvm.Input.RelayCommand]
+    private async Task TestConnectionAsync() { if (RunTest is not null) await RunTest(); }
+
     public ObservableCollection<SessionItemViewModel> Sessions { get; } = [];
     [ObservableProperty] public partial bool IsEmpty { get; set; }
     [ObservableProperty] public partial string Totals { get; set; } = "";

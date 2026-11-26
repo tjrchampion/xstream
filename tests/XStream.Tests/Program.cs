@@ -290,7 +290,11 @@ var tests = new List<(string name, Action body)>
         var old = AppSettings.Migrate(new AppSettings { MaxMbps = 30, StartMbps = 10, Resolution = StreamResolution.Max });
         Eq(50.0, old.MaxMbps); Eq(20.0, old.StartMbps); Eq(StreamResolution.Max, old.Resolution);
         Eq(StreamResolution.Max, AppSettings.Migrate(new AppSettings { SettingsVersion = 2, Resolution = StreamResolution.Auto }).Resolution); // 0.4.2's default
-        Eq(StreamResolution.R1080, AppSettings.Migrate(new AppSettings { SettingsVersion = 2, Resolution = StreamResolution.R1080 }).Resolution);
+        // 0.5.0: Quality is Sharpest or Fastest; 1080p and "match display" (which the console ignored) become Sharpest.
+        Eq(StreamResolution.Max, AppSettings.Migrate(new AppSettings { SettingsVersion = 2, Resolution = StreamResolution.R1080 }).Resolution);
+        Eq(StreamResolution.Max, AppSettings.Migrate(new AppSettings { SettingsVersion = 4, Resolution = StreamResolution.Auto }).Resolution);
+        Eq(StreamResolution.R720, AppSettings.Migrate(new AppSettings { SettingsVersion = 4, Resolution = StreamResolution.R720 }).Resolution);
+        True(new AppSettings().Enhance, "Enhance on by default");
         False(AppSettings.Migrate(new AppSettings { SettingsVersion = 3, GyroAim = true }).GyroAim, "0.4.8 turns gyro aim off once");
         True(AppSettings.Migrate(new AppSettings { SettingsVersion = 4, GyroAim = true }).GyroAim, "chosen after 0.4.8: kept");
         False(new AppSettings().GyroAim, "gyro aim off by default");
@@ -298,6 +302,77 @@ var tests = new List<(string name, Action body)>
         Eq(40.0, mine.MaxMbps); Eq(40.0, mine.StartMbps); Eq(StreamResolution.R720, mine.Resolution);
         var again = AppSettings.Migrate(old with { MaxMbps = 30 });
         Eq(30.0, again.MaxMbps); // chosen after the update: not touched again
+    }),
+    ("Connection check: a clean wired link is good and needs no changes", () =>
+    {
+        var clean = Enumerable.Range(0, 12).Select(i => new XStream.Core.Diagnostics.CheckSample(i < 3 ? 5 : 30, 50, 0, 4, 0.8)).ToList();
+        var r = XStream.Core.Diagnostics.ConnectionCheck.Analyze(clean, new XStream.Core.Diagnostics.LocalLink { Kind = "Ethernet" }, false, "Home network (direct)");
+        Eq(XStream.Core.Diagnostics.CheckLevel.Good, r.Level);
+        Eq<double?>(null, r.RecommendedMaxMbps);
+        False(r.RecommendFastest, "no need for 720p");
+        Eq(4.0, r.PingMs);
+        Eq(30.0, r.PeakMbps); // the settling seconds (5 Mbps) are skipped
+    }),
+    ("Connection check: 2.4 GHz Wi-Fi with loss from 20 Mbps suggests Fastest and a lower cap", () =>
+    {
+        var s = Enumerable.Range(0, 12).Select(i => new XStream.Core.Diagnostics.CheckSample(i < 6 ? 12 : 20, 50, i < 6 ? 0 : 3, 9, i < 6 ? 2 : 18)).ToList();
+        var link = new XStream.Core.Diagnostics.LocalLink { Kind = "Wi-Fi", BandGHz = 2.4, SignalPct = 45, LinkMbps = 72 };
+        var r = XStream.Core.Diagnostics.ConnectionCheck.Analyze(s, link, consoleOnWifi: true, "Home network");
+        Eq(XStream.Core.Diagnostics.CheckLevel.Poor, r.Level);
+        True(r.RecommendFastest, "720p suggested");
+        Eq<double?>(10.0, r.RecommendedMaxMbps); // trouble at 20 Mbps -> 70% rounded down to 5, at least 10
+        True(r.Findings.Any(f => f.Title.Contains("2.4 GHz")), "says 2.4 GHz");
+        True(r.Findings.Any(f => f.Title.Contains("console is on Wi-Fi")), "says console on Wi-Fi");
+        True(r.Findings.Any(f => f.Title.Contains("Weak Wi-Fi")), "says weak signal");
+        Eq(XStream.Core.Diagnostics.CheckLevel.Poor, r.Findings[0].Level); // worst first
+    }),
+    ("Connection check: no data says so", () =>
+    {
+        var r = XStream.Core.Diagnostics.ConnectionCheck.Analyze([], new XStream.Core.Diagnostics.LocalLink(), false, "");
+        Eq(XStream.Core.Diagnostics.CheckLevel.Poor, r.Level);
+        True(r.Findings.Count == 1, "one finding");
+    }),
+    ("In-stream connection tips: first look at 20 s, told once, suggestions apply", () =>
+    {
+        var link = Task.FromResult(new XStream.Core.Diagnostics.LocalLink { Kind = "Wi-Fi", BandGHz = 5, SignalPct = 90 });
+        var adv = new XStream.Player.ConnectionAdvisor(link);
+        int told = 0;
+        for (int i = 1; i <= 200; i++)
+            if (adv.Tick(new XStream.Core.Diagnostics.CheckSample(25, 50, 3, 6, 18), "Home network")) { told++; Eq(20, i); }
+        Eq(1, told); // not again while it stays bad
+        var r = adv.Latest!;
+        Eq(XStream.Core.Diagnostics.CheckLevel.Poor, r.Level);
+        var s = new AppSettings { MaxMbps = 50, Resolution = StreamResolution.Max, Profile = XStream.Core.Stability.StreamProfile.Balanced };
+        Eq("Fastest · 15 Mbps · Smooth", XStream.Player.ConnectionAdvisor.Suggestion(r, s));
+        var applied = XStream.Player.ConnectionAdvisor.Apply(r, s);
+        Eq(StreamResolution.R720, applied.Resolution); Eq(15.0, applied.MaxMbps); Eq(XStream.Core.Stability.StreamProfile.Smooth, applied.Profile);
+        Eq("", XStream.Player.ConnectionAdvisor.Suggestion(r, applied)); // nothing left to suggest
+        var fine = new XStream.Player.ConnectionAdvisor(link);
+        for (int i = 1; i <= 100; i++) False(fine.Tick(new XStream.Core.Diagnostics.CheckSample(30, 50, 0, 4, 1), "Home network"), "clean: never told");
+        Eq(XStream.Core.Diagnostics.CheckLevel.Good, fine.Latest!.Level);
+    }),
+    ("Wi-Fi details from netsh (Windows)", () =>
+    {
+        const string text = """
+
+            There is 1 interface on the system:
+
+                Name                   : Wi-Fi
+                Description            : Qualcomm FastConnect 7800 Wi-Fi 7 High Band Simultaneous (HBS) Network Adapter
+                State                  : connected
+                Radio type             : 802.11ax
+                Band                   : 5 GHz
+                Channel                : 44
+                Receive rate (Mbps)    : 1201
+                Transmit rate (Mbps)   : 960.5
+                Signal                 : 88%
+            """;
+        var l = XStream.Core.Diagnostics.LocalLink.ParseNetsh(text);
+        Eq(5.0, l.BandGHz); Eq(44, l.Channel); Eq(88, l.SignalPct); Eq(1201.0, l.LinkMbps);
+        Eq(88, l.SignalQuality);
+        var old = XStream.Core.Diagnostics.LocalLink.ParseNetsh("    Channel                : 6\n    Signal                 : 40%\n");
+        Eq(2.4, old.BandGHz); // no Band line on older Windows: from the channel
+        Eq(75, new XStream.Core.Diagnostics.LocalLink { Kind = "Wi-Fi", RssiDbm = -60 }.SignalQuality); // macOS dBm
     }),
     ("Window place survives the trip between launcher and stream", () =>
     {
@@ -1199,6 +1274,8 @@ tests.Add(("Opus: libopus and the managed fallback decode the same audio", () =>
 tests.AddRange(SrtpTests.All);
 tests.AddRange(StunTests.All);
 tests.AddRange(FeatureTests.All);
+tests.AddRange(KeyboardMouseTests.All);
+tests.AddRange(SocialTests.All);
 
 int failed = 0;
 foreach (var (name, body) in tests)
