@@ -9,6 +9,8 @@ namespace XStream.Player;
 public sealed class AchievementWatcher(XboxSocial social, string locale)
 {
     public static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
+    /// <summary>How often to look (shorter while achievement clips are on, so the moment is still in the replay buffer).</summary>
+    public TimeSpan Every { get; set; } = Interval;
 
     /// <summary>
     /// Starts polling on a background thread until <paramref name="ct"/> is cancelled.
@@ -36,7 +38,7 @@ public sealed class AchievementWatcher(XboxSocial social, string locale)
         while (!ct.IsCancellationRequested)
         {
             await Task.Delay(wait, ct);
-            wait = Interval;
+            wait = Every;
             if (!enabled()) continue;
             try
             {
@@ -62,5 +64,36 @@ public sealed class AchievementWatcher(XboxSocial social, string locale)
                 if (failures > 3) wait = TimeSpan.FromMinutes(2);
             }
         }
+    }
+}
+
+/// <summary>
+/// Achievement clips: which part of the replay buffer shows the unlock. The service says when it unlocked (the
+/// console's clock), and the watcher notices up to <see cref="AchievementWatcher.Every"/> later, so the moment is
+/// placed on the buffer's clock from how long ago it was.
+/// </summary>
+public static class AchievementClip
+{
+    public const double BeforeMs = 20_000, AfterMs = 5_000;
+    /// <summary>When the unlock time is missing or implausible (clocks far apart): assume it was this long ago.</summary>
+    public const double UnknownAgeMs = 12_000;
+
+    /// <summary>The clip's range on the buffer's clock, and how long to wait before saving so it includes the moments after.</summary>
+    public static (double FromMs, double ToMs, int WaitMs) Window(double bufferNowMs, DateTimeOffset now, DateTimeOffset? unlockedAt)
+    {
+        double age = unlockedAt is { } at ? (now - at).TotalMilliseconds : double.NaN;
+        if (double.IsNaN(age) || age < -5_000 || age > 120_000) age = UnknownAgeMs;
+        age = Math.Max(0, age);
+        double moment = bufferNowMs - age;
+        double to = moment + AfterMs;
+        return (moment - BeforeMs, to, (int)Math.Max(0, Math.Ceiling(to - bufferNowMs)));
+    }
+
+    /// <summary>"Vexel Achievement - Name 2026-11-26 20.15.03.mp4" in Videos › Vexel.</summary>
+    public static string NewPath(string achievement)
+    {
+        string safe = string.Concat(achievement.Where(ch => char.IsLetterOrDigit(ch) || ch is ' ' or '-')).Trim();
+        if (safe.Length > 60) safe = safe[..60].Trim();
+        return Path.Combine(Clips.Folder, $"Vexel Achievement{(safe.Length > 0 ? " - " + safe : "")} {DateTime.Now:yyyy-MM-dd HH.mm.ss}.mp4");
     }
 }

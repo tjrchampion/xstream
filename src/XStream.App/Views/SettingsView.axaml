@@ -163,6 +163,14 @@
           <Separator />
           <Grid Classes="row" ColumnDefinitions="*,Auto">
             <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Achievement clips" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="Saves a 25-second clip of the moment you unlock an achievement to your Videos › Vexel folder. Keeps the last minute in memory while you stream a console." />
+            </StackPanel>
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding AchievementClips}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
               <TextBlock FontWeight="SemiBold" Text="Enhance" />
               <TextBlock Classes="caption" TextWrapping="Wrap"
                          Text="When the stream is smaller than your screen (720p on a 1080p display, 1440p on 4K), enlarge it edge-aware, in the style of AMD FSR 1, so text and edges stay sharp instead of soft. Costs well under a millisecond." />
@@ -212,6 +220,19 @@
               <TextBlock Classes="caption" TextWrapping="Wrap" Text="The console always sends 16:9. On a 16:10 screen (MacBooks) Fit shows bars; Fill covers the screen by trimming the sides (about 5-7% each); Stretch covers it with everything visible, but 11-15% taller. Switch live from the stream menu." />
             </StackPanel>
             <ComboBox Grid.Column="1" MinWidth="250" VerticalAlignment="Center" ItemsSource="{Binding ScalingModes}" SelectedIndex="{Binding ScalingIndex}" />
+          </Grid>
+          <Separator />
+          <Grid Classes="row" ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Colour filter" />
+              <TextBlock Classes="caption" TextWrapping="Wrap" Text="For colour blindness: shifts colours that look alike to you apart, so red and green (or blue and yellow) markers, maps and teams are easier to tell apart. Switch live from the stream menu." />
+            </StackPanel>
+            <ComboBox Grid.Column="1" MinWidth="250" VerticalAlignment="Center" ItemsSource="{Binding ColorFilterModes}" SelectedIndex="{Binding ColorFilterIndex}" />
+          </Grid>
+          <Grid Classes="row" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" IsEnabled="{Binding ColorFilterOn}">
+            <TextBlock FontWeight="SemiBold" Text="Filter strength" />
+            <TextBlock Grid.Column="1" Classes="mono" FontWeight="SemiBold" Foreground="{StaticResource Accent}" Text="{Binding ColorFilterStrengthText}" />
+            <Slider Grid.Row="1" Grid.ColumnSpan="2" Minimum="0" Maximum="100" SmallChange="5" LargeChange="10" TickFrequency="5" IsSnapToTickEnabled="True" Value="{Binding ColorFilterStrength}" />
           </Grid>
           <Separator />
           <Grid Classes="row" ColumnDefinitions="*,Auto">

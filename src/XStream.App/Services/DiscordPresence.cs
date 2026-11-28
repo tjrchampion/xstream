@@ -24,20 +24,35 @@ public sealed class DiscordPresence : IDisposable
     private Stream? _pipe;
     private string? _appId;
 
-    public async void Show(string appId, string details, string state, string? imageUrl, string? imageText)
+    /// <summary>Where the "Get Vexel" button on the status goes.</summary>
+    public const string DownloadUrl = "https://github.com/tjrchampion/xstream/releases/latest";
+
+    private long _since;
+
+    /// <param name="partySize">Players together (Play together), shown as "(2 of 4)"; 0 for none.</param>
+    /// <param name="keepTime">Keep the elapsed time running (an update mid-stream), instead of starting it again.</param>
+    public async void Show(string appId, string details, string state, string? imageUrl, string? imageText,
+        int partySize = 0, int partyMax = 0, bool keepTime = false)
     {
-        var activity = new JsonObject
-        {
-            ["details"] = Clip(details),
-            ["state"] = Clip(state),
-            ["timestamps"] = new JsonObject { ["start"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds() },
-            ["assets"] = imageUrl is null ? null : new JsonObject { ["large_image"] = imageUrl, ["large_text"] = Clip(imageText ?? details) },
-        };
-        await SendActivityAsync(appId, activity);
+        if (!keepTime || _since == 0) _since = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        await SendActivityAsync(appId, Activity(details, state, imageUrl, imageText, partySize, partyMax, _since));
     }
+
+    /// <summary>The SET_ACTIVITY payload (public for tests).</summary>
+    public static JsonObject Activity(string details, string state, string? imageUrl, string? imageText, int partySize, int partyMax, long since) => new()
+    {
+        ["details"] = Clip(details),
+        ["state"] = Clip(state),
+        ["timestamps"] = new JsonObject { ["start"] = since },
+        ["assets"] = imageUrl is null ? null : new JsonObject { ["large_image"] = imageUrl, ["large_text"] = Clip(imageText ?? details) },
+        ["party"] = partySize > 0 && partyMax >= partySize
+            ? new JsonObject { ["id"] = "vexel-" + Environment.ProcessId, ["size"] = new JsonArray(partySize, partyMax) } : null,
+        ["buttons"] = new JsonArray(new JsonObject { ["label"] = "Get Vexel", ["url"] = DownloadUrl }),
+    };
 
     public async void Clear()
     {
+        _since = 0;
         if (_pipe is null || _appId is null) return;
         await SendActivityAsync(_appId, null);
     }

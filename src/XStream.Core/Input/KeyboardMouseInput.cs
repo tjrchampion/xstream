@@ -69,7 +69,7 @@ public sealed class KeyboardMouseInput : IWindowInput
         if (_mouseDown != 0) { _mouseDown = 0; NativeMouse?.Invoke(0, 0, 0, 0, 0); }
     }
 
-    /// <summary>SDL scancode -> Windows virtual-key code (0 = not sent). Keys Vexel keeps (Esc, F3, F9-F12) aren't sent.</summary>
+    /// <summary>SDL scancode -> Windows virtual-key code (0 = not sent). Keys Vexel keeps (Esc, F3, F8-F12) aren't sent.</summary>
     public static byte Vk(int sc) => sc switch
     {
         >= 4 and <= 29 => (byte)(0x41 + sc - 4),          // A-Z
@@ -78,7 +78,7 @@ public sealed class KeyboardMouseInput : IWindowInput
         40 => 0x0D, 42 => 0x08, 43 => 0x09, 44 => 0x20,   // Enter, Backspace, Tab, Space
         45 => 0xBD, 46 => 0xBB, 47 => 0xDB, 48 => 0xDD, 49 => 0xDC, 51 => 0xBA, 52 => 0xDE, 53 => 0xC0, 54 => 0xBC, 55 => 0xBE, 56 => 0xBF,
         57 => 0x14,                                       // Caps Lock
-        58 or 59 or 61 or 62 or 63 or 64 or 65 => (byte)(0x70 + sc - 58), // F1, F2, F4-F8 (F3, F9-F12 are Vexel's)
+        58 or 59 or 61 or 62 or 63 or 64 => (byte)(0x70 + sc - 58), // F1, F2, F4-F7 (F3, F8-F12 are Vexel's)
         73 => 0x2D, 74 => 0x24, 75 => 0x21, 76 => 0x2E, 77 => 0x23, 78 => 0x22, // Insert Home PgUp Delete End PgDn
         79 => 0x27, 80 => 0x25, 81 => 0x28, 82 => 0x26,   // Right Left Down Up
         >= 89 and <= 97 => (byte)(0x61 + sc - 89),        // keypad 1-9
@@ -148,7 +148,7 @@ public sealed class KeyboardMouseInput : IWindowInput
 
     /// <summary>
     /// One SDL event (the raw SDL_Event bytes). Returns true when it was used here and the window should ignore it
-    /// (clicks while captured, and the click that captures). Keys are only watched, never taken: Esc, F3, F10-F12
+    /// (clicks while captured, and the click that captures). Keys are only watched, never taken: Esc, F3, F8, F10-F12
     /// and typing still work.
     /// </summary>
     public bool OnEvent(ReadOnlySpan<byte> ev)

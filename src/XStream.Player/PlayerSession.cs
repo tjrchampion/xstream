@@ -54,6 +54,8 @@ public sealed record PlayerOptions
     public int Sharpen { get; init; } = 1;
     public bool Enhance { get; init; } = true;
     public VideoScaling Scaling { get; init; } = VideoScaling.Fit;
+    public ColorFilter ColorFilter { get; init; }
+    public double ColorFilterStrength { get; init; } = 1;
     /// <summary>The full settings the session started with (the in-stream menu shows and edits them).</summary>
     public AppSettings? Settings { get; init; }
 
@@ -62,6 +64,7 @@ public sealed record PlayerOptions
         ServerId = serverId, Stability = s.ToStabilityOptions(), Fullscreen = s.Fullscreen, VSync = s.VSync,
         HardwareDecode = s.HardwareDecode, RumbleStrength = s.RumbleStrength, TriggerRumble = s.TriggerRumble,
         ShowStatsHud = s.ShowStatsHud, Audio = s.Audio, Volume = s.Volume, Sharpen = (int)s.Clarity, Enhance = s.Enhance, Scaling = s.Scaling, Settings = s,
+        ColorFilter = s.ColorFilter, ColorFilterStrength = s.ColorFilterStrength,
     };
 }
 
@@ -89,6 +92,13 @@ public sealed class PlayerSession
     public event Action? ReturnedToGame;
 
     private StreamOverlay? _overlay;
+    private volatile TogetherShare? _together;
+
+    /// <summary>
+    /// The launcher's Play together page (see <see cref="TogetherCommand"/>). Any thread. Ignored until the stream can
+    /// be shared (still connecting, a connection check, or no window); the page waits for the first status first.
+    /// </summary>
+    public void Together(TogetherCommand c) => _together?.Run(c);
 
     /// <summary>The launcher's Settings were closed: give the controller back to the game. Any thread.</summary>
     public void ReturnToGame() => _overlay?.ComeBack();
@@ -127,6 +137,12 @@ public sealed class PlayerSession
     public Func<CancellationToken, Task<string?>>? NowPlaying { get; set; }
     /// <summary>Watches for achievements unlocked during the stream (null: no pop-ups).</summary>
     public AchievementWatcher? Achievements { get; set; }
+    /// <summary>Play together: the name guests see ("Joined Alex's stream"). Null: the computer's user name.</summary>
+    public Func<string>? HostName { get; set; }
+    /// <summary>Play together: the game running now, shown to guests as they join (null if not known).</summary>
+    public Func<string?>? GameName { get; set; }
+    /// <summary>Play together: sharing started or stopped, or someone joined or left.</summary>
+    public event Action<TogetherStatus>? TogetherChanged;
     /// <summary>"End and turn off Xbox" was chosen: the console is switched off after the stream closes.</summary>
     public bool TurnOffAfter { get; private set; }
 
@@ -250,7 +266,11 @@ public sealed class PlayerSession
             double Now() => cur?.NowMs ?? lastPeer?.NowMs ?? 0;
 
             // Instant replay: the last 30 s as they arrived, for "Save last 30 seconds".
-            var replay = live.InstantReplay && !o.Headless ? new ReplayBuffer(Math.Clamp(live.ReplaySeconds, 10, 120)) : null;
+            // Achievement clips need it too (console streams with achievements watched): then at least the last minute,
+            // since an unlock is only noticed up to 15 s later.
+            bool achievementClips = live.AchievementClips && Achievements is not null && !o.IsCloud && !o.Headless && o.CheckSeconds <= 0;
+            var replay = (live.InstantReplay || achievementClips) && !o.Headless
+                ? new ReplayBuffer(Math.Clamp(Math.Max(live.ReplaySeconds, achievementClips ? 60 : 0), 10, 120)) : null;
 
             // The device slept (power button, lid): the connection is gone even if it doesn't know yet. Reconnect
             // on wake straight away, once the network is back, instead of waiting for it to time out.
@@ -286,8 +306,11 @@ public sealed class PlayerSession
                     window.Sharpen = o.Sharpen;
                     window.Enhance = o.Enhance;
                     window.Scaling = o.Scaling;
+                    window.ColorFilter = o.ColorFilter;
+                    window.ColorFilterStrength = o.ColorFilterStrength;
                     var remote = o.IsCloud ? null : Remote;
-                    overlay = new StreamOverlay(o.ConsoleName, live, o.Fullscreen, consoleControl: remote is not null, clips: replay is not null);
+                    overlay = new StreamOverlay(o.ConsoleName, live, o.Fullscreen, consoleControl: remote is not null, clips: live.InstantReplay && replay is not null,
+                        together: TogetherMode.Host);
                     window.Overlay = overlay;
                     window.KeyDown = overlay.OnKey;
                     window.KeyUp = overlay.OnKeyUp;
@@ -299,7 +322,7 @@ public sealed class PlayerSession
                     // Keyboard and mouse as a controller: pauses while the menu / typing / launcher has the input.
                     // While it's in use, typed letters are game keys: typing to the console is from the menu only.
                     var km = kbm = KeyboardMouseInput.FromSettings(live);
-                    km.Blocked = () => ov0.HoldsInput;
+                    km.Blocked = () => ov0.HoldsInput || win.IsMiniPlayer; // mini player: the mouse is the desktop's, the controller still plays
                     km.NativeKeys = keys => cur?.SendKeys(keys);
                     ov0.EscGoesToGame = () => km.Native && km.Captured && km.Active;
                     ov0.EscTapped += () => { cur?.SendKeys([(0x1B, true)]); _ = Task.Delay(60).ContinueWith(_ => cur?.SendKeys([(0x1B, false)])); };
@@ -378,6 +401,11 @@ public sealed class PlayerSession
             // Controller: read at 1 kHz on its own thread, sent the instant anything changes (to whichever
             // connection is live; nothing goes out while reconnecting).
             InputPump? pump = null;
+            // Play together: friends watching this stream, their controllers in slots of their own (made below, once
+            // the menu and controller exist). While anyone's in, the console's bitrate is capped (our upload carries it).
+            TogetherShare? together = null;
+            double? togetherCapKbps = null;
+            double MaxKbps() => Math.Min(live.MaxMbps * 1000, togetherCapKbps ?? double.MaxValue);
             // Microphone controls: F9 or the mic button mutes (open mic) or is held to talk (push to talk); the
             // stream menu mutes it while open.
             bool micMuted = false, micKeyHeld = false, micButtonHeld = false;
@@ -393,16 +421,29 @@ public sealed class PlayerSession
             bool MicGated() => (overlay?.MenuOpen ?? false) || (live.PushToTalk ? !(micKeyHeld || micButtonHeld) : micMuted);
             string? gameKey = null;                       // the game running now (for its controller profile)
             ControllerProfile activeController = live.DefaultController;
-            // Use the profile for the current game (if it changed, or the profiles were edited in the launcher).
+            ControllerProfile? appliedSetup = null;     // the whole game setup last applied (null: not yet)
+            // Use the setup for the current game (if it changed, or the profiles were edited in the launcher): its
+            // layout, gyro and turbo for the pump, its keyboard and mouse, its picture, and the stream menu shows the
+            // same effective values (one source: AppSettings.EffectiveFor).
             void ApplyController(bool announce)
             {
                 var want = live.ControllerFor(gameKey);
-                if (pump is null || (want.SameSetup(activeController) && want.GameKey == activeController.GameKey)) return;
-                bool changed = !want.SameSetup(activeController);
+                var eff = live.EffectiveFor(gameKey);
+                overlay?.Sync(eff);
+                kbm?.Configure(eff);
+                if (window is not null) { window.Sharpen = (int)eff.Clarity; window.Enhance = eff.Enhance; }
+                var before = appliedSetup;
+                if (before is not null && want.SameSetup(before) && want.GameKey == before.GameKey) return;
+                appliedSetup = want;
+                if (pump is not null && (before is null || !want.SameController(activeController)))
+                    pump.SetController(ControllerMapping.Parse(want.ButtonMapping), want.GyroAim ? new GyroAim(want.GyroSensitivity) : null, want.GyroHoldButton,
+                        ButtonModes.Parse(want.ButtonModes), want.TurboRate ?? ButtonModes.DefaultRate);
                 activeController = want;
-                pump.SetController(ControllerMapping.Parse(want.ButtonMapping), want.GyroAim ? new GyroAim(want.GyroSensitivity) : null, want.GyroHoldButton);
                 Log?.Invoke($"Controller profile: {want.GameName}: {want.Summary}");
-                if (announce && changed) overlay?.ShowToast(want.GameKey.Length == 0 ? "Controller: your default layout" : $"Controller: {want.GameName} layout", 3000);
+                if (!announce || before is null || want.SameSetup(before)) return;
+                string text = want.GameKey.Length == 0 ? "Controller: your default layout" : $"Controller: {want.GameName} layout";
+                if (!want.SameKeyboardMouse(before) && want.KeyboardMouseText.Length > 0) text += " · " + want.KeyboardMouseText;
+                overlay?.ShowToast(text, 3000);
             }
             IGamepadBackend? backend = null;
             var padToastsFrom = DateTime.MaxValue; // set when the pump starts (+3 s: it reports the pads already plugged in)
@@ -418,22 +459,15 @@ public sealed class PlayerSession
                 backend = GamepadBackends.CreateDefault(needExtras: live.NeedsControllerExtras);
                 // The stream menu sees the controller first; while it's open the console gets a neutral pad.
                 var ov = overlay;
-                GamepadState[] neutral = [];
+                // The menu only sees this device's controllers; a friend's (Play together) go straight to the console.
+                var router = new HostPadRouter(i => pump?.IsRemote(i) == true) { Menu = ov is null ? null : f => ov.OnPad(f) };
                 void Send(GamepadState[] frame)
                 {
-                    var p = cur;
-                    if (ov is not null && ov.OnPad(frame))
-                    {
-                        if (neutral.Length != frame.Length || neutral.Where((n, i) => n.Index != frame[i].Index).Any())
-                        {
-                            neutral = frame.Select(f => new GamepadState(f.Index, GamepadButtons.None, 0, 0, 0, 0, 0, 0)).ToArray();
-                            p?.SendGamepad(neutral);
-                        }
-                        return;
-                    }
-                    neutral = [];
-                    p?.SendGamepad(frame);
+                    if (router.Route(frame) is { } f) cur?.SendGamepad(f);
                 }
+                // This device's pads changed by f, a friend's left as they are.
+                GamepadState[] Local(GamepadState[] frame, Func<GamepadState, GamepadState> f) =>
+                    frame.Select(x => pump?.IsRemote(x.Index) == true ? x : f(x)).ToArray();
                 // When the hold opens the menu there's no new controller report (nothing changed), so tell the
                 // console straight away that nothing is pressed.
                 GamepadState[] lastFrame = [];
@@ -444,10 +478,7 @@ public sealed class PlayerSession
                     {
                         var f = lastFrame;
                         if (f.Length > 0 && !ending)
-                        {
-                            neutral = f.Select(x => new GamepadState(x.Index, GamepadButtons.None, 0, 0, 0, 0, 0, 0)).ToArray();
-                            cur?.SendGamepad(neutral);
-                        }
+                            cur?.SendGamepad(Local(f, x => new GamepadState(x.Index, GamepadButtons.None, 0, 0, 0, 0, 0, 0)));
                     };
                 // Controllers coming and going mid-stream: tell the console, and the player (a toast). The first
                 // few seconds are the pump finding the pads already plugged in: no toasts for those.
@@ -455,6 +486,12 @@ public sealed class PlayerSession
                 void PadChanged(int i, bool added)
                 {
                     cur?.PadConnectionChanged(i, added);
+                    if (together?.OwnsSlot(i) == true)
+                    {
+                        // A friend's controller (Play together): it has its own toasts. The console must take this index.
+                        Log?.Invoke($"Play together: told the console controller {i} {(added ? "connected" : "disconnected")}");
+                        return;
+                    }
                     int count;
                     lock (pads) { if (added) pads.Add(i); else pads.Remove(i); count = pads.Count; }
                     if (ov is null || DateTime.UtcNow < padToastsFrom || ending) return;
@@ -470,7 +507,10 @@ public sealed class PlayerSession
                     Redundancy = XboxPeer.UnreliableInputSupported ? 1 : 0, NexusComboMs = 0,
                     Mapping = mapping, Gyro = activeController.GyroAim ? new GyroAim(activeController.GyroSensitivity) : null,
                     GyroHold = activeController.GyroHoldButton, KeyboardMouse = kbm, MicButton = live.MicButton,
+                    Modes = ButtonModes.Parse(activeController.ButtonModes), TurboRate = activeController.TurboRate ?? ButtonModes.DefaultRate,
                 }, Track, PadChanged) { MicButtonChanged = held => MicPress(held, fromButton: true) };
+                // Turbo and toggle stand still while the stream menu has the controller (so A in the menu is one press).
+                if (ov is not null) pump.ModesPaused = () => ov.MenuOpen || ov.Away;
                 Log?.Invoke($"Controller: {backend.Name}, {activeController.GameName}: {activeController.Summary}");
                 // Press and release the Xbox button on every connected pad (the menu just closed, so the console has
                 // a neutral pad; no real buttons are held).
@@ -479,8 +519,9 @@ public sealed class PlayerSession
                     var f = lastFrame;
                     if (f.Length == 0) f = [new GamepadState(0, GamepadButtons.None, 0, 0, 0, 0, 0, 0)];
                     if (cur is not { } p) return;
-                    p.SendGamepad(f.Select(x => new GamepadState(x.Index, GamepadButtons.Nexus, 0, 0, 0, 0, 0, 0)).ToArray());
-                    _ = Task.Delay(150).ContinueWith(_ => cur?.SendGamepad(f.Select(x => new GamepadState(x.Index, GamepadButtons.None, 0, 0, 0, 0, 0, 0)).ToArray()));
+                    // Only this device's pads press it: a friend's controller isn't touched.
+                    p.SendGamepad(Local(f, x => new GamepadState(x.Index, GamepadButtons.Nexus, 0, 0, 0, 0, 0, 0)));
+                    _ = Task.Delay(150).ContinueWith(_ => cur?.SendGamepad(Local(f, x => new GamepadState(x.Index, GamepadButtons.None, 0, 0, 0, 0, 0, 0))));
                 }
                 if (ov is not null)
                 {
@@ -497,6 +538,22 @@ public sealed class PlayerSession
             }
             catch (Exception ex) { Log?.Invoke("No controller input (" + ex.Message + "). Streaming without it."); }
             if (overlay is not null) overlay.MicKey += down => MicPress(down, fromButton: false);
+            ApplyController(announce: false); // a cloud game's own keyboard, mouse and picture from the start
+
+            if (overlay is not null && o.CheckSeconds <= 0)
+            {
+                together = new TogetherShare(live, HostName?.Invoke() is { Length: > 0 } hn ? hn : Environment.UserName, overlay, () => pump,
+                    () => cur?.RequestKeyframe(),
+                    kbps =>
+                    {
+                        togetherCapKbps = kbps;
+                        if (!ending) cur?.Engine.Retune(live.Profile, MaxKbps());
+                    },
+                    m => Log?.Invoke(m));
+                together.Changed += st => TogetherChanged?.Invoke(st);
+                _together = together;
+                together.Announce(); // the launcher's Play together page can offer Share from now on
+            }
 
             // Game audio: Opus from the console -> decoder -> speakers, kept ~40 ms behind (more on Smooth).
             XStream.Core.Audio.AudioPlayer? audio = null;
@@ -549,19 +606,21 @@ public sealed class PlayerSession
             void ApplySettings(AppSettings next)
             {
                 live = next;
-                if (window is not null) { window.Sharpen = (int)next.Clarity; window.Enhance = next.Enhance; window.Scaling = next.Scaling; }
+                if (window is not null)
+                {
+                    window.Scaling = next.Scaling; // Enhance and Clarity can be per game: ApplyController
+                    window.ColorFilter = next.ColorFilter; window.ColorFilterStrength = next.ColorFilterStrength;
+                }
                 if (audio is not null)
                 {
                     audio.Volume = next.Audio ? Math.Clamp(next.Volume, 0, 100) / 100f : 0;
                     audio.TargetMs = next.Profile switch { StreamProfile.Competitive => 30, StreamProfile.Smooth => 80, _ => 40 };
                 }
-                cur?.Engine.Retune(next.Profile, next.MaxMbps * 1000);
+                cur?.Engine.Retune(next.Profile, MaxKbps());
                 if (next.Microphone && mic is not null && next.MicDevice != micDevice) UpdateMic(false); // another microphone chosen
                 if (next.Microphone != (mic is not null)) UpdateMic(next.Microphone);
                 pump?.SetMicButton(next.MicButton);
-                overlay?.Sync(next);
-                kbm?.Configure(next);
-                ApplyController(announce: true);
+                ApplyController(announce: true); // also the stream menu and keyboard and mouse, with this game's values
             }
             // Console streams: which game is running (presence), every 20 s, so its controller profile follows it.
             if (!o.IsCloud && NowPlaying is { } nowPlaying)
@@ -583,12 +642,37 @@ public sealed class PlayerSession
                 }) { IsBackground = true, Name = "xstream-game" }.Start();
             // Achievements unlocked during the stream pop up over the game (console: the title above; cloud: looked up).
             if (Achievements is { } achievements && overlay is { } achOverlay)
-                achievements.Start(o.IsCloud ? null : () => gameKey, () => live.AchievementAlerts && !ending,
-                    a => achOverlay.ShowToast(a.UnlockText, 6000, ToastKind.Good), m => Log?.Invoke(m), _cts.Token);
+            {
+                if (achievementClips) achievements.Every = TimeSpan.FromSeconds(15);
+                achievements.Start(o.IsCloud ? null : () => gameKey, () => (live.AchievementAlerts || (achievementClips && live.AchievementClips)) && !ending,
+                    a =>
+                    {
+                        if (live.AchievementAlerts) achOverlay.ShowToast(a.UnlockText, 6000, ToastKind.Good);
+                        if (achievementClips && live.AchievementClips && replay is { } rb) SaveAchievementClip(rb, a, achOverlay);
+                    }, m => Log?.Invoke(m), _cts.Token);
+            }
+            // The unlock moment (20 s before to 5 s after), from the replay buffer, once the moments after it are in.
+            async void SaveAchievementClip(ReplayBuffer rb, Achievement a, StreamOverlay ov)
+            {
+                try
+                {
+                    var (from, to, wait) = AchievementClip.Window(rb.NowMs, DateTimeOffset.UtcNow, a.UnlockedAt);
+                    if (wait > 0) await Task.Delay(wait);
+                    if (ending) return;
+                    var path = AchievementClip.NewPath(a.Name);
+                    double secs = await Task.Run(() => rb.SaveRange(path, from, to));
+                    if (secs <= 0) { File.Delete(path); Log?.Invoke("Achievement clip: nothing in the replay buffer for that moment"); return; }
+                    Log?.Invoke($"Achievement clip: {path} ({secs:F1} s)");
+                    await Task.Delay(live.AchievementAlerts ? 6500 : 0); // after the unlock pop-up
+                    if (!ending) ov.ShowToast("Achievement clip saved to " + (OperatingSystem.IsMacOS() ? "Movies" : "Videos") + " › Vexel", 3000, ToastKind.Good);
+                }
+                catch (Exception ex) { Log?.Invoke("Achievement clip failed: " + ex.Message); }
+            }
             if (overlay is not null)
                 overlay.SettingsChanged += change =>
                 {
-                    var next = change(AppSettings.Load());
+                    // Under a game's profile, Enhance, Clarity and the mouse are saved to that game (see ApplyEdit).
+                    var next = AppSettings.Load().ApplyEdit(gameKey, change);
                     try { next.Save(); } catch (IOException ex) { Log?.Invoke("Couldn't save settings: " + ex.Message); }
                     ApplySettings(next);
                 };
@@ -723,7 +807,10 @@ public sealed class PlayerSession
                 if (window is not null && mailbox is not null)
                 {
                     v = new VideoPipeline(p.Frames, VideoDecoder.Create(o.HardwareDecode, window.D3D11Device), mailbox, () => p.NowMs);
-                    if (replay is not null) { replay.Clear(); v.Tap = au => replay.AddVideo(au.Data, au.IsKeyframe); }
+                    replay?.Clear();
+                    // Every frame as it goes to the decoder: instant replay keeps it, Play together forwards it to friends.
+                    if (replay is not null || together is not null)
+                        v.Tap = au => { replay?.AddVideo(au.Data, au.IsKeyframe); together?.OnVideo(au); };
                     if (int.TryParse(Environment.GetEnvironmentVariable("XSTREAM_LATENCY_TEST"), out int presses) && presses > 0)
                     {
                         var probe = new LatencyProbe(() => p.NowMs, p.SendGamepad, presses);
@@ -742,6 +829,8 @@ public sealed class PlayerSession
                     p.Rumble += r =>
                     {
                         if (ending || p != cur) return;
+                        // A friend's controller slot: their own Vexel plays it (at their own strength setting).
+                        if (together?.OnRumble(r.pad, r.left / 100f, r.right / 100f, r.lt / 100f, r.rt / 100f, r.durationMs) == true) return;
                         var c = live;
                         float strength = Math.Clamp(c.RumbleStrength, 0, 100) / 100f / 100f; // packet values are percent
                         // Trigger motors are off by default: the xbox.com and Chromium-based clients only play the
@@ -752,6 +841,7 @@ public sealed class PlayerSession
                 var a = audio;
                 if (a is not null) p.AudioRtp += (payload, seq) => { if (!ending && p == cur) a.Push(payload, seq); };
                 if (replay is not null) p.AudioRtp += (payload, _) => { if (!ending && p == cur) replay.AddAudio(payload); };
+                if (together is not null) p.AudioRtp += (payload, seq) => { if (!ending && p == cur) together.OnAudio(payload, seq); };
                 p.StateChanged += st =>
                 {
                     Log?.Invoke($"Connection: {st}");
@@ -784,7 +874,7 @@ public sealed class PlayerSession
 
                 lastLink = LinkState.Connecting;
                 cur = p; lastPeer = p; video = v; connCts = cts;
-                p.Engine.Retune(live.Profile, live.MaxMbps * 1000);
+                p.Engine.Retune(live.Profile, MaxKbps());
                 // The service drops a session it doesn't hear from.
                 _ = Task.Run(async () =>
                 {
@@ -856,6 +946,9 @@ public sealed class PlayerSession
             }
             pump?.Start();
             padToastsFrom = DateTime.UtcNow.AddSeconds(3);
+            if (together is not null && Environment.GetEnvironmentVariable("XSTREAM_TOGETHER_TEST_PAD") is "1") together.RunTestPad();
+            if (together is not null && GameName is { } gameName)
+                _ = Task.Delay(8000).ContinueWith(_ => { try { together.SetGame(gameName(), null); } catch { } });
             UpdateMic(live.Microphone);
             _overlay = overlay;
 
@@ -904,6 +997,7 @@ public sealed class PlayerSession
                         // Instant replay needs a keyframe every few seconds (a clip has to start on one).
                         if (!awaitingPicture && replay is not null && replay.ShouldAskKeyframe()) cur?.RequestKeyframe();
                         overlay?.Apply(window);
+                        together?.OnMainThread();
                         Tick();
                         return !_stop.IsSet && reconnectWhy is null;
                     });
@@ -983,6 +1077,8 @@ public sealed class PlayerSession
             // disposing what they call into. Disposing the controller/video first crashed the process on Esc.
             ending = true;
             _cts.Cancel();
+            _together = null;
+            together?.Dispose(); // friends are told the stream ended; the router's port is closed again
             Disconnect(); // also tells the service to end the session
             Finish();
             mic?.Dispose();

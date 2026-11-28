@@ -37,6 +37,10 @@ public sealed record InputOptions
     public KeyboardMouseInput? KeyboardMouse { get; init; }
     /// <summary>Microphone button (Xbox button or PaddleN; "" = none): reported through <see cref="InputPump.MicButtonChanged"/>, never sent to the game.</summary>
     public string MicButton { get; init; } = "";
+    /// <summary>Turbo and toggle buttons, applied last (after remapping and keyboard and mouse).</summary>
+    public ButtonModes Modes { get; init; } = ButtonModes.None;
+    /// <summary>Turbo presses a second (2 to 20).</summary>
+    public double TurboRate { get; init; } = ButtonModes.DefaultRate;
 }
 
 /// <summary>Live numbers for the overlay and session log.</summary>
@@ -50,7 +54,7 @@ public readonly record struct InputStats(
 /// waiting for a video frame. Typical cost from "change seen" to "packet handed to the network" is
 /// tens of microseconds.
 /// </summary>
-public sealed class InputPump : IDisposable
+public sealed partial class InputPump : IDisposable
 {
     private readonly IGamepadBackend _backend;
     private readonly InputOptions _o;
@@ -85,21 +89,30 @@ public sealed class InputPump : IDisposable
         _o = options;
         _send = send;
         _padChanged = padChanged;
-        _setup = new Setup(options.Mapping, options.Gyro, options.GyroHold);
+        _setup = new Setup(options.Mapping, options.Gyro, options.GyroHold, options.Modes, options.TurboRate);
         _micButton = options.MicButton;
         if (options.Gyro is not null) backend.EnableGyro(true);
     }
 
     // The live controller setup (swapped whole when the game changes; read once per pad per poll).
-    private sealed record Setup(ControllerMapping Mapping, GyroAim? Gyro, string GyroHold);
+    private sealed record Setup(ControllerMapping Mapping, GyroAim? Gyro, string GyroHold, ButtonModes Modes, double TurboRate);
     private volatile Setup _setup;
 
-    /// <summary>Switch the button layout and gyro now (another game started, or the settings changed).</summary>
-    public void SetController(ControllerMapping mapping, GyroAim? gyro, string gyroHold)
+    /// <summary>
+    /// Switch the button layout, gyro and turbo/toggle buttons now (another game started, or the settings changed).
+    /// Latched toggles let go: they belonged to the old layout.
+    /// </summary>
+    public void SetController(ControllerMapping mapping, GyroAim? gyro, string gyroHold, ButtonModes? modes = null, double turboRate = ButtonModes.DefaultRate)
     {
         if (gyro is not null) _backend.EnableGyro(true);
-        _setup = new Setup(mapping, gyro, gyroHold);
+        _setup = new Setup(mapping, gyro, gyroHold, modes ?? ButtonModes.None, turboRate);
     }
+
+    /// <summary>True while something else has the controller (the stream menu): turbo and toggle pass the real buttons through and keep their latches.</summary>
+    public Func<bool>? ModesPaused { get; set; }
+    // Turbo/toggle state per pad, and the setup it belongs to (a new setup starts clean).
+    private readonly ButtonModes.State[] _modeState = new ButtonModes.State[8];
+    private readonly Setup?[] _modeSetup = new Setup?[8];
 
     /// <summary>The microphone button went down (true) or up (false) on any pad. Raised on the input thread.</summary>
     public Action<bool>? MicButtonChanged { get; set; }
@@ -123,10 +136,12 @@ public sealed class InputPump : IDisposable
 
     public void Stop()
     {
+        ClearRemotePads();
         if (!_running) return;
         _running = false;
         _thread?.Join(500);
-        // Never leave a button or stick held on the console.
+        // Never leave a button or stick held on the console (and no toggle stays latched for next time).
+        Array.Clear(_modeState);
         var neutral = Enumerable.Range(0, 4).Where(i => _prevConn[i]).Select(i => new GamepadState((byte)i, 0, 0, 0, 0, 0, 0, 0)).ToArray();
         if (neutral.Length > 0) _send(neutral);
     }
@@ -167,6 +182,7 @@ public sealed class InputPump : IDisposable
 
         _backend.Poll(_raw, _conn);
         MixKeyboardMouse(nowMs);
+        int remote = MixRemote(); // Play together: guests' controllers (see InputPump.Remote.cs)
         long t0 = Stopwatch.GetTimestamp();
 
         bool changed = false;
@@ -179,11 +195,11 @@ public sealed class InputPump : IDisposable
                 if (!_conn[i]) _send(new[] { new GamepadState((byte)i, 0, 0, 0, 0, 0, 0, 0) }); // release everything first
                 _prevConn[i] = _conn[i];
                 _padChanged?.Invoke(i, _conn[i]);
-                if (!_conn[i]) { _sent[i] = default; continue; }
+                if (!_conn[i]) { _sent[i] = default; _modeState[i].Clear(); continue; }
             }
             if (!_conn[i]) continue;
             count++;
-            var s = Process(_raw[i], (byte)i, nowMs);
+            var s = (remote & (1 << i)) != 0 ? _raw[i] : Process(_raw[i], (byte)i, nowMs);
             if (Differs(s, _sent[i])) { changed = true; _sent[i] = s; }
         }
 
@@ -262,7 +278,13 @@ public sealed class InputPump : IDisposable
 
         var state = new GamepadState(index, b, lx, ly, rx, ry, lt, rt);
         // Keyboard and mouse go in after the pad's deadzones and remapping: they have their own layout and anti-deadzone.
-        return index == _kbmPad ? KeyboardMouseInput.Merge(state, _kbm) : state;
+        if (index == _kbmPad) state = KeyboardMouseInput.Merge(state, _kbm);
+        // Turbo and toggle last, so they act on what the console would get: remapped buttons, paddles and keys alike.
+        if (index >= _modeState.Length) return state;
+        ref var ms = ref _modeState[index];
+        if (!ReferenceEquals(_modeSetup[index], setup)) { ms.Clear(); _modeSetup[index] = setup; }
+        if (setup.Modes.IsEmpty) return state;
+        return setup.Modes.Apply(state, ref ms, nowMs, setup.TurboRate, ModesPaused?.Invoke() ?? false);
     }
 
     private int _kbmPad = -1;

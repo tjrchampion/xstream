@@ -22,6 +22,7 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
 {
     public float ColorFlags { get; set; }
     public bool Enhance { get; set; } = true;
+    public float[]? ColorMatrix { get; set; }
     private const string Shaders = """
         Texture2D<float>  texY  : register(t0);
         Texture2D<float2> texUV : register(t1);
@@ -37,7 +38,10 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
             float2 uvScale;   // Fill crops the picture: uv = uvOffset + uv * uvScale
             float2 uvOffset;
             float2 foot;      // the source area one screen pixel covers, in UV units
-            float2 pad2;     // x: 1 = Enhance (edge-aware upscaling when enlarging)
+            float2 pad2;     // x: 1 = Enhance (edge-aware upscaling when enlarging), y: 1 = colour filter on
+            float4 cm0;      // colour filter matrix rows (linear RGB; see ColorFilters). Same layout as the Metal struct.
+            float4 cm1;
+            float4 cm2;
         };
         struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 
@@ -66,6 +70,16 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
             return clamp(c + sharpen * (4 * c - n - s - e - w), lo, hi);
         }
 
+        // Colour-blind filter: one 3x3 matrix on linear light, last of all (after scaling, Enhance and Clarity).
+        // Skipped when off.
+        float3 ColorFilter(float3 rgb)
+        {
+            if (pad2.y < 0.5) return rgb;
+            float3 lin = pow(rgb, 2.2);
+            lin = float3(dot(cm0.xyz, lin), dot(cm1.xyz, lin), dot(cm2.xyz, lin));
+            return pow(saturate(lin), 1.0 / 2.2);
+        }
+
         // YUV -> RGB as the stream's SPS says: pad bit 0 = full range (else 16-235 luma, 16-240 chroma),
         // bit 1 = BT.601 matrix (else BT.709). The console normally sends BT.709 limited range.
         float4 ToRgb(float y, float2 cbcr)
@@ -76,7 +90,7 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
             float3 rgb = (f & 2) != 0
                 ? float3(y + 1.402 * cbcr.y, y - 0.344136 * cbcr.x - 0.714136 * cbcr.y, y + 1.772 * cbcr.x)
                 : float3(y + 1.5748 * cbcr.y, y - 0.1873 * cbcr.x - 0.4681 * cbcr.y, y + 1.8556 * cbcr.x);
-            return float4(saturate(rgb), 1);
+            return float4(ColorFilter(saturate(rgb)), 1);
         }
 
         // Shrinking the picture (1440p on a 1080p screen). One bilinear tap per screen pixel skips source pixels
@@ -238,7 +252,17 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
     private static readonly bool SimpleScaling = Environment.GetEnvironmentVariable("XSTREAM_SCALE") == "simple";
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct Params { public float TexelX, TexelY, Sharpen, Pad, ScaleX, ScaleY, OffsetX, OffsetY, FootX, FootY, Pad2, Pad3; }
+    private unsafe struct Params
+    {
+        public float TexelX, TexelY, Sharpen, Pad, ScaleX, ScaleY, OffsetX, OffsetY, FootX, FootY, Pad2, Pad3;
+        public fixed float Color[12]; // colour filter rows (float4 each); Pad3 = 1 turns it on
+
+        public void SetColor(float[]? rows)
+        {
+            Pad3 = rows is null ? 0 : 1;
+            if (rows is not null) for (int i = 0; i < 12; i++) Color[i] = rows[i];
+        }
+    }
 
     [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hwnd, out RawRect rect);
     [StructLayout(LayoutKind.Sequential)] private struct RawRect { public int Left, Top, Right, Bottom; }
@@ -477,6 +501,7 @@ internal sealed unsafe class D3D11Renderer : IVideoRenderer
                 Sharpen = Sharpen.Strength(sharpenLevel) / 16f, Pad = ColorFlags,
                 ScaleX = 1, ScaleY = 1, Pad2 = Enhance && !SimpleScaling ? 1 : 0,
             };
+            prm.SetColor(ColorMatrix);
             switch (scaling)
             {
                 case VideoScaling.Fill:

@@ -99,8 +99,8 @@ public static class KeyNames
     /// <summary>"Shift", "LMB": for the little tags on the controller drawing.</summary>
     public static string Short(int code) => ByCode.TryGetValue(code, out var n) ? n.Short : "";
 
-    /// <summary>Keys Vexel keeps for itself in the stream: Esc (menu), F3 (stats), F10 (clip), F11 (full screen), F12 (screenshot).</summary>
-    public static bool IsReserved(int code) => code is 41 or 60 or 67 or 68 or 69;
+    /// <summary>Keys Vexel keeps for itself in the stream: Esc (menu), F3 (stats), F8 (mini player), F10 (clip), F11 (full screen), F12 (screenshot).</summary>
+    public static bool IsReserved(int code) => code is 41 or 60 or 65 or 67 or 68 or 69;
 }
 
 /// <summary>
@@ -147,7 +147,7 @@ public sealed class KeyboardBindings
 
     public static KeyboardBindings Parse(string? text) => Parse(text, out _);
 
-    /// <summary>Parse a bindings string; unknown names and Vexel's own keys (Esc, F3, F10-F12) are skipped and listed in <paramref name="problems"/>.</summary>
+    /// <summary>Parse a bindings string; unknown names and Vexel's own keys (Esc, F3, F8, F10-F12) are skipped and listed in <paramref name="problems"/>.</summary>
     public static KeyboardBindings Parse(string? text, out List<string> problems)
     {
         problems = [];

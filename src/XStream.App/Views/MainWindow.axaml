@@ -17,6 +17,7 @@
     <DataTemplate DataType="vm:SettingsViewModel"><v:SettingsView /></DataTemplate>
     <DataTemplate DataType="vm:MappingViewModel"><v:MappingView /></DataTemplate>
     <DataTemplate DataType="vm:FriendsViewModel"><v:FriendsView /></DataTemplate>
+    <DataTemplate DataType="vm:TogetherViewModel"><v:TogetherView /></DataTemplate>
   </Window.DataTemplates>
 
   <Panel>
@@ -90,10 +91,14 @@
           <ListBox Classes="nav" ItemsSource="{Binding Nav}" SelectedItem="{Binding SelectedNav}">
             <ListBox.ItemTemplate>
               <DataTemplate x:DataType="vm:NavItem">
-                <StackPanel Orientation="Horizontal" Spacing="12">
+                <Grid ColumnDefinitions="Auto,*,Auto">
                   <PathIcon Data="{Binding Icon, Converter={x:Static app:Conv.Icon}}" Width="17" Height="17" />
-                  <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
-                </StackPanel>
+                  <TextBlock Grid.Column="1" Margin="12,0,0,0" Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+                  <!-- Play together: players while sharing -->
+                  <Border Grid.Column="2" Classes="chip accent" Padding="7,1" MinWidth="20" Margin="8,0,0,0" IsVisible="{Binding HasBadge}">
+                    <TextBlock Text="{Binding Badge}" HorizontalAlignment="Center" />
+                  </Border>
+                </Grid>
               </DataTemplate>
             </ListBox.ItemTemplate>
           </ListBox>
@@ -139,7 +144,24 @@
 
     <!-- Not signed in -->
     <Panel IsVisible="{Binding !IsSignedIn}">
-      <v:SignInView DataContext="{Binding SignIn}" />
+      <v:SignInView DataContext="{Binding SignIn}" IsVisible="{Binding !$parent[Window].((vm:MainViewModel)DataContext).JoinWithoutSignIn}" />
+      <!-- A friend joining needs no Xbox account: Play together straight from the sign-in screen -->
+      <Button Classes="ghost" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,28,24" Padding="14,10"
+              Command="{Binding ShowJoinCommand}" IsVisible="{Binding !JoinWithoutSignIn}">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <PathIcon Data="{StaticResource Icon.Together}" Width="16" Height="16" />
+          <TextBlock Text="Join a friend's stream (no sign-in needed)" />
+        </StackPanel>
+      </Button>
+      <DockPanel IsVisible="{Binding JoinWithoutSignIn}" Background="{StaticResource Bg}">
+        <Button DockPanel.Dock="Top" Classes="ghost" HorizontalAlignment="Left" Margin="28,20,0,0" Command="{Binding HideJoinCommand}">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <PathIcon Data="{StaticResource Icon.Close}" Width="12" Height="12" />
+            <TextBlock Text="Back to sign-in" />
+          </StackPanel>
+        </Button>
+        <v:TogetherView DataContext="{Binding Together}" />
+      </DockPanel>
     </Panel>
 
     <!-- Starting a stream: full-screen connecting screen over everything -->

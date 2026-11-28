@@ -6,7 +6,15 @@ using XStream.App.Services;
 
 namespace XStream.App.ViewModels;
 
-public sealed record NavItem(string Title, string Icon, ObservableObject Page);
+public sealed partial class NavItem(string title, string icon, ObservableObject page) : ObservableObject
+{
+    public string Title { get; } = title;
+    public string Icon { get; } = icon;
+    public ObservableObject Page { get; } = page;
+    /// <summary>A small count beside the title (Play together: players while sharing); empty for none.</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasBadge))] public partial string Badge { get; set; } = "";
+    public bool HasBadge => Badge.Length > 0;
+}
 
 /// <summary>The shell: sign-in gate, sidebar navigation, and the shared stream state.</summary>
 public sealed partial class MainViewModel : ObservableObject
@@ -33,6 +41,7 @@ public sealed partial class MainViewModel : ObservableObject
         Consoles = new ConsolesViewModel(xbox, settings, Stream, _art);
         Cloud = new CloudViewModel(xbox, settings, Stream);
         Friends = new FriendsViewModel(xbox, settings);
+        Together = new TogetherViewModel(settings, Stream, xbox);
         Stream.ProfileProvider = () => settings.Current.Profile;
         Stream.CurrentSettings = () => settings.Current;
         Stream.SaveSettings = change => settings.Update(change);
@@ -56,11 +65,20 @@ public sealed partial class MainViewModel : ObservableObject
             new("Consoles", "Icon.Console", Consoles),
             new("Cloud", "Icon.Cloud", Cloud),
             new("Friends", "Icon.Friends", Friends),
+            new("Play together", "Icon.Together", Together),
             new("Mapping", "Icon.Gamepad", Mapping),
             new("Sessions", "Icon.History", Sessions),
             new("Settings", "Icon.Settings", SettingsPage),
         ];
         SelectedNav = Nav[0];
+        // Play together: the page from the Consoles page's stream header, Consoles from the page; the sidebar shows who's in.
+        Stream.TogetherPageRequested += () => SelectedNav = Nav.First(n => n.Page == Together);
+        Together.ConsolesRequested += () => SelectedNav = Nav.First(n => n.Page == Consoles);
+        Stream.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(StreamViewModel.Together) or nameof(StreamViewModel.IsRunning))
+                Nav.First(n => n.Page == Together).Badge = Stream.IsSharing ? Stream.Together!.Players.ToString() : "";
+        };
 
         Stream.Art = _art.Items;
         _art.Changed += () => Avalonia.Threading.Dispatcher.UIThread.Post(() => { if (!Stream.IsRunning) Stream.Art = _art.Items; });
@@ -104,6 +122,11 @@ public sealed partial class MainViewModel : ObservableObject
     public ConsolesViewModel Consoles { get; }
     public CloudViewModel Cloud { get; }
     public FriendsViewModel Friends { get; }
+    public TogetherViewModel Together { get; }
+    /// <summary>Signed out, "Join a friend's stream" chosen: the Play together page instead of sign-in (no account needed).</summary>
+    [ObservableProperty] public partial bool JoinWithoutSignIn { get; set; }
+    [RelayCommand] private void ShowJoin() { JoinWithoutSignIn = true; Together.Opened(); }
+    [RelayCommand] private void HideJoin() => JoinWithoutSignIn = false;
     public SessionsViewModel Sessions { get; }
     public SettingsViewModel SettingsPage { get; }
     public ObservableCollection<NavItem> Nav { get; }
@@ -121,6 +144,7 @@ public sealed partial class MainViewModel : ObservableObject
         // The cloud library: shown from the cache straight away, refreshed when the page is opened.
         if (value?.Page == Cloud && IsSignedIn && !Cloud.IsLoading) _ = Cloud.RefreshAsync();
         if (value?.Page == Friends && IsSignedIn) Friends.Opened();
+        if (value?.Page == Together) Together.Opened();
     }
 
     public async Task StartupAsync()
@@ -152,6 +176,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (Stream.IsAway) { Stream.ReturnToGameCommand.Execute(null); return; }
         if (Stream.ShowLoader) { Stream.StopCommand.Execute(null); return; }
         if (Stream.StartFailed && !Stream.IsRunning) { Stream.DismissCommand.Execute(null); return; }
+        if (!IsSignedIn && JoinWithoutSignIn) { JoinWithoutSignIn = false; return; }
         if (!IsSignedIn) { SignIn.CancelCommand.Execute(null); return; }
         if (Stream.HasResult && !Stream.IsRunning) { Stream.DismissCommand.Execute(null); return; }
         if (CurrentPage == Friends && Friends.Back()) return;

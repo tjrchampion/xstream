@@ -19,11 +19,13 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
 {
     public float ColorFlags { get; set; }
     public bool Enhance { get; set; } = true;
+    public float[]? ColorMatrix { get; set; }
     private const string Shaders = """
         #include <metal_stdlib>
         using namespace metal;
         struct VOut { float4 pos [[position]]; float2 uv; };
-        struct Params { float2 texel; float sharpen; float pad; float2 uvScale; float2 uvOffset; float2 foot; float2 pad2; };
+        // pad2.x: Enhance on; pad2.y: colour filter on (cm0..cm2 are its matrix rows). Same layout as the Direct3D cbuffer.
+        struct Params { float2 texel; float sharpen; float pad; float2 uvScale; float2 uvOffset; float2 foot; float2 pad2; float4 cm0; float4 cm1; float4 cm2; };
         constexpr sampler samp(filter::linear, address::clamp_to_edge);
 
         // One triangle covering the viewport; no vertex buffer.
@@ -51,6 +53,16 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
             return clamp(c + p.sharpen * (4 * c - n - s - e - w), lo, hi);
         }
 
+        // Colour-blind filter (see ColorFilters): one 3x3 matrix on linear light, last of all (after scaling,
+        // Enhance and Clarity). Skipped when off.
+        static float3 colorFilter(float3 rgb, constant Params& p)
+        {
+            if (p.pad2.y < 0.5) return rgb;
+            float3 lin = pow(rgb, 2.2);
+            lin = float3(dot(p.cm0.xyz, lin), dot(p.cm1.xyz, lin), dot(p.cm2.xyz, lin));
+            return pow(saturate(lin), 1.0 / 2.2);
+        }
+
         // YUV -> RGB as the stream's SPS says: p.pad bit 0 = full range (else 16-235 luma, 16-240 chroma),
         // bit 1 = BT.601 matrix (else BT.709). The console normally sends BT.709 limited range.
         static float4 toRgb(float y, float2 cbcr, constant Params& p)
@@ -61,7 +73,7 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
             float3 rgb = (f & 2) != 0
                 ? float3(y + 1.402 * cbcr.y, y - 0.344136 * cbcr.x - 0.714136 * cbcr.y, y + 1.772 * cbcr.x)
                 : float3(y + 1.5748 * cbcr.y, y - 0.1873 * cbcr.x - 0.4681 * cbcr.y, y + 1.8556 * cbcr.x);
-            return float4(saturate(rgb), 1);
+            return float4(colorFilter(saturate(rgb), p), 1);
         }
 
         // Shrinking the picture (1440p on a 1080p screen): luma is resampled with a Catmull-Rom (bicubic) filter
@@ -221,7 +233,17 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
     /// <summary>XSTREAM_SCALE=simple: one tap per screen pixel when shrinking (the old way; for comparison).</summary>
     private static readonly bool SimpleScaling = Environment.GetEnvironmentVariable("XSTREAM_SCALE") == "simple";
 
-    [StructLayout(LayoutKind.Sequential)] private struct Params { public float TexelX, TexelY, Sharpen, Pad, ScaleX, ScaleY, OffsetX, OffsetY, FootX, FootY, Pad2, Pad3; }
+    [StructLayout(LayoutKind.Sequential)] private unsafe struct Params
+    {
+        public float TexelX, TexelY, Sharpen, Pad, ScaleX, ScaleY, OffsetX, OffsetY, FootX, FootY, Pad2, Pad3;
+        public fixed float Color[12]; // colour filter rows (float4 each); Pad3 = 1 turns it on
+
+        public void SetColor(float[]? rows)
+        {
+            Pad3 = rows is null ? 0 : 1;
+            if (rows is not null) for (int i = 0; i < 12; i++) Color[i] = rows[i];
+        }
+    }
 
     private const string SdlLib = "SDL2";
     [DllImport(SdlLib)] private static extern IntPtr SDL_Metal_CreateView(IntPtr window);
@@ -543,6 +565,7 @@ internal sealed unsafe class MetalRenderer : IVideoRenderer
     {
         (int X, int Y, int W, int H) rect = (0, 0, _outW, _outH);
         var prm = new Params { TexelX = 1f / Math.Max(1, _w), TexelY = 1f / Math.Max(1, _h), Sharpen = Sharpen.Strength(sharpenLevel) / 16f, Pad = ColorFlags, ScaleX = 1, ScaleY = 1, Pad2 = Enhance && !SimpleScaling ? 1 : 0 };
+        prm.SetColor(ColorMatrix);
         if (!HasPicture) return (rect, prm);
         if (scaling == VideoScaling.Fill)
         {
@@ -677,6 +700,8 @@ internal interface IVideoRenderer : IDisposable
     float ColorFlags { get; set; }
     /// <summary>Edge-aware upscaling (FSR 1 EASU style) when the picture is enlarged.</summary>
     bool Enhance { get; set; }
+    /// <summary>Colour-blind filter: three float4 rows of a linear-RGB matrix (see <see cref="ColorFilters.ShaderRows"/>), null = off.</summary>
+    float[]? ColorMatrix { get; set; }
     void Upload(DecodedPicture p);
     void Render(int sharpenLevel, VideoScaling scaling, IVideoOverlay? overlay, Func<IVideoOverlay, byte[]?>? overlayPixels,
         Action<byte[], int, int>? screenshot, Func<int, int, int, int, (int X, int Y, int W, int H)> fit);

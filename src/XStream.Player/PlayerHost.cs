@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using XStream.Core.Config;
 using XStream.Core.Native;
+using XStream.Core.Together;
 using XStream.Core.Video;
 using XStream.Core.Xbox;
 
@@ -59,6 +60,7 @@ public static class PlayerHost
         session.Ended += (sum, path) => Emit(new PlayerEvent { Type = "summary", Summary = sum, Message = path });
         session.MoreSettingsRequested += () => Emit(new PlayerEvent { Type = "open-settings" });
         session.ReturnedToGame += () => Emit(new PlayerEvent { Type = "returned" });
+        session.TogetherChanged += t => Emit(new PlayerEvent { Type = "together", Together = t });
 
         // Heartbeat for the launcher's watchdog: every 2 s, with how long the main loop has been stuck (0 normally).
         new Thread(() =>
@@ -84,6 +86,7 @@ public static class PlayerHost
                     var cmd = line.Trim();
                     if (cmd == "stop") break;
                     if (cmd == "resume") session.ReturnToGame(); // launcher's Settings closed
+                    else if (TogetherCommand.TryParse(cmd) is { } tc) session.Together(tc); // the launcher's Play together page
                 }
             }
             catch { /* stdin gone */ }
@@ -111,11 +114,16 @@ public static class PlayerHost
         async Task<XboxStreamingClient> Refresh() => cloudTitle is null
             ? (await store.CreateClientAsync(http, AppSettings.Load())).client
             : (await store.CreateCloudClientAsync(http, AppSettings.Load())).client;
+        // Play together: guests see the gamertag ("Joined Alex's stream"); looked up now so it's ready before anyone joins.
+        string? gameName = null;
+        session.HostName = () => auth.Gamertag ?? Environment.UserName;
+        _ = Task.Run(async () => { try { await store.GetWebTokenAsync(); } catch { } });
         // Console remote control (typing, Turn off): same sign-in as the library, console streams only.
         if (cloudTitle is null)
         {
             // What's running (for per-game controller profiles): presence, with the sign-in token reused for 30 min.
             (string Auth, string Xuid, DateTime At)? web = null;
+            session.GameName = () => gameName;
             session.NowPlaying = async ct =>
             {
                 if (web is not { } w || DateTime.UtcNow - w.At > TimeSpan.FromMinutes(30))
@@ -123,7 +131,9 @@ public static class PlayerHost
                     var (a, x) = await store.GetWebTokenAsync(ct);
                     web = w = (a, x, DateTime.UtcNow);
                 }
-                return (await XboxLibrary.GetNowPlayingAsync(http, w.Auth, w.Xuid, ct))?.TitleId;
+                var now = await XboxLibrary.GetNowPlayingAsync(http, w.Auth, w.Xuid, ct);
+                gameName = now?.Name;
+                return now?.TitleId;
             };
         }
         // Achievement pop-ups: console and cloud (read-only Xbox Live, same sign-in as the library).
@@ -156,6 +166,53 @@ public static class PlayerHost
             async () => await auth.GetTransferTokenAsync(store.Load() ?? tokens), Refresh);
         // Tell the launcher where the (windowed) video was, so it reappears in the same place: one window, not two.
         if (session.LastWindow is { } last) Emit(new PlayerEvent { Type = "window", Message = last.ToString() });
+        return code;
+    }
+
+    /// <summary>Child argument for watching a friend's stream: --join &lt;invite&gt; &lt;name&gt; [place].</summary>
+    public const string JoinArg = "--join";
+
+    /// <summary>
+    /// Play together as a guest, as a child of the launcher: same events on stdout and "stop" on stdin as a stream, but
+    /// no Xbox sign-in (the picture comes from the friend's Vexel).
+    /// </summary>
+    public static int RunGuestChild(string invite, string? name, string? place)
+    {
+        var output = Console.Out;
+        var gate = new object();
+        void Emit(PlayerEvent e) { lock (gate) { output.WriteLine(e.ToLine()); output.Flush(); } }
+        var parsed = TogetherInvite.TryParse(invite, out var problem);
+        if (parsed is null) { Emit(new PlayerEvent { Type = "stage", Stage = PlayerStage.Failed, Message = problem }); return 1; }
+        var settings = AppSettings.Load();
+        var session = new GuestSession();
+        session.StageChanged += (s, m) => Emit(new PlayerEvent { Type = "stage", Stage = s, Message = m });
+        session.Log += m => Emit(new PlayerEvent { Type = "log", Message = m });
+        session.Stats += s => Emit(new PlayerEvent { Type = "stats", Stats = s });
+        session.TogetherChanged += t => Emit(new PlayerEvent { Type = "together", Together = t });
+        new Thread(() =>
+        {
+            long last = -1; double stuck = 0;
+            while (true)
+            {
+                Thread.Sleep(2000);
+                long t = session.MainLoopTicks;
+                stuck = session.InMainLoop && t == last ? stuck + 2 : 0;
+                last = t;
+                Emit(new PlayerEvent { Type = "heartbeat", Message = stuck.ToString("F0", System.Globalization.CultureInfo.InvariantCulture) });
+            }
+        }) { IsBackground = true, Name = "xstream-heartbeat" }.Start();
+        new Thread(() =>
+        {
+            try { string? line; while ((line = Console.In.ReadLine()) is not null) if (line.Trim() == "stop") break; }
+            catch { }
+            session.Stop();
+        }) { IsBackground = true, Name = "xstream-stdin" }.Start();
+        int code = session.Run(new GuestOptions
+        {
+            Invite = parsed, Name = string.IsNullOrWhiteSpace(name) ? Environment.UserName : name.Trim(), Settings = settings,
+            Fullscreen = settings.Fullscreen, Place = WindowPlace.Parse(place), StartHidden = true, HardwareDecode = settings.HardwareDecode,
+        });
+        if (session.LastWindow is { } lw) Emit(new PlayerEvent { Type = "window", Message = lw.ToString() });
         return code;
     }
 

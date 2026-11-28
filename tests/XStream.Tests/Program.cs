@@ -369,6 +369,70 @@ var tests = new List<(string name, Action body)>
         Eq(OperatingSystem.IsMacOS() ? 0.35 : 1.0, AppSettings.Migrate(new AppSettings { SettingsVersion = 5, MouseSensitivity = 1 }).MouseSensitivity);
         Eq(2.0, AppSettings.Migrate(new AppSettings { SettingsVersion = 5, MouseSensitivity = 2 }).MouseSensitivity);
     }),
+    ("Stream menu: opens on Game / Resume, LB and RB switch tabs and wrap round", () =>
+    {
+        static GamepadState[] Pad(GamepadButtons b) => [new GamepadState(0, b, 0, 0, 0, 0, 0, 0)];
+        var ov = new XStream.Player.StreamOverlay("Xbox", new AppSettings(), false, consoleControl: true, clips: true);
+        True(ov.MenuTabs.SequenceEqual(["Game", "Picture", "Sound & controls", "Stream"]), "four tabs");
+        void Press(GamepadButtons b) { ov.OnPad(Pad(b)); ov.OnPad(Pad(GamepadButtons.None)); }
+        ov.OnKey(27);
+        True(ov.MenuOpen, "open"); Eq("Game", ov.MenuTab); Eq("Resume", ov.MenuSelection);
+        Press(GamepadButtons.DPadDown); Eq("Xbox button (guide)", ov.MenuSelection);
+        Press(GamepadButtons.RightShoulder); Eq("Picture", ov.MenuTab); Eq("Picture", ov.MenuSelection); // a new tab starts at its top
+        Press(GamepadButtons.RightShoulder); Eq("Sound & controls", ov.MenuTab);
+        Press(GamepadButtons.RightShoulder); Eq("Stream", ov.MenuTab);
+        Press(GamepadButtons.RightShoulder); Eq("Game", ov.MenuTab); // wraps: RB on the last tab goes to the first
+        Press(GamepadButtons.LeftShoulder); Eq("Stream", ov.MenuTab); // and LB on the first to the last
+        // Keyboard: Tab / Shift+Tab and Q / E.
+        ov.OnKey(9); Eq("Game", ov.MenuTab);
+        ov.OnKey(0x400000E1); ov.OnKey(9); ov.OnKeyUp(0x400000E1); Eq("Stream", ov.MenuTab);
+        ov.OnKey('e'); Eq("Game", ov.MenuTab);
+        ov.OnKey('q'); Eq("Stream", ov.MenuTab);
+        // Values still change on the new tabs.
+        int changes = 0; ov.SettingsChanged += _ => changes++;
+        Press(GamepadButtons.RightShoulder); Press(GamepadButtons.RightShoulder); // Picture
+        Press(GamepadButtons.DPadDown); Eq("Clarity boost", ov.MenuSelection);
+        Press(GamepadButtons.DPadRight); Eq(1, changes);
+        // Closing and opening again always starts on Game / Resume.
+        Press(GamepadButtons.B); False(ov.MenuOpen, "B closes");
+        ov.OnKey(27); Eq("Game", ov.MenuTab); Eq("Resume", ov.MenuSelection);
+        ov.OnKey(27); ov.OnKey(27); Eq("Resume", ov.MenuSelection);
+        Press(GamepadButtons.A); False(ov.MenuOpen, "A on Resume goes back to the game");
+    }),
+    ("Stream menu: down past the last row reaches the bottom row, left / right walk it", () =>
+    {
+        static GamepadState[] Pad(GamepadButtons b) => [new GamepadState(0, b, 0, 0, 0, 0, 0, 0)];
+        var ov = new XStream.Player.StreamOverlay("Xbox", new AppSettings(), false, consoleControl: true);
+        void Press(GamepadButtons b) { ov.OnPad(Pad(b)); ov.OnPad(Pad(GamepadButtons.None)); }
+        int disconnects = 0, offs = 0;
+        ov.DisconnectRequested += () => disconnects++; ov.TurnOffRequested += () => offs++;
+        ov.OnKey(27);
+        Press(GamepadButtons.DPadUp); Eq("Resume", ov.MenuSelection); // stops at the top
+        ov.OnKey('q'); Eq("Stream", ov.MenuTab);
+        for (int i = 0; i < 3; i++) Press(GamepadButtons.DPadDown);
+        Eq("More settings…", ov.MenuSelection);
+        Press(GamepadButtons.DPadDown); Eq("Disconnect", ov.MenuSelection);
+        Press(GamepadButtons.DPadDown); Eq("Disconnect", ov.MenuSelection); // stops at the bottom
+        Press(GamepadButtons.DPadRight); Eq("End and turn off Xbox", ov.MenuSelection);
+        Press(GamepadButtons.DPadRight); Eq("End and turn off Xbox", ov.MenuSelection);
+        Press(GamepadButtons.DPadLeft); Eq("Disconnect", ov.MenuSelection);
+        Press(GamepadButtons.DPadUp); Eq("More settings…", ov.MenuSelection); // up goes back to the list
+        Press(GamepadButtons.DPadDown); Press(GamepadButtons.DPadRight);
+        Eq(0, offs); // moving along it never acts
+        Press(GamepadButtons.DPadLeft); Press(GamepadButtons.A);
+        Eq(1, disconnects); False(ov.MenuOpen, "Disconnect closes the menu");
+        // Arrow keys do the same.
+        var kb = new XStream.Player.StreamOverlay("Xbox", new AppSettings(), false);
+        kb.OnKey(27);
+        for (int i = 0; i < 20; i++) kb.OnKey(0x40000051);
+        Eq("Disconnect", kb.MenuSelection); // cloud: no Turn off, Disconnect alone
+        kb.OnKey(0x4000004F); Eq("Disconnect", kb.MenuSelection);
+        // A guest's shorter menu: no Stream tab, Leave along the bottom.
+        var guest = new XStream.Player.StreamOverlay("Sam", new AppSettings(), false, together: XStream.Player.TogetherMode.Guest);
+        True(guest.MenuTabs.SequenceEqual(["Game", "Picture", "Sound & controls"]), "guest tabs");
+        guest.OnKey(27); guest.OnKey(0x40000051);
+        Eq("Leave", guest.MenuSelection);
+    }),
     ("Native mouse and keyboard packets (reference layout)", () =>
     {
         var m = InputPacket.Mouse(7, 1.5, -3, 4, 0, 120, InputPacket.MouseButtons.Left | InputPacket.MouseButtons.Right);
@@ -1314,8 +1378,14 @@ tests.AddRange(StunTests.All);
 tests.AddRange(FeatureTests.All);
 tests.AddRange(KeyboardMouseTests.All);
 tests.AddRange(SocialTests.All);
+tests.AddRange(TogetherTests.All);
+tests.AddRange(PictureTests.All);
+tests.AddRange(ProfileTests.All);
+tests.AddRange(ClipTests.All);
 
 int failed = 0;
+// XSTREAM_TEST_FILTER=text (debugging): run only the tests whose name contains it.
+if (Environment.GetEnvironmentVariable("XSTREAM_TEST_FILTER") is { Length: > 0 } only) tests.RemoveAll(t => !t.name.Contains(only, StringComparison.OrdinalIgnoreCase));
 foreach (var (name, body) in tests)
 {
     try { body(); Console.WriteLine($"  PASS  {name}"); }

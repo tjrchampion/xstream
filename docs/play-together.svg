@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" width="960" height="300" role="img" aria-labelledby="t d">
+  <title id="t">How Play together works</title>
+  <desc id="d">Your Xbox streams to your Vexel over your home network. Your Vexel forwards the picture and sound to your friend's Vexel over the internet, directly and encrypted. Your friend's controller comes back the same way and reaches the console as Player 2.</desc>
+  <style>
+    .bg { fill: #ffffff; }
+    .box { fill: #f3f5f7; stroke: #c9d0d8; stroke-width: 1.5; }
+    .hub { fill: #e7f8f0; stroke: #2fb57c; stroke-width: 2; }
+    .title { font: 600 18px -apple-system, "Segoe UI", Inter, Helvetica, Arial, sans-serif; fill: #14181d; }
+    .sub { font: 13px -apple-system, "Segoe UI", Inter, Helvetica, Arial, sans-serif; fill: #5b6672; }
+    .label { font: 600 13px -apple-system, "Segoe UI", Inter, Helvetica, Arial, sans-serif; fill: #14181d; }
+    .note { font: 12px -apple-system, "Segoe UI", Inter, Helvetica, Arial, sans-serif; fill: #5b6672; }
+    .down { stroke: #2fb57c; stroke-width: 3; fill: none; }
+    .up { stroke: #d48a12; stroke-width: 3; fill: none; stroke-dasharray: 7 5; }
+    .headDown { fill: #2fb57c; }
+    .headUp { fill: #d48a12; }
+    .zone { fill: none; stroke: #c9d0d8; stroke-width: 1.2; stroke-dasharray: 4 4; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .box { fill: #161b22; stroke: #30363d; }
+      .hub { fill: #102a20; stroke: #3ddc97; }
+      .title, .label { fill: #e6edf3; }
+      .sub, .note { fill: #8b949e; }
+      .down { stroke: #3ddc97; }
+      .headDown { fill: #3ddc97; }
+      .up { stroke: #f5b841; }
+      .headUp { fill: #f5b841; }
+      .zone { stroke: #30363d; }
+    }
+  </style>
+  <rect class="bg" x="0" y="0" width="960" height="300" rx="16" />
+
+  <!-- Home network zone -->
+  <rect class="zone" x="16" y="18" width="512" height="264" rx="14" />
+  <text class="note" x="32" y="40">Your home</text>
+  <text class="note" x="928" y="40" text-anchor="end">Your friend's home</text>
+  <rect class="zone" x="704" y="18" width="240" height="264" rx="14" />
+  <text class="note" x="616" y="40" text-anchor="middle">the internet</text>
+
+  <!-- Boxes -->
+  <rect class="box" x="40" y="96" width="190" height="104" rx="14" />
+  <text class="title" x="135" y="138" text-anchor="middle">Your Xbox</text>
+  <text class="sub" x="135" y="162" text-anchor="middle">runs the game</text>
+  <text class="sub" x="135" y="180" text-anchor="middle">Players 1 and 2</text>
+
+  <rect class="hub" x="322" y="96" width="190" height="104" rx="14" />
+  <text class="title" x="417" y="138" text-anchor="middle">Your Vexel</text>
+  <text class="sub" x="417" y="162" text-anchor="middle">you play as Player 1</text>
+  <text class="sub" x="417" y="180" text-anchor="middle">and share the stream</text>
+
+  <rect class="box" x="724" y="96" width="200" height="104" rx="14" />
+  <text class="title" x="824" y="138" text-anchor="middle">Friend's Vexel</text>
+  <text class="sub" x="824" y="162" text-anchor="middle">no Xbox or Game Pass</text>
+  <text class="sub" x="824" y="180" text-anchor="middle">plays as Player 2</text>
+
+  <!-- Picture and sound: console to you, you to your friend -->
+  <path class="down" d="M232 128 H310" />
+  <polygon class="headDown" points="320,128 308,121 308,135" />
+  <path class="down" d="M514 128 H712" />
+  <polygon class="headDown" points="722,128 710,121 710,135" />
+  <text class="label" x="276" y="116" text-anchor="middle">picture, sound</text>
+  <text class="label" x="616" y="116" text-anchor="middle">picture, sound</text>
+
+  <!-- Controller: friend to you, you to the console -->
+  <path class="up" d="M722 172 H526" />
+  <polygon class="headUp" points="514,172 526,165 526,179" />
+  <path class="up" d="M320 172 H244" />
+  <polygon class="headUp" points="232,172 244,165 244,179" />
+  <text class="label" x="616" y="196" text-anchor="middle">friend's controller</text>
+  <text class="label" x="276" y="196" text-anchor="middle">as Player 2</text>
+
+  <!-- Notes -->
+  <text class="note" x="276" y="240" text-anchor="middle">home network, as when you play alone</text>
+  <text class="note" x="616" y="240" text-anchor="middle">direct and encrypted,</text>
+  <text class="note" x="616" y="258" text-anchor="middle">no server in between</text>
+  <text class="note" x="824" y="240" text-anchor="middle">needs Vexel only</text>
+</svg>

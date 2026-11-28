@@ -232,12 +232,19 @@ public partial class App : Application
                 var s = settings.Current;
                 string appId = s.DiscordAppId is { Length: > 0 } id ? id : DiscordPresence.DefaultAppId;
                 if (!vm.Stream.IsStreaming || !s.DiscordStatus || appId.Length == 0) { if (shown is not null) discord.Clear(); shown = null; return; }
-                var now = await vm.Art.RefreshNowPlayingAsync(s);
-                string game = now?.Name is { Length: > 0 } g ? g : "Xbox remote play";
-                if (!vm.Stream.IsStreaming || game == shown) return;
-                shown = game;
-                discord.Show(appId, game, $"Streaming from {vm.Stream.ConsoleName}",
-                    now?.Art?.Url is { Length: > 0 } u ? XStream.Core.Xbox.XboxLibrary.Sized(u, 512) : null, now?.Name);
+                // A guest on a friend's stream: their game isn't on this account, so just whose stream it is.
+                var now = vm.Stream.IsGuest ? null : await vm.Art.RefreshNowPlayingAsync(s);
+                string game = vm.Stream.IsGuest ? "Playing together on " + vm.Stream.ConsoleName
+                    : now?.Name is { Length: > 0 } g ? g : "Xbox remote play";
+                int players = vm.Stream.TogetherPlayers;
+                string key = $"{game}|{players}";
+                if (!vm.Stream.IsStreaming || key == shown) return;
+                bool sameGame = shown?.StartsWith(game + "|", StringComparison.Ordinal) == true;
+                shown = key;
+                // Play together: "Playing together (2 of 4)"; the clock keeps running when only the party changes.
+                discord.Show(appId, game, players > 1 ? "Playing together" : $"Streaming from {vm.Stream.ConsoleName}",
+                    now?.Art?.Url is { Length: > 0 } u ? XStream.Core.Xbox.XboxLibrary.Sized(u, 512) : null, now?.Name,
+                    partySize: players > 1 ? players : 0, partyMax: 4, keepTime: sameGame);
             }
             var discordTimer = new DispatcherTimer(TimeSpan.FromMinutes(3), DispatcherPriority.Background, async (_, _) => await UpdateDiscord());
             discordTimer.Stop();
@@ -247,6 +254,7 @@ public partial class App : Application
                 if (vm.Stream.IsStreaming) discordTimer.Start(); else discordTimer.Stop();
                 await UpdateDiscord();
             };
+            vm.Stream.TogetherPlayersChanged += async _ => await UpdateDiscord();
             desktop.Exit += (_, _) => discord.Dispose();
 
             window.Closing += (_, _) => { if (vm.Stream.IsRunning) launcher.Stop(); };
@@ -284,10 +292,20 @@ public partial class App : Application
                         // XSTREAM_DEMO_SECTION=Sound (testing): on Settings, that tab.
                         if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_SECTION") is { Length: > 0 } section) { vm.IsSignedIn = true; vm.SettingsPage.ShowSectionCommand.Execute(section); }
                         // XSTREAM_DEMO_SLOT=A (testing): on Mapping, open the second game and that button's picker (nothing is saved).
+                        // Shown signed out too, like XSTREAM_DEMO_KEYS (a test data folder has no sign-in).
                         if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_SLOT") is { Length: > 0 } slot && vm.Mapping.Games.Count > 1)
                         {
+                            vm.IsSignedIn = true;
                             vm.Mapping.SelectGameCommand.Execute(vm.Mapping.Games[1]);
                             vm.Mapping.PickSlotCommand.Execute(vm.Mapping.Slots.FirstOrDefault(x => x.Label == slot));
+                            // XSTREAM_DEMO_SCROLL=120 (testing): scroll the page down this far (a window can't be taller than the screen).
+                            if (double.TryParse(Environment.GetEnvironmentVariable("XSTREAM_DEMO_SCROLL"), out double down))
+                                DispatcherTimer.RunOnce(() =>
+                                {
+                                    if (Avalonia.VisualTree.VisualExtensions.GetVisualDescendants(window).OfType<MappingView>().FirstOrDefault() is { } mv
+                                        && Avalonia.VisualTree.VisualExtensions.GetVisualDescendants(mv).OfType<ScrollViewer>().FirstOrDefault() is { } sv)
+                                        sv.Offset = new Vector(0, down);
+                                }, TimeSpan.FromSeconds(1));
                         }
                         // XSTREAM_DEMO_KEYS=A (testing): on Mapping, the keyboard & mouse view with that button waiting for a key ("-": none;
                         // "controller": the controller view). Shown even when signed out (a test data folder has no sign-in; the page needs none).
@@ -305,6 +323,20 @@ public partial class App : Application
                                 DispatcherTimer.RunOnce(() => vm.Friends.OpenGameCommand.Execute(vm.Friends.Games.ElementAtOrDefault(n - 1)), TimeSpan.FromSeconds(2.5));
                         }
                     }, TimeSpan.FromSeconds(2));
+                // XSTREAM_DEMO_PAGE="Play together" (testing): sample invite and name in the Join box (nothing is joined).
+                if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_PAGE") == "Play together")
+                    DispatcherTimer.RunOnce(() =>
+                    {
+                        vm.IsSignedIn = true;
+                        // XSTREAM_DEMO_TOGETHER=ready|host|guest (testing): a pretend stream on the page, made-up names, nothing sent.
+                        // The Join box stays empty then (your own invite in it would only confuse).
+                        if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_TOGETHER") is { Length: > 0 } together)
+                        {
+                            vm.Stream.DemoTogether(together);
+                            vm.Together.Name = together == "guest" ? "Sam" : "Alex"; // not the computer's user name in a screenshot
+                        }
+                        else vm.Together.Demo();
+                    }, TimeSpan.FromSeconds(2.2));
                 // XSTREAM_DEMO_SHOT=file.png (testing): save the window as it looks after a few seconds, then quit.
                 if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_SHOT") is { Length: > 0 } shot)
                     DispatcherTimer.RunOnce(() =>
@@ -316,7 +348,10 @@ public partial class App : Application
                         rtb.Save(shot);
                         desktop.Shutdown();
                     }, TimeSpan.FromSeconds(8));
-                if (settings.Current.LauncherFullscreen) window.WindowState = WindowState.FullScreen;
+                // XSTREAM_DEMO_SIZE=1400x1200 (testing): open the window at this size, so a screenshot shows a whole page.
+                if (Environment.GetEnvironmentVariable("XSTREAM_DEMO_SIZE")?.Split('x') is [var dw, var dh] && double.TryParse(dw, out double ww) && double.TryParse(dh, out double wh))
+                { window.Width = ww; window.Height = wh; }
+                else if (settings.Current.LauncherFullscreen) window.WindowState = WindowState.FullScreen;
                 UpdatePad();
                 _pad.FocusDefaultSoon();
                 if (vm.IsSignedIn) PrepareSoon(800);

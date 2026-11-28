@@ -104,6 +104,9 @@ public sealed class XboxAuth(HttpClient http)
     /// Token for the Xbox Live web services (title history, game art): "XBL3.0 x={uhs};{token}" plus the
     /// account's xuid. Refreshes the account token first if it has expired (the caller saves the result).
     /// </summary>
+    /// <summary>The signed-in account's gamertag, once a web token has been fetched (null until then). Play together shows it.</summary>
+    public string? Gamertag { get; private set; }
+
     public async Task<(string Authorization, string Xuid, XboxTokens Tokens)> GetWebTokenAsync(XboxTokens t, CancellationToken ct = default)
     {
         if (t.MsaExpires < DateTimeOffset.UtcNow.AddMinutes(1)) t = await RefreshAsync(t, ct);
@@ -111,6 +114,7 @@ public sealed class XboxAuth(HttpClient http)
         var xui = xsts["DisplayClaims"]?["xui"]?[0];
         string uhs = xui?["uhs"]?.GetValue<string>() ?? "";
         string xuid = xui?["xid"]?.GetValue<string>() ?? "";
+        if (xui?["gtg"]?.GetValue<string>() is { Length: > 0 } gtg) Gamertag = gtg;
         return ($"XBL3.0 x={uhs};{xsts["Token"]!.GetValue<string>()}", xuid, t);
     }
 

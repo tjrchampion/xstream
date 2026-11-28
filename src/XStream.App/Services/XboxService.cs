@@ -40,6 +40,14 @@ public sealed class XboxService : IDisposable
         return await XboxLibrary.GetRecentAsync(_http, authz, xuid, settings.Locale, ct: ct);
     }
 
+    /// <summary>The signed-in gamertag (Play together's default name), or null if it can't be had right now.</summary>
+    public async Task<string?> GamertagAsync(CancellationToken ct = default)
+    {
+        if (!SignedIn) return null;
+        try { await _store.GetWebTokenAsync(ct); } catch { return null; }
+        return _auth.Gamertag;
+    }
+
     /// <summary>What this account is running on an Xbox right now (presence).</summary>
     public async Task<(string TitleId, string Name)?> GetNowPlayingAsync(CancellationToken ct = default)
     {

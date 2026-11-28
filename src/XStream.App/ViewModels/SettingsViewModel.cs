@@ -88,6 +88,22 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] public partial int ScalingIndex { get; set; }
     public string[] ScalingModes { get; } = ["Fit (whole picture, bars)", "Fill (trim edges, no bars)", "Stretch (no bars, slightly stretched)"];
     partial void OnScalingIndexChanged(int value) => Save(s => s with { Scaling = (XStream.Core.Video.VideoScaling)Math.Clamp(value, 0, 2) });
+    [ObservableProperty] public partial int ColorFilterIndex { get; set; }
+    public string[] ColorFilterModes { get; } = ["Off", "Red-green (deuteranopia)", "Red-green (protanopia)", "Blue-yellow (tritanopia)"];
+    public bool ColorFilterOn => ColorFilterIndex > 0;
+    partial void OnColorFilterIndexChanged(int value)
+    {
+        OnPropertyChanged(nameof(ColorFilterOn));
+        Save(s => s with { ColorFilter = (XStream.Core.Video.ColorFilter)Math.Clamp(value, 0, 3) });
+    }
+    /// <summary>Colour filter strength, 0-100% (stored as 0-1).</summary>
+    [ObservableProperty] public partial double ColorFilterStrength { get; set; }
+    public string ColorFilterStrengthText => $"{ColorFilterStrength:F0}%";
+    partial void OnColorFilterStrengthChanged(double value)
+    {
+        OnPropertyChanged(nameof(ColorFilterStrengthText));
+        Save(s => s with { ColorFilterStrength = Math.Round(Math.Clamp(value, 0, 100)) / 100 });
+    }
     [ObservableProperty] public partial bool HideLauncherWhileStreaming { get; set; }
     [ObservableProperty] public partial bool ControllerNavigation { get; set; }
     [ObservableProperty] public partial bool LauncherFullscreen { get; set; }
@@ -196,6 +212,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnConnectionAlertsChanged(bool value) => Save(s => s with { ConnectionAlerts = value });
     [ObservableProperty] public partial bool AchievementAlerts { get; set; }
     partial void OnAchievementAlertsChanged(bool value) => Save(s => s with { AchievementAlerts = value });
+    [ObservableProperty] public partial bool AchievementClips { get; set; }
+    partial void OnAchievementClipsChanged(bool value) => Save(s => s with { AchievementClips = value });
     [ObservableProperty] public partial bool AutoConnect { get; set; }
     partial void OnAutoConnectChanged(bool value) => Save(s => s with { AutoConnect = value });
     public bool IsWindows => OperatingSystem.IsWindows();
@@ -322,6 +340,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         QualitySharpest = !QualityFastest;
         Enhance = s.Enhance;
         ScalingIndex = (int)s.Scaling;
+        ColorFilterIndex = (int)s.ColorFilter;
+        ColorFilterStrength = Math.Round(s.ColorFilterStrength * 100);
         HideLauncherWhileStreaming = s.HideLauncherWhileStreaming;
         ControllerNavigation = s.ControllerNavigation;
         LauncherFullscreen = s.LauncherFullscreen;
@@ -334,6 +354,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         AutoConnect = s.AutoConnect;
         ConnectionAlerts = s.ConnectionAlerts;
         AchievementAlerts = s.AchievementAlerts;
+        AchievementClips = s.AchievementClips;
         AutoUpdate = s.AutoUpdate;
         Audio = s.Audio;
         Volume = s.Volume;

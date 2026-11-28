@@ -21,10 +21,11 @@ Vexel streams your Xbox console over your home network. It's built for playing w
 
 ## Features
 
+- **Play together:** a friend at another house joins your stream. They see the picture, hear the game, and their controller becomes Player 2 on your console, like Steam Remote Play Together. They need Vexel, not Game Pass or an Xbox. [How it works](#play-together)
 - **Your console and the cloud:** stream your own Xbox, or play **Xbox Cloud Gaming** games with Game Pass Ultimate, no console needed. Both get the same player, menu and controls.
 - **Controller-first:** full screen on handhelds, D-pad navigation everywhere, and controller and connection status at a glance.
 - **Your games, front and centre:** each console card shows the game running on it (or your last played game), and the connecting screen fills the display with art from your library.
-- **In-game stream menu:** hold <kbd>View</kbd> + <kbd>Menu</kbd> (or tap the screen) to change bitrate, picture, clarity, volume, rumble and microphone without leaving the game.
+- **In-game stream menu:** hold <kbd>View</kbd> + <kbd>Menu</kbd> (or tap the screen) to change bitrate, picture, clarity, volume, rumble and microphone without leaving the game. It has four tabs (**Game**, **Picture**, **Sound & controls** and **Stream**) switched with <kbd>LB</kbd> / <kbd>RB</kbd> (<kbd>Tab</kbd> or <kbd>Q</kbd> / <kbd>E</kbd> on a keyboard), with **Disconnect** along the bottom.
 - **Stable streaming:**
   - adaptive bitrate that backs off before the picture freezes
   - lost-packet recovery
@@ -39,6 +40,8 @@ Vexel streams your Xbox console over your home network. It's built for playing w
   - **Quality:** Sharpest (1440p, 4K where offered) or Fastest (720p, about 10 ms quicker and far less data)
   - **Enhance:** a stream smaller than your screen is enlarged edge-aware, in the style of AMD FSR 1, so text and edges stay crisp
   - an optional halo-free Clarity boost, plus Fit, Fill and Stretch for screens that aren't 16:9
+- **Accessibility: colour filter** for red-green (deuteranopia, protanopia) or blue-yellow (tritanopia) colour blindness. It shifts colours that look alike to you apart, so team colours, map markers and health bars are easier to tell apart; it doesn't just simulate the condition. Choose it and its strength in Settings, or switch it live from the stream menu. Done on the GPU, and costs nothing when off ([before and after](docs/screenshots/colour-filter.png)).
+- **Mini player:** F8 (or **Mini player** in the stream menu) shrinks the stream to a small window that stays on top in a corner of the screen, for watching a queue, matchmaking or a cutscene while you do something else. Drag it anywhere and Vexel remembers the spot; double-click it to go back. The controller keeps playing; the mouse and keyboard are yours again ([screenshot](docs/screenshots/mini-player.png)).
 - **Connection advice:**
   - while connecting, a warning if this device is on 2.4 GHz or weak Wi-Fi, or the console is on Wi-Fi;
   - about 20 seconds in, if the stream's own numbers show trouble, a short message and **Connection tips** in the stream menu, with **Suggested settings** to apply a fix;
@@ -52,24 +55,27 @@ Vexel streams your Xbox console over your home network. It's built for playing w
 - **Instant replay:** keep the last 30 seconds and save them as an MP4 clip (F10, or the stream menu). Off by default.
 - **Keyboard and mouse:** play without a controller. WASD and the mouse drive the sticks, clicks are the triggers, and every key can be changed on the Mapping page. On by default when no controller is connected; click the picture to start. Mouse sensitivity changes live from the stream menu.
   - **Real keyboard and mouse (experimental):** for games and apps that support them (Edge, Flight Simulator, Halo…), keys and the mouse reach the console as a real keyboard and mouse. Tap Esc for the game; hold Esc for Vexel's menu.
-- **Your controller, your layout:** the **Mapping** page shows your games with their art and a picture of the controller: click a button to change what it does. Give each game its own layout and Vexel switches to it by itself when that game starts, even mid-stream. Elite / DualSense Edge back paddles, and gyro aiming on a DualSense, DualShock 4 or Switch Pro controller.
+- **Your controller, your layout:** the **Mapping** page shows your games with their art and a picture of the controller: click a button to change what it does. Give each game its own layout and Vexel switches to it by itself when that game starts, even mid-stream. Elite / DualSense Edge back paddles, and gyro aiming on a DualSense, DualShock 4 or Switch Pro controller. Make any button (triggers too) **turbo** (presses repeatedly while held, 2 to 20 times a second) or **toggle** (tap to hold, tap again to let go); keys get it too when you play with keyboard and mouse. Each game can also have its own keyboard and mouse (real keyboard and mouse for Edge, Flight Simulator or Halo, controller emulation everywhere else), mouse speed and picture (Enhance, Clarity), switched with the game.
+
+  <img src="docs/screenshots/mapping-turbo.png" width="860" alt="The Mapping page: a game with turbo and toggle buttons tagged on the controller, the Normal / Turbo / Toggle choice, and its own keyboard, mouse and picture settings" />
 - **Launch shortcuts:** add Vexel to Steam, Armoury Crate or Playnite with `--stream` and go straight into a stream (see [Shortcuts](#shortcuts)).
 - **Party chat and Discord:** your mic goes to the console, so Xbox party chat works, and so does Discord voice moved to the Xbox (Discord app: join a voice channel, then Transfer to Xbox). F9 or a controller button (a back paddle suits it) mutes, or is held to talk with push to talk. The stream menu mutes the mic while open, and a small icon shows when you're muted or talking. Pick the microphone and test its level in Settings. **Party & Discord chat…** in the stream menu opens the console's guide.
 - **Friends and achievements:** the **Friends** page shows who's online and what they're playing, and your games' achievements and gamerscore. Unlocks pop up while you stream.
+  - **Achievement clips:** when you unlock an achievement, Vexel saves a 25-second clip of the moment (20 seconds before, 5 after) to Videos › Vexel, named after the achievement. On by default for console streams; turn it off in Settings.
 - **Game audio, rumble and screenshots.**
 - **Made for the ROG Ally:**
   - runs the 120 Hz panel at the stream's 60 Hz
   - keeps the device awake
   - turns off Wi-Fi background scans while streaming
   - warns when the battery is low
-- **Discord status:** "Playing *game* via Vexel" while you stream.
+- **Discord status:** "Playing *game* via Vexel" with the game's art while you stream, the party size when you play together, and a **Get Vexel** button for friends who want to join in.
 - **Safe updates:** new versions install themselves on Windows and Mac, and every update is checked against Vexel's signature first.
 
 ## Screenshots
 
 | Connecting | In-game stream menu |
 |---|---|
-| <img src="docs/screenshots/connecting-with-art.png" alt="Full-screen connecting screen with game art and a progress bar" /> | <img src="docs/screenshots/stream-menu.png" alt="Stream menu over the game with live stats and settings" /> |
+| <img src="docs/screenshots/connecting-with-art.png" alt="Full-screen connecting screen with game art and a progress bar" /> | <img src="docs/screenshots/stream-menu.png" alt="Stream menu over the game: live stats on the left, and on the right the Game tab (Resume, Xbox button, typing, party chat, screenshot, clip, mini player) with Disconnect and End and turn off Xbox along the bottom" /> |
 
 | Connection message | Reconnecting |
 |---|---|
@@ -78,6 +84,10 @@ Vexel streams your Xbox console over your home network. It's built for playing w
 | Settings | Sign in |
 |---|---|
 | <img src="docs/screenshots/settings.png" alt="Settings page with stream profiles and bitrate" /> | <img src="docs/screenshots/sign-in.png" alt="Sign-in screen using a short code" /> |
+
+| Mini player | Colour filter (red-green) |
+|---|---|
+| <img src="docs/screenshots/mini-player.png" alt="The stream in a small always-on-top window in the bottom-right corner, over another app" /> | <img src="docs/screenshots/colour-filter.png" alt="A test card before and after the deuteranopia colour filter, and both as seen with deuteranopia: the hidden digit shows after correction" /> |
 
 <sub>Screenshots use placeholder artwork. In the app you see art from your own game library.</sub>
 
@@ -146,6 +156,40 @@ Vexel works over the internet as well as on your home network. You don't need to
   ```
   The stream then travels through your relay when no direct path exists. That adds a little latency.
 
+### Play together
+
+<p align="center">
+  <img src="docs/play-together.svg" width="860" alt="Your Xbox streams to your Vexel; your Vexel sends the picture and sound to your friend's Vexel, directly and encrypted; your friend's controller comes back and reaches the console as Player 2" />
+</p>
+
+A friend at another house can join the game you're streaming. They see your picture and hear the game, and their controller is added to your console as the next player (Player 2, then 3 and 4). Up to three friends can join.
+
+**Invite a friend:**
+
+1. Start a stream as usual.
+2. Open the stream menu (hold <kbd>View</kbd> + <kbd>Menu</kbd>, or press <kbd>Esc</kbd>) and choose **Play together…**. Or, in Vexel's main window, open **Play together** in the sidebar (or **Play together** on the Consoles page's stream header) and press **Share this stream**.
+3. The invite (a code starting `VX1-`) is copied for you. Send it to your friend in any message.
+
+The panel shows who's in, with their ping and loss, a **Remove** button for each friend, and **Stop sharing**. You get a message when a friend joins or leaves.
+
+**From the main window too:** while you stream, the **Play together** page has a **Your stream** card that does the same as the panel: the invite with **Copy invite**, the players with **Remove**, a box for a friend's reply code, and **Stop sharing**. It's handy on a Mac or PC where Vexel's window stays in view. The page and the stream menu stay in step, whichever you use, and the sidebar shows how many of you are playing.
+
+**Join a friend:** open **Play together** in Vexel's sidebar, paste the invite, check your name and press **Join**. You don't need to sign in: on the sign-in screen, choose **Join a friend's stream**. Your controller works with your own button layout, rumble comes through, and your own stream menu has volume, stats, full screen and **Leave**.
+
+**What your friend needs:** Vexel on a Windows PC or a Mac, and a controller (or keyboard and mouse). Not Game Pass, not an Xbox, not even an Xbox account.
+
+**Your upload carries their picture.** While you play together, the console's picture is capped at about **15 Mbps** for both of you (most home uploads can't carry a full-quality stream per friend). If a friend keeps losing packets, Vexel lowers it further, down to 5 Mbps, and raises it again when things are clean. It goes back to normal when the last friend leaves. Two settings in `settings.json` change this: `TogetherMaxMbps` (default 15), and `TogetherGuestXboxButton` (default off: a friend's Xbox button is ignored, so they can't open the guide over your game).
+
+**How it connects (no server):** the invite carries the addresses you might be reached at: your local network address (a friend on the same Wi-Fi), your public address (from the same public STUN servers as above) and, where your router allows it, a port it opens for Vexel (UPnP or NAT-PMP, closed again when you stop). Your friend's Vexel tries them all at once and uses the first that answers. Everything is encrypted (AES-256-GCM with a key that's only in the invite, new each time you share), and nothing passes through anyone else's servers.
+
+**If it can't connect straight away:** some routers only let a connection in once both sides have tried. After a few seconds your friend's Vexel shows a **reply code** (starting `VXR1-`) and copies it. They send it to you; in the Play together panel (or on the Play together page) choose **Paste reply code**. Both sides then connect at the same moment, which gets through most home routers. If that still fails (both routers are the strictest kind, or a workplace network), a VPN such as Tailscale between you and your friend works.
+
+| Your Play together panel | Your friend's window |
+| --- | --- |
+| <img src="docs/screenshots/together-host-panel.png" alt="The Play together panel in the stream menu: the invite code, the players (Player 2 is Sam, with ping, loss and a Remove button), and Paste reply code, Copy invite and Stop sharing" /> | <img src="docs/screenshots/together-guest.png" alt="The friend's stream menu while playing together: whose stream it is, that they're Player 2, live stats, volume, stats, full screen and Leave" /> |
+| **The Play together page** | **When the routers need a reply code** |
+| <img src="docs/screenshots/together-page.png" alt="Vexel's Play together page while sharing: the invite with Copy invite, the players (Player 1 you, Player 2 Sam with ping, loss and Remove), a box for a reply code, Stop sharing, and below it the Join a friend box" /> | <img src="docs/screenshots/together-reply-code.png" alt="The friend's window asking them to send a reply code back to the host" /> |
+
 ### Controls
 
 | | Controller | Keyboard / touch |
@@ -155,11 +199,13 @@ Vexel works over the internet as well as on your home network. You don't need to
 | Switch page | LB / RB | Ctrl+Tab |
 | Stream the last-used console | Menu | |
 | **Open the stream menu in a game** | Hold **View + Menu** | Esc, or tap the screen |
+| Stream menu tabs | LB / RB | Tab / Shift+Tab, or Q / E |
 | Xbox button (guide) | Your pad's Xbox button, or stream menu → Xbox button | |
 | Screenshot | Stream menu → Take screenshot | F12 |
 | Save the last 30 seconds (instant replay on) | Stream menu → Save last 30 seconds | F10 |
 | Type on the console | Stream menu → Type on the console (opens the touch keyboard) | Just start typing; Enter finishes, Esc closes |
-| Full screen / stats readout | Stream menu | F11 / F3 |
+| Full screen / stats readout | Stream menu → Picture | F11 / F3 |
+| Mini player (double-click it to go back) | Stream menu → Mini player | F8 |
 | Mute the mic (or hold it, with push to talk) | Microphone button (Settings) | F9 |
 | Leave the launcher's full screen | | F11 |
 
@@ -196,6 +242,7 @@ Add Vexel as a game in Steam ("Add a non-Steam game"), Armoury Crate or Playnite
   - the Microsoft Store image service and the Game Pass catalogue, for game names and art
   - the update feed
   - the Discord app on your own device, if it's running and the Discord setting is on
+  - **Play together:** while you share a stream, the picture, sound and your friend's controller go directly between your Vexel and theirs, encrypted with a key that's only in the invite. To let your friend reach you, Vexel asks your home router to open a port (UPnP or NAT-PMP) while you share, and closes it when you stop. The invite contains your internet and home-network addresses, so only send it to people you're playing with.
 - **No telemetry:** Vexel sends no analytics and no crash reports. Diagnostics only leave your device if you send the zip yourself.
 
 ## Building from source
@@ -230,6 +277,17 @@ dotnet run --project src/XStream.Cli -- video-test       # decode + window test,
 dotnet run --project src/XStream.Cli -- pad              # controller test, no console needed
 ```
 
+**Play together without a console:** two copies on one machine (or two machines on a LAN). The host shares the built-in test pattern through the real Play together host and prints each guest's controller; the guest is the real guest player.
+
+```bash
+dotnet run --project src/XStream.Cli -- together-host --panel                   # prints the invite; the panel opens in its window
+dotnet run --project src/XStream.Cli -- together-join VX1-...                   # in a second terminal: join it
+dotnet run --project src/XStream.Cli -- together-host --loss 5 --invite-file /tmp/inv   # drop 5% of what's sent
+dotnet run --project src/XStream.Cli -- together-join @/tmp/inv --fake-input            # stats every second: resends, keyframes, delay
+```
+
+Other options: `--headless` (no window), `--no-upnp` and `--no-stun` (local addresses only), `--hide-addresses` on the host with `--reply-file <file>` on both, to test the reply-code fallback on one machine.
+
 **Testing the Windows build on a Mac:** `tests/wine/run.sh` runs a Windows smoke test (test pattern → decoder → each renderer → screenshot, with a colour check) under Wine in Docker. AMD drivers and hardware decoding still need real Windows hardware.
 
 <details>
@@ -240,10 +298,12 @@ dotnet run --project src/XStream.Cli -- pad              # controller test, no c
 The code still uses its original working name, XStream, for projects and namespaces. The app itself is Vexel.
 
 ```
-src/XStream.Core     Stability engine, Xbox sign-in and streaming API, video (FFmpeg decode, SDL2 window,
+src/XStream.Core     Play together protocol (Together/: encrypted UDP, frame recovery, invites, NAT traversal),
+                     Stability engine, Xbox sign-in and streaming API, video (FFmpeg decode, SDL2 window,
                      Direct3D 11 renderer), audio (Opus out, microphone in), controller input, update checks
 src/XStream.WebRtc   WebRTC connection to the console (SIPSorcery), with the stability engine in the receive path
-src/XStream.Player   One stream end to end: session, video, input, audio, the in-game menu, reconnects
+src/XStream.Player   One stream end to end: session, video, input, audio, the in-game menu, reconnects,
+                     Play together (host panel and the guest player)
 src/XStream.App      The launcher (Avalonia): sign-in, consoles, connecting screen, settings, controller navigation
 src/XStream.Cli      Command-line client
 src/XStream.Sim      Network simulator comparing Vexel's strategies against a standard receiver

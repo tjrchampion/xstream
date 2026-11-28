@@ -118,6 +118,7 @@ public sealed unsafe class VideoWindow : IDisposable
     private const int TextureStreaming = 1;
     private const uint PixelFormatNv12 = 0x3231564E, PixelFormatIyuv = 0x56555949;
     private const uint EventQuit = 0x100, EventKeyDown = 0x300, EventKeyUp = 0x301, EventTextInput = 0x303, EventMouseButtonDown = 0x401;
+    private const uint EventMouseMotion = 0x400, EventMouseButtonUp = 0x402;
     private const uint PixelFormatAbgr8888 = 0x16762004; // R,G,B,A bytes in memory on little-endian
     private const int WindowPosCentered = 0x2FFF0000;
 
@@ -227,6 +228,14 @@ public sealed unsafe class VideoWindow : IDisposable
     /// <summary>Edge-aware upscaling when the picture is enlarged (GPU renderers). Safe to change from any thread.</summary>
     public bool Enhance { get => _enhance; set { _enhance = value; if (_gpu is { } g) g.Enhance = value; } }
     private volatile bool _enhance = true;
+
+    /// <summary>Colour-blind correction (GPU renderers; SDL's fallback renderer shows the picture unfiltered). Any thread.</summary>
+    public ColorFilter ColorFilter { get => _colorFilter; set { _colorFilter = value; UpdateColorMatrix(); } }
+    /// <summary>How strongly <see cref="ColorFilter"/> corrects, 0 to 1.</summary>
+    public double ColorFilterStrength { get => _colorStrength; set { _colorStrength = Math.Clamp(value, 0, 1); UpdateColorMatrix(); } }
+    private volatile ColorFilter _colorFilter;
+    private double _colorStrength = 1;
+    private void UpdateColorMatrix() { if (_gpu is { } g) g.ColorMatrix = ColorFilters.ShaderRows(_colorFilter, _colorStrength); }
 
     /// <summary>The stream's own colour signalling (from its SPS): the GPU renderers convert to RGB to match. Any thread.</summary>
     public H264Format? Format
@@ -357,6 +366,7 @@ public sealed unsafe class VideoWindow : IDisposable
                 var text = Marshal.PtrToStringUTF8((IntPtr)(ev + 12)) ?? ""; // SDL_TextInputEvent.text[32]
                 if (text.Length > 0) typed(text);
             }
+            else if (_mini && type is EventMouseButtonDown or EventMouseMotion or EventMouseButtonUp) MiniMouse(type, ev);
             else if (type == EventMouseButtonDown && *(ev + 16) == 1 && Click is { } click)
             {
                 // Mouse positions are in window points; the overlay is drawn in output pixels (differs on HiDPI).
@@ -373,6 +383,7 @@ public sealed unsafe class VideoWindow : IDisposable
             }
         }
         input?.Tick();
+        if (_miniSettleUntil > 0) SettleMini();
         UpdateCursor();
         bool redraw = Overlay?.NeedsRender == true || _rescaled;
         if (!_mailbox.Wait(redraw ? 0 : waitMs))
@@ -590,10 +601,155 @@ public sealed unsafe class VideoWindow : IDisposable
 
     public void SetFullscreen(bool on)
     {
+        if (_mini) { _miniWasFullscreen = false; SetMiniPlayer(false); } // F11 from the mini player: straight to the size asked for
         if (on == _fullscreen) return;
         SDL_SetWindowFullscreen(_win, on ? WindowFullscreenDesktop : 0);
         _fullscreen = on;
         UpdateCursor();
+    }
+
+    // ---- Mini player: a small always-on-top window in a corner, for watching while doing something else ------------
+
+    [DllImport(Lib)] private static extern void SDL_SetWindowBordered(IntPtr w, int bordered);
+    [DllImport(Lib)] private static extern void SDL_SetWindowAlwaysOnTop(IntPtr w, int onTop); // SDL 2.0.16+
+    [DllImport(Lib)] private static extern void SDL_SetWindowSize(IntPtr w, int width, int height);
+    [DllImport(Lib)] private static extern void SDL_SetWindowPosition(IntPtr w, int x, int y);
+    [DllImport(Lib)] private static extern int SDL_GetWindowDisplayIndex(IntPtr w);
+    [DllImport(Lib)] private static extern int SDL_GetDisplayUsableBounds(int index, out Rect r);
+    [DllImport(Lib)] private static extern uint SDL_GetGlobalMouseState(out int x, out int y);
+    [DllImport(Lib)] private static extern uint SDL_GetWindowFlags(IntPtr w);
+    [DllImport(Lib)] private static extern int SDL_GetDisplayDPI(int index, out float ddpi, out float hdpi, out float vdpi);
+
+    /// <summary>Mini player size in points (width; the height follows the picture's shape) and its gap from the screen edge.</summary>
+    public const int MiniWidth = 480, MiniMargin = 16;
+    private volatile bool _mini;
+    private bool _miniWasFullscreen;
+    private (int X, int Y, int W, int H) _miniSaved;
+    private (double X, double Y) _miniPlace = (1, 1);
+    private double _miniSettleUntil;
+    private bool _dragging, _dragMoved;
+    private int _dragMouseX, _dragMouseY, _dragWinX, _dragWinY;
+    private (double X, double Y)? _miniMoved;
+
+    /// <summary>The window is the mini player. Any thread.</summary>
+    public bool IsMiniPlayer => _mini;
+
+    /// <summary>Where the player dragged the mini player to (0-1 across and down the screen), once per drag; null if not moved.</summary>
+    public (double X, double Y)? TakeMiniPlayerMoved() { var m = _miniMoved; _miniMoved = null; return m; }
+
+    /// <summary>
+    /// Shrink to the mini player (leaving full screen if needed) or back to how the window was. <paramref name="place"/>:
+    /// where in the screen's usable area (0-1 across and down; (1, 1) = bottom right). Main thread.
+    /// </summary>
+    public void SetMiniPlayer(bool on, (double X, double Y)? place = null)
+    {
+        if (on == _mini || _win == IntPtr.Zero) return;
+        if (on)
+        {
+            _miniWasFullscreen = _fullscreen;
+            if (_fullscreen) { SDL_SetWindowFullscreen(_win, 0); _fullscreen = false; }
+            SDL_GetWindowPosition(_win, out int x, out int y);
+            SDL_GetWindowSize(_win, out int w, out int h);
+            _miniSaved = (x, y, w, h);
+            if (place is { } p) _miniPlace = (Math.Clamp(p.X, 0, 1), Math.Clamp(p.Y, 0, 1));
+            _mini = true;
+            SDL_SetWindowBordered(_win, 0);
+            OnTop(true);
+            PlaceMini();
+            // Leaving full screen animates on macOS and the window settles afterwards: place it again until it holds.
+            _miniSettleUntil = _clock() + 1500;
+        }
+        else
+        {
+            _mini = false; _dragging = false; _miniSettleUntil = 0;
+            OnTop(false);
+            SDL_SetWindowBordered(_win, 1);
+            var r = _miniSaved;
+            if (r.W >= 320 && r.H >= 180) { SDL_SetWindowSize(_win, r.W, r.H); SDL_SetWindowPosition(_win, r.X, r.Y); }
+            else { SDL_SetWindowSize(_win, 1280, 720); SDL_SetWindowPosition(_win, WindowPosCentered, WindowPosCentered); }
+            if (_miniWasFullscreen) { SDL_SetWindowFullscreen(_win, WindowFullscreenDesktop); _fullscreen = true; }
+            SDL_RaiseWindow(_win);
+        }
+        _rescaled = true; // redraw at the new size even if no picture arrives
+        UpdateCursor();
+    }
+
+    private void OnTop(bool on)
+    {
+        try { SDL_SetWindowAlwaysOnTop(_win, on ? 1 : 0); }
+        catch (EntryPointNotFoundException) { } // SDL older than 2.0.16: still small and borderless, just not on top
+    }
+
+    private (int X, int Y, int W, int H) MiniRect()
+    {
+        int display = Math.Max(0, SDL_GetWindowDisplayIndex(_win));
+        if (SDL_GetDisplayUsableBounds(display, out var ub) != 0) ub = new Rect(0, 0, 1280, 720);
+        // macOS sizes windows in points already; Windows (Vexel is per-monitor DPI aware) in pixels, so scale to the display.
+        double k = OperatingSystem.IsWindows() && SDL_GetDisplayDPI(display, out _, out float hdpi, out _) == 0 && hdpi > 0 ? Math.Clamp(hdpi / 96.0, 1, 4) : 1;
+        int m = (int)Math.Round(MiniMargin * k);
+        int w = (int)Math.Round(MiniWidth * k), h = _texW > 0 && _texH > 0 ? (int)Math.Round(w * (double)_texH / _texW) : w * 9 / 16;
+        w = Math.Min(w, Math.Max(160, ub.W - 2 * m)); h = Math.Min(h, Math.Max(90, ub.H - 2 * m));
+        int x = ub.X + m + (int)Math.Round(_miniPlace.X * Math.Max(0, ub.W - w - 2 * m));
+        int y = ub.Y + m + (int)Math.Round(_miniPlace.Y * Math.Max(0, ub.H - h - 2 * m));
+        return (x, y, w, h);
+    }
+
+    private (int X, int Y, int W, int H) WithPlace((double X, double Y) place)
+    {
+        var keep = _miniPlace;
+        _miniPlace = place;
+        try { return MiniRect(); } finally { _miniPlace = keep; }
+    }
+
+    private void PlaceMini()
+    {
+        var r = MiniRect();
+        SDL_SetWindowSize(_win, r.W, r.H);
+        SDL_SetWindowPosition(_win, r.X, r.Y);
+    }
+
+    private void SettleMini()
+    {
+        if (!_mini || _clock() > _miniSettleUntil) { _miniSettleUntil = 0; return; }
+        if ((SDL_GetWindowFlags(_win) & WindowFullscreenDesktop) == WindowFullscreenDesktop || _dragging) return;
+        var r = MiniRect();
+        SDL_GetWindowSize(_win, out int w, out int h);
+        if (w != r.W || h != r.H) { PlaceMini(); _rescaled = true; }
+    }
+
+    /// <summary>In the mini player a click only focuses it, a drag moves it and a double-click brings the full size back.</summary>
+    private void MiniMouse(uint type, byte* ev)
+    {
+        if (type == EventMouseButtonDown && *(ev + 16) == 1)
+        {
+            if (*(ev + 18) >= 2) { SetMiniPlayer(false); return; } // SDL_MouseButtonEvent.clicks
+            SDL_GetGlobalMouseState(out _dragMouseX, out _dragMouseY);
+            SDL_GetWindowPosition(_win, out _dragWinX, out _dragWinY);
+            _dragging = true; _dragMoved = false;
+        }
+        else if (type == EventMouseMotion && _dragging)
+        {
+            // Screen coordinates, not the window's: the window moves under the pointer.
+            SDL_GetGlobalMouseState(out int mx, out int my);
+            int dx = mx - _dragMouseX, dy = my - _dragMouseY;
+            if (!_dragMoved && Math.Abs(dx) + Math.Abs(dy) < 3) return;
+            _dragMoved = true;
+            SDL_SetWindowPosition(_win, _dragWinX + dx, _dragWinY + dy);
+        }
+        else if (type == EventMouseButtonUp && *(ev + 16) == 1 && _dragging)
+        {
+            _dragging = false;
+            if (!_dragMoved) return;
+            _miniSettleUntil = 0;
+            SDL_GetWindowPosition(_win, out int x, out int y);
+            // Back from MiniRect's formula: its corners (0 and 1) are the screen's corners, less the margin.
+            var (x0, y0, _, _) = WithPlace((0, 0));
+            var (x1, y1, _, _) = WithPlace((1, 1));
+            double fx = x1 > x0 ? (x - x0) / (double)(x1 - x0) : 0.5;
+            double fy = y1 > y0 ? (y - y0) / (double)(y1 - y0) : 0.5;
+            _miniPlace = (Math.Clamp(fx, 0, 1), Math.Clamp(fy, 0, 1));
+            _miniMoved = _miniPlace;
+        }
     }
 
     private int _cursor = -1;
@@ -611,6 +767,7 @@ public sealed unsafe class VideoWindow : IDisposable
         get
         {
             if (_win == IntPtr.Zero || _fullscreen) return null;
+            if (_mini) return _miniWasFullscreen ? null : _miniSaved; // reopen at the normal size, not the mini player's
             SDL_GetWindowPosition(_win, out int x, out int y);
             SDL_GetWindowSize(_win, out int w, out int h);
             return (x, y, w, h);

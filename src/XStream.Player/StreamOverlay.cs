@@ -11,15 +11,17 @@ namespace XStream.Player;
 /// The in-stream menu and stats readout, drawn over the video.
 ///
 /// Open the menu by holding View + Menu on the controller for half a second, tapping the screen (then
-/// "Stream menu"), or Esc. While it's open the console gets no controller input. D-pad up/down moves,
-/// left/right changes a value, A changes / activates, B resumes. F11 toggles full screen, F3 the stats readout.
+/// "Stream menu"), or Esc. While it's open the console gets no controller input. The menu has tabs (Game, Picture,
+/// Sound &amp; controls, Stream): LB / RB (Tab / Shift+Tab, Q / E) switch them. D-pad up/down moves, and down past the
+/// last row reaches Disconnect along the bottom; left/right changes a value, A changes / activates, B resumes.
+/// F11 toggles full screen, F3 the stats readout, F8 the mini player.
 ///
 /// Settings changed here are reported through <see cref="SettingsChanged"/> (the session saves and applies
 /// them live); <see cref="Sync"/> keeps the menu in step with settings changed elsewhere (the launcher).
 /// Input arrives on the controller thread and the window's main thread; window changes are queued and
 /// applied on the main thread by <see cref="Apply"/>.
 /// </summary>
-public sealed class StreamOverlay : IVideoOverlay
+public sealed partial class StreamOverlay : IVideoOverlay
 {
     public const int CanvasWidth = 1920, CanvasHeight = 1080;
     private const double ChordHoldMs = 500;
@@ -29,46 +31,63 @@ public sealed class StreamOverlay : IVideoOverlay
     {
         Resume, XboxButton, Type,
         Profile, MaxBitrate, Tips,
-        Picture, Clarity, Enhance, Fullscreen, Stats,
+        Picture, Clarity, Enhance, ColorFilter, Fullscreen, MiniPlayer, Stats,
         Volume, Microphone, Party, Rumble, TriggerRumble, MouseSpeed,
         Screenshot, SaveClip, MoreSettings, Disconnect, TurnOff,
+        PlayTogether,
     }
 
-    // Built per stream: typing and Turn off need a console (not cloud), Save clip needs instant replay on.
-    private readonly (Item item, string? section)[] Layout;
+    // The menu's tabs, in order. Empty tabs are dropped per stream (a guest has no Stream tab).
+    private enum Tab { Game, Picture, Sound, Stream }
+    private static readonly string[] TabNames = ["Game", "Picture", "Sound & controls", "Stream"];
 
-    private static (Item item, string? section)[] BuildLayout(bool console, bool clips, bool mouse)
+    // Built per stream: typing and Turn off need a console (not cloud), Save clip needs instant replay on.
+    private readonly (Tab tab, Item[] items)[] Tabs;
+    // Fixed along the bottom of every tab: the ways out of the stream.
+    private readonly Item[] Bottom;
+
+    private static ((Tab, Item[])[] tabs, Item[] bottom) BuildMenu(bool console, bool clips, bool mouse, TogetherMode together = TogetherMode.None)
     {
-        var l = new List<(Item, string?)> { (Item.Resume, null), (Item.XboxButton, null) };
-        if (console) l.Add((Item.Type, null));
-        l.AddRange([
-            (Item.Profile, "STREAM"), (Item.MaxBitrate, null), (Item.Tips, null),
-            (Item.Picture, "PICTURE"), (Item.Clarity, null), (Item.Enhance, null), (Item.Fullscreen, null), (Item.Stats, null),
-            (Item.Volume, "SOUND & CONTROLLER"), (Item.Microphone, null), (Item.Party, null), (Item.Rumble, null), (Item.TriggerRumble, null)]);
-        if (mouse) l.Add((Item.MouseSpeed, null)); // keyboard and mouse can play: tune the mouse while playing
-        l.Add((Item.Screenshot, ""));
-        if (clips) l.Add((Item.SaveClip, null));
-        l.AddRange([(Item.MoreSettings, null), (Item.Disconnect, null)]);
-        if (console) l.Add((Item.TurnOff, null));
-        return l.ToArray();
+        if (together == TogetherMode.Guest) return (GuestTabs, [Item.Disconnect]);
+        var game = new List<Item> { Item.Resume, Item.XboxButton };
+        if (together == TogetherMode.Host) game.Add(Item.PlayTogether);
+        if (console) game.Add(Item.Type);
+        game.AddRange([Item.Party, Item.Screenshot]);
+        if (clips) game.Add(Item.SaveClip);
+        game.Add(Item.MiniPlayer);
+        var sound = new List<Item> { Item.Volume, Item.Microphone, Item.Rumble, Item.TriggerRumble };
+        if (mouse) sound.Add(Item.MouseSpeed); // keyboard and mouse can play: tune the mouse while playing
+        (Tab, Item[])[] tabs =
+        [
+            (Tab.Game, game.ToArray()),
+            (Tab.Picture, [Item.Picture, Item.Clarity, Item.Enhance, Item.ColorFilter, Item.Fullscreen, Item.Stats]),
+            (Tab.Sound, sound.ToArray()),
+            (Tab.Stream, [Item.Profile, Item.MaxBitrate, Item.Tips, Item.MoreSettings]),
+        ];
+        return (tabs.Where(t => t.Item2.Length > 0).ToArray(), console ? [Item.Disconnect, Item.TurnOff] : [Item.Disconnect]);
     }
     private static readonly double[] BitrateSteps = [10, 15, 20, 25, 30, 40, 50, 60];
     private static readonly int[] RumbleSteps = [0, 25, 50, 75, 100];
     private static readonly double[] MouseSteps = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.6, 0.7, 0.85, 1, 1.25, 1.5, 2, 2.5, 3, 4];
     private static readonly string[] ClarityNames = ["Off", "Low", "Medium", "High"];
+    private static readonly string[] ColorFilterNames = ["Off", "Red-green (deuteranopia)", "Red-green (protanopia)", "Blue-yellow (tritanopia)"];
 
     private readonly object _gate = new();
-    private readonly string _console;
+    private string _console;
     private readonly DateTime _started = DateTime.UtcNow;
     private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
     private volatile bool _dirty = true;
 
     private AppSettings _s;
     private bool _menu, _fullscreen, _away;
-    private int _selected;
+    private int _tab;      // index into Tabs
+    private int _selected; // row in the tab; past the last row: an action in the bottom row
+    private bool _shift;   // for Shift+Tab
     private LiveStats? _stats;
     private (int w, int h) _videoSize;
     private bool? _pendingFullscreen;
+    private bool? _pendingMini;
+    private bool _mini; // the window is the mini player: only toasts, drawn bigger so they read at that size
     private bool _pendingRaise;
     private GamepadButtons _lastButtons;
     private double _chordSinceMs = double.NaN;
@@ -79,7 +98,8 @@ public sealed class StreamOverlay : IVideoOverlay
     private SKRect _reconnectDisconnectRect;
     private double _toastUntilMs;
 
-    private readonly SKRect[] _itemRects;
+    private readonly List<SKRect> _itemRects = [];  // rows, then the bottom row, as last drawn
+    private readonly List<SKRect> _tabRects = [];
     private SKRect _panelRect, _barMenuRect, _barDisconnectRect, _awayRect;
 
     public event Action? DisconnectRequested;
@@ -110,6 +130,7 @@ public sealed class StreamOverlay : IVideoOverlay
     /// <summary>Key released (from the window).</summary>
     public void OnKeyUp(int sym)
     {
+        if (sym is LShift or RShift) { lock (_gate) _shift = false; return; }
         if (sym == 27)
         {
             bool tap;
@@ -132,11 +153,13 @@ public sealed class StreamOverlay : IVideoOverlay
 
     /// <param name="consoleControl">A console stream with remote control (typing, Turn off) available.</param>
     /// <param name="clips">Instant replay is recording (Save clip in the menu).</param>
-    public StreamOverlay(string consoleName, AppSettings settings, bool fullscreen, bool consoleControl = false, bool clips = false)
+    /// <param name="together">Play together: Host adds "Play together…"; Guest is the friend's own, shorter menu.</param>
+    public StreamOverlay(string consoleName, AppSettings settings, bool fullscreen, bool consoleControl = false, bool clips = false,
+        TogetherMode together = TogetherMode.None)
     {
-        Layout = BuildLayout(consoleControl, clips, settings.KeyboardMouse != XStream.Core.Input.KeyboardMouseMode.Off);
+        _together = together;
+        (Tabs, Bottom) = BuildMenu(consoleControl, clips, settings.KeyboardMouse != XStream.Core.Input.KeyboardMouseMode.Off, together);
         _canType = consoleControl;
-        _itemRects = new SKRect[Layout.Length];
         _console = consoleName;
         _s = settings;
         _fullscreen = fullscreen;
@@ -146,7 +169,7 @@ public sealed class StreamOverlay : IVideoOverlay
     public bool Away { get { lock (_gate) return _away; } }
     /// <summary>The menu, typing, the launcher's settings or the reconnect screen has the input (keyboard-and-mouse play pauses).</summary>
     public bool HoldsInput { get { lock (_gate) return _menu || _typing is not null || _away || _reconnecting is not null; } }
-    public bool Visible { get { lock (_gate) return _typing is not null || _menu || _s.ShowStatsHud || _barUntilMs > 0 || _away || _toastUntilMs > 0 || _reconnecting is not null || MicShown; } }
+    public bool Visible { get { lock (_gate) return _mini ? _toastUntilMs > 0 || _reconnecting is not null : _typing is not null || _menu || _s.ShowStatsHud || _barUntilMs > 0 || _away || _toastUntilMs > 0 || _reconnecting is not null || MicShown; } }
 
     /// <summary>Show (text) or hide (null) the "Reconnecting…" screen. While it's up, B or a tap on Disconnect ends the stream.</summary>
     public void SetReconnecting(string? detail)
@@ -231,23 +254,41 @@ public sealed class StreamOverlay : IVideoOverlay
     {
         // The controller only reports changes, so a steady hold produces no new reports: time it here.
         bool captured = false;
-        bool? fs;
+        bool? fs, mini;
         bool raise;
+        ScreenSpot? place;
         lock (_gate)
         {
             if (!_chordFired && !double.IsNaN(_chordSinceMs) && Now - _chordSinceMs >= ChordHoldMs && !_away)
             {
                 _chordFired = true;
-                _menu = !_menu; _selected = 0; _barUntilMs = 0; _dirty = true;
+                _menu = !_menu; ResetMenu(); _barUntilMs = 0; _dirty = true;
                 captured = _menu;
             }
             if (_barUntilMs > 0 && Now >= _barUntilMs) { _barUntilMs = 0; _dirty = true; }
             fs = _pendingFullscreen; _pendingFullscreen = null;
             raise = _pendingRaise; _pendingRaise = false;
+            mini = _pendingMini; _pendingMini = null;
+            if (_mini && (_menu || _typing is not null || _away)) mini = false; // the menu and typing need the full size
+            place = _s.MiniPlayerPlace;
         }
         if (captured) InputCaptured?.Invoke();
         if (fs is { } on) window?.SetFullscreen(on);
+        if (mini is { } m && window is not null)
+        {
+            window.SetMiniPlayer(m, place is null ? null : (place.X, place.Y));
+            if (m) ShowToast("Mini player. Double-click it to go back", 3000);
+        }
         if (raise) window?.Raise();
+        if (window is null) return;
+        if (window.TakeMiniPlayerMoved() is { } moved) Set(s => s with { MiniPlayerPlace = new ScreenSpot(Math.Round(moved.X, 3), Math.Round(moved.Y, 3)) });
+        lock (_gate)
+        {
+            // The window can change by itself (double-click on the mini player, leaving full screen for it).
+            if (_mini != window.IsMiniPlayer || _fullscreen != window.IsFullscreen) _dirty = true;
+            _mini = window.IsMiniPlayer;
+            _fullscreen = window.IsFullscreen;
+        }
     }
 
     // ---- Input ----------------------------------------------------------------------------------
@@ -295,12 +336,14 @@ public sealed class StreamOverlay : IVideoOverlay
             if (!_menu) return false;
             if (_chordFired && (buttons & chord) != 0) return true; // still releasing the hold that opened it
         }
+        if (pressed.HasFlag(GamepadButtons.LeftShoulder)) SwitchTab(-1);
+        if (pressed.HasFlag(GamepadButtons.RightShoulder)) SwitchTab(+1);
         if (pressed.HasFlag(GamepadButtons.DPadUp)) Move(-1);
         if (pressed.HasFlag(GamepadButtons.DPadDown)) Move(+1);
         if (pressed.HasFlag(GamepadButtons.DPadLeft)) Change(-1);
         if (pressed.HasFlag(GamepadButtons.DPadRight)) Change(+1);
         if (pressed.HasFlag(GamepadButtons.A)) Change(+1, activate: true);
-        if (pressed.HasFlag(GamepadButtons.B)) CloseMenu();
+        if (pressed.HasFlag(GamepadButtons.B) && !TogetherBack()) CloseMenu();
         return true;
     }
 
@@ -325,7 +368,7 @@ public sealed class StreamOverlay : IVideoOverlay
         string now;
         lock (_gate)
         {
-            if (_away || _reconnecting is not null || _menu) return;
+            if (_away || _reconnecting is not null || _menu || _mini) return;
             _typing = (_typing ?? "") + text;
             now = _typing; _dirty = true;
         }
@@ -354,11 +397,15 @@ public sealed class StreamOverlay : IVideoOverlay
         return true; // every key belongs to the text while typing
     }
 
+    private const int LShift = 0x400000E1, RShift = 0x400000E5;
+
     /// <summary>Key press from the window (SDL keycode). Returns true if handled.</summary>
     public bool OnKey(int sym)
     {
-        const int Esc = 27, Enter = 13, Space = 32, Up = 0x40000052, Down = 0x40000051, Left = 0x40000050, Right = 0x4000004F,
-            F3 = 0x4000003C, F9 = 0x40000042, F10 = 0x40000043, F11 = 0x40000044, F12 = 0x40000045;
+        const int Esc = 27, Enter = 13, Space = 32, TabKey = 9, Q = 'q', E = 'e', Up = 0x40000052, Down = 0x40000051, Left = 0x40000050, Right = 0x4000004F,
+            F3 = 0x4000003C, F8 = 0x40000041, F9 = 0x40000042, F10 = 0x40000043, F11 = 0x40000044, F12 = 0x40000045;
+        // Shift is only tracked (for Shift+Tab), never used: the game or the text box still gets it.
+        if (sym is LShift or RShift) { lock (_gate) _shift = true; return false; }
         lock (_gate) if (_away) return true;
         if (TypingKey(sym)) return true;
         switch (sym)
@@ -381,6 +428,7 @@ public sealed class StreamOverlay : IVideoOverlay
                 ToggleMenu();
                 return true;
             case F11: ToggleFullscreen(); return true;
+            case F8: ToggleMini(); return true;
             case F3: Set(NextStats(1)); return true;
             case F9:
                 bool first;
@@ -397,6 +445,9 @@ public sealed class StreamOverlay : IVideoOverlay
             case Left: Change(-1); return true;
             case Right: Change(+1); return true;
             case Enter or Space: Change(+1, activate: true); return true;
+            case TabKey: bool back; lock (_gate) back = _shift; SwitchTab(back ? -1 : +1); return true;
+            case Q: SwitchTab(-1); return true;
+            case E: SwitchTab(+1); return true;
         }
         return false;
     }
@@ -407,6 +458,7 @@ public sealed class StreamOverlay : IVideoOverlay
     /// </summary>
     public void OnClick(int x, int y)
     {
+        if (TogetherClick(x, y)) return;
         bool disconnect = false, back = false;
         lock (_gate)
         {
@@ -422,7 +474,9 @@ public sealed class StreamOverlay : IVideoOverlay
             }
             else if (_menu)
             {
-                int hit = Array.FindIndex(_itemRects, r => r.Contains(x, y));
+                int tab = _tabRects.FindIndex(r => r.Contains(x, y));
+                if (tab >= 0) { _tab = tab; _selected = 0; _dirty = true; return; }
+                int hit = _itemRects.FindIndex(r => r.Contains(x, y));
                 if (hit < 0)
                 {
                     if (!_panelRect.Contains(x, y)) { _menu = false; _dirty = true; } // tap outside closes
@@ -432,7 +486,7 @@ public sealed class StreamOverlay : IVideoOverlay
             }
             else if (_barUntilMs > 0)
             {
-                if (_barMenuRect.Contains(x, y)) { _menu = true; _selected = 0; }
+                if (_barMenuRect.Contains(x, y)) { _menu = true; ResetMenu(); }
                 else if (_barDisconnectRect.Contains(x, y)) disconnect = true;
                 _barUntilMs = 0; _dirty = true;
                 if (!disconnect) return;
@@ -450,17 +504,64 @@ public sealed class StreamOverlay : IVideoOverlay
 
     private void ToggleMenu()
     {
-        lock (_gate) { _menu = !_menu; _selected = 0; _barUntilMs = 0; _dirty = true; }
+        lock (_gate) { _menu = !_menu; ResetMenu(); _barUntilMs = 0; _dirty = true; }
     }
+
+    // Every opening starts on Game with Resume picked, so A straight away always goes back to the game.
+    private void ResetMenu() { _tab = 0; _selected = 0; }
 
     private void CloseMenu()
     {
         lock (_gate) { _menu = false; _dirty = true; }
     }
 
+    /// <summary>
+    /// Up / down: through the tab's rows, then down past the last row into the bottom row (Disconnect…).
+    /// Stops at both ends rather than wrapping, so the bottom row is never landed on by accident from the top.
+    /// </summary>
     private void Move(int d)
     {
-        lock (_gate) { _selected = (_selected + d + Layout.Length) % Layout.Length; _dirty = true; }
+        if (TogetherMove(d)) return;
+        lock (_gate)
+        {
+            int rows = Tabs[_tab].items.Length;
+            if (_selected >= rows) _selected = d < 0 ? rows - 1 : _selected; // up leaves the bottom row for the list
+            else _selected = Math.Clamp(_selected + d, 0, rows);            // down from the last row: the first action
+            _dirty = true;
+        }
+    }
+
+    /// <summary>LB / RB, Tab / Shift+Tab, Q / E: the next or previous tab, wrapping round, starting at its first row.</summary>
+    private void SwitchTab(int d)
+    {
+        lock (_gate)
+        {
+            if (_togetherOpen) return;
+            _tab = ((_tab + d) % Tabs.Length + Tabs.Length) % Tabs.Length;
+            _selected = 0; _dirty = true;
+        }
+    }
+
+    // The selected item (call holding _gate), and whether it's in the bottom row.
+    private (Item item, bool bottom) Current()
+    {
+        var rows = Tabs[Math.Clamp(_tab, 0, Tabs.Length - 1)].items;
+        _selected = Math.Clamp(_selected, 0, rows.Length + Bottom.Length - 1);
+        return _selected < rows.Length ? (rows[_selected], false) : (Bottom[_selected - rows.Length], true);
+    }
+
+    private string ItemLabel(Item item) => item == Item.Disconnect && _together == TogetherMode.Guest ? "Leave" : Label(item);
+
+    /// <summary>The menu's tabs for this stream (tests, screenshots).</summary>
+    public IReadOnlyList<string> MenuTabs => Tabs.Select(t => TabNames[(int)t.tab]).ToArray();
+    /// <summary>The open tab's name.</summary>
+    public string MenuTab { get { lock (_gate) return TabNames[(int)Tabs[_tab].tab]; } }
+    /// <summary>The selected item's label ("Resume", "Disconnect"…).</summary>
+    public string MenuSelection { get { lock (_gate) return ItemLabel(Current().item); } }
+
+    private void ToggleMini()
+    {
+        lock (_gate) { _pendingMini = !_mini; _menu = false; _dirty = true; }
     }
 
     private void ToggleFullscreen()
@@ -477,8 +578,20 @@ public sealed class StreamOverlay : IVideoOverlay
     /// <summary>Change the selected item: left/right step a value (dir), A/Enter/tap steps forward and wraps.</summary>
     private void Change(int dir, bool activate = false)
     {
+        if (TogetherChange(dir, activate)) return;
         Item item;
-        lock (_gate) item = Layout[_selected].item;
+        lock (_gate)
+        {
+            (item, bool bottom) = Current();
+            if (bottom && !activate)
+            {
+                // Left / right walk along the bottom row's buttons (they have no value to change).
+                int rows = Tabs[_tab].items.Length;
+                _selected = rows + Math.Clamp(_selected - rows + dir, 0, Bottom.Length - 1);
+                _dirty = true;
+                return;
+            }
+        }
         static T Step<T>(T[] steps, T current, int dir, bool wrap) where T : IComparable<T>
         {
             int i = Array.FindIndex(steps, v => v.CompareTo(current) >= 0);
@@ -497,6 +610,10 @@ public sealed class StreamOverlay : IVideoOverlay
             case Item.Picture: Set(s => s with { Scaling = (VideoScaling)Cycle((int)s.Scaling, 3, dir) }); break;
             case Item.Clarity: Set(s => s with { Clarity = (ClarityLevel)(activate ? Cycle((int)s.Clarity, 4, 1) : Math.Clamp((int)s.Clarity + dir, 0, 3)) }); break;
             case Item.Fullscreen: ToggleFullscreen(); break;
+            case Item.MiniPlayer: if (activate) ToggleMini(); break;
+            case Item.ColorFilter:
+                Set(s => s with { ColorFilter = (ColorFilter)Cycle((int)s.ColorFilter, ColorFilterNames.Length, activate ? 1 : dir) });
+                break;
             case Item.Enhance: Set(s => s with { Enhance = !s.Enhance }); break;
             case Item.Stats: Set(NextStats(activate ? 1 : dir)); break;
             case Item.Volume:
@@ -531,6 +648,7 @@ public sealed class StreamOverlay : IVideoOverlay
             case Item.TurnOff: if (activate) { CloseMenu(); TurnOffRequested?.Invoke(); } break;
             case Item.MoreSettings: if (activate) { GoAway(); MoreSettingsRequested?.Invoke(); } break;
             case Item.Disconnect: if (activate) { CloseMenu(); DisconnectRequested?.Invoke(); } break;
+            case Item.PlayTogether: if (activate) OpenTogether(); break;
         }
     }
 
@@ -549,17 +667,17 @@ public sealed class StreamOverlay : IVideoOverlay
 
     public unsafe void Render(Span<byte> rgba, int stride)
     {
-        bool menu, fullscreen, bar, away;
+        bool menu, fullscreen, bar, away, mini;
         string? reconnecting, typing;
         string? toast;
         ToastKind toastKind;
-        int selected;
+        int selected, tab;
         LiveStats? st;
         (int w, int h) size;
         AppSettings s;
         lock (_gate)
         {
-            menu = _menu; fullscreen = _fullscreen; selected = _selected; st = _stats; size = _videoSize; s = _s; away = _away;
+            menu = _menu; fullscreen = _fullscreen; mini = _mini; selected = _selected; tab = _tab; st = _stats; size = _videoSize; s = _s; away = _away;
             if (_barUntilMs > 0 && Now >= _barUntilMs) _barUntilMs = 0;
             bar = _barUntilMs > 0;
             if (_toastUntilMs > 0 && Now >= _toastUntilMs) { _toastUntilMs = 0; _toast = null; }
@@ -575,7 +693,16 @@ public sealed class StreamOverlay : IVideoOverlay
             using var surface = SKSurface.Create(info, (IntPtr)px, stride);
             var c = surface.Canvas;
             c.Clear(SKColors.Transparent);
-            if (reconnecting is not null) DrawReconnecting(c, reconnecting);
+            if (!menu) lock (_gate) _togetherOpen = false;
+            if (mini)
+            {
+                // The mini player is about a quarter of the canvas across: just the message, enlarged to stay readable.
+                if (reconnecting is not null) DrawToast(c, "Reconnecting…", ToastKind.Warn, big: true);
+                else if (toast is not null) DrawToast(c, toast, toastKind, big: true);
+                c.Flush();
+                return;
+            }
+            if (reconnecting is not null) { if (GuestStatusShown) DrawGuestStatus(c); else DrawReconnecting(c, reconnecting); }
             else if (away) DrawAway(c);
             else
             {
@@ -585,7 +712,8 @@ public sealed class StreamOverlay : IVideoOverlay
                     else DrawHud(c, st, size);
                 }
                 if (bar && !menu) DrawBar(c);
-                if (menu) DrawMenu(c, st, size, selected, s, fullscreen);
+                if (menu && TogetherOpen) DrawTogether(c);
+                else if (menu) DrawMenu(c, st, size, tab, selected, s, fullscreen);
                 else if (typing is not null) DrawTyping(c, typing);
             }
             if (!menu && reconnecting is null && !away) DrawMic(c);
@@ -820,11 +948,22 @@ public sealed class StreamOverlay : IVideoOverlay
         c.DrawText(help, x + 36, y + 134, hint);
     }
 
-    private static void DrawToast(SKCanvas c, string text, ToastKind kind = ToastKind.Good)
+    private static void DrawToast(SKCanvas c, string text, ToastKind kind = ToastKind.Good, bool big = false)
     {
         using var f = Font(Bold, 26, Text);
         var color = kind switch { ToastKind.Bad => Bad, ToastKind.Warn => Warn, _ => Accent };
         float w = f.MeasureText(text) + 96, h = 64, x = (CanvasWidth - w) / 2, y = 48;
+        if (big)
+        {
+            float k = Math.Min(2.6f, (CanvasWidth - 80) / w);
+            c.Save();
+            c.Translate(CanvasWidth / 2f, 40);
+            c.Scale(k);
+            c.Translate(-CanvasWidth / 2f, -40);
+            DrawToast(c, text, kind);
+            c.Restore();
+            return;
+        }
         using (var bg = Fill(new SKColor(0x16, 0x1A, 0x20, 0xF0))) c.DrawRoundRect(x, y, w, h, h / 2, h / 2, bg);
         using (var edge = new SKPaint { Color = color.WithAlpha(0x70), IsStroke = true, StrokeWidth = 2, IsAntialias = true })
             c.DrawRoundRect(x, y, w, h, h / 2, h / 2, edge);
@@ -875,7 +1014,7 @@ public sealed class StreamOverlay : IVideoOverlay
 
     private static void Center(SKCanvas c, string text, float y, SKPaint p) => c.DrawText(text, (CanvasWidth - p.MeasureText(text)) / 2, y, p);
 
-    private void DrawMenu(SKCanvas c, LiveStats? st, (int w, int h) size, int selected, AppSettings s, bool fullscreen)
+    private void DrawMenu(SKCanvas c, LiveStats? st, (int w, int h) size, int tab, int selected, AppSettings s, bool fullscreen)
     {
         using (var dim = Fill(new SKColor(0, 0, 0, 0x8C))) c.DrawRect(0, 0, CanvasWidth, CanvasHeight, dim);
 
@@ -887,11 +1026,11 @@ public sealed class StreamOverlay : IVideoOverlay
 
         // ---- Left column: what's streaming and how it's going
         float lx = px + 52, lw = 520, y = py + 70;
-        using (var label = Font(Bold, 20, Accent)) c.DrawText("STREAMING", lx, y, label);
+        using (var label = Font(Bold, 20, Accent)) c.DrawText(_together == TogetherMode.Guest ? "PLAYING TOGETHER WITH" : "STREAMING", lx, y, label);
         using (var title = Font(Bold, 50, Text)) c.DrawText(Trim(_console, title, lw), lx, y + 62, title);
         var elapsed = DateTime.UtcNow - _started;
         using (var meta = Font(Regular, 24, Muted))
-            c.DrawText($"{s.Profile} · {(elapsed.TotalHours >= 1 ? elapsed.ToString(@"h\:mm\:ss") : elapsed.ToString(@"m\:ss"))}{(_route.Length > 0 ? " · " + _route : "")}", lx, y + 104, meta);
+            c.DrawText($"{(_together == TogetherMode.Guest ? GuestMeta : s.Profile.ToString())} · {(elapsed.TotalHours >= 1 ? elapsed.ToString(@"h\:mm\:ss") : elapsed.ToString(@"m\:ss"))}{(_route.Length > 0 ? " · " + _route : "")}", lx, y + 104, meta);
 
         y += 146;
         var tiles = new (string label, string value, string unit)[]
@@ -913,24 +1052,24 @@ public sealed class StreamOverlay : IVideoOverlay
             c.DrawText(tiles[i].value, tx + 22, ty + 98, v);
             c.DrawText(tiles[i].unit, tx + 22 + v.MeasureText(tiles[i].value) + 8, ty + 98, u);
         }
-        y += 2 * th + 16 + 50;
+        y += 2 * th + 16 + 48;
         CheckResult? tips;
         lock (_gate) tips = _tips;
         if (tips is { Level: not CheckLevel.Good })
         {
-            // Connection tips (from this stream's numbers): the worst two, with what to do.
-            using (var label = Font(Bold, 18, tips.Level == CheckLevel.Poor ? Bad : Warn)) c.DrawText("CONNECTION TIPS", lx, y, label);
+            // Connection tips (from this stream's numbers): the worst two, smaller than the stats so they inform without shouting.
+            using (var label = Font(Bold, 17, tips.Level == CheckLevel.Poor ? Bad : Warn)) c.DrawText("CONNECTION TIPS", lx, y, label);
             float ty = y + 36;
-            using var tt = Font(Bold, 23, Text);
-            using var td = Font(Regular, 20, Muted);
+            using var tt = Font(Bold, 21, Text);
+            using var td = Font(Regular, 19, Muted);
             foreach (var f in tips.Findings.Where(f => f.Level != CheckLevel.Good).Take(2))
             {
-                using (var dot = Fill(f.Level == CheckLevel.Poor ? Bad : Warn)) c.DrawCircle(lx + 7, ty - 8, 6, dot);
-                c.DrawText(Trim(f.Title, tt, lw - 24), lx + 24, ty, tt);
-                ty = DrawWrapped(c, f.Detail, lx + 24, ty + 30, lw - 24, td, 2) + 46;
+                using (var dot = Fill(f.Level == CheckLevel.Poor ? Bad : Warn)) c.DrawCircle(lx + 6, ty - 7, 5, dot);
+                c.DrawText(Trim(f.Title, tt, lw - 22), lx + 22, ty, tt);
+                ty = DrawWrapped(c, f.Detail, lx + 22, ty + 28, lw - 22, td, 2) + 40;
             }
-            if (ConnectionAdvisor.Suggestion(tips, s).Length > 0)
-                using (var hint = Font(Regular, 20, Accent)) c.DrawText("Suggested settings (right) applies a fix", lx + 24, ty - 6, hint);
+            if (Tabs.Any(t => t.items.Contains(Item.Tips)) && ConnectionAdvisor.Suggestion(tips, s).Length > 0)
+                using (var hint = Font(Regular, 19, Accent)) c.DrawText("Stream tab: Suggested settings applies a fix", lx + 22, ty - 4, hint);
         }
         else if (st is not null && st.Verdict.Length > 0)
         {
@@ -938,41 +1077,46 @@ public sealed class StreamOverlay : IVideoOverlay
             using var vt = Font(Regular, 23, Text);
             DrawWrapped(c, st.Verdict, lx + 28, y, lw - 28, vt, 2);
         }
-        using (var hint = Font(Regular, 21, Muted))
+        using (var key = Font(Bold, 20, Text.WithAlpha(0xC0)))
+        using (var hint = Font(Regular, 20, Muted))
         {
-            float hy = py + ph - 120;
-            c.DrawText("D-pad up / down   move", lx, hy, hint);
-            c.DrawText("Left / right or A   change", lx, hy + 32, hint);
-            c.DrawText("B   back to game   ·   tap outside to close", lx, hy + 64, hint);
+            // Two columns: the control, then what it does.
+            (string k, string what)[] hints = Tabs.Length < 2
+                ? [("D-pad", "move"), ("Left / right or A", "change"), ("B", "back to game")]
+                : [("LB / RB", "tabs"), ("D-pad", "move"), ("Left / right or A", "change"), ("B", "back to game")];
+            float kw = hints.Max(h => key.MeasureText(h.k)) + 22, hy = py + ph - 52 - (hints.Length - 1) * 30;
+            foreach (var (k, what) in hints)
+            {
+                c.DrawText(k, lx, hy, key);
+                c.DrawText(what, lx + kw, hy, hint);
+                hy += 30;
+            }
         }
 
-        // ---- Right column: settings
-        float rx = px + 640, rw = pw - 640 - 52, ry = py + 34, ih = Layout.Length switch { > 21 => 31, > 20 => 33, > 18 => 35, > 17 => 38, > 15 => 41, _ => 46 };
+        // ---- Right column: tabs, the open tab's rows, and the ways out along the bottom
+        float rx = px + 640, rw = pw - 640 - 52;
         using (var div = Fill(new SKColor(0x26, 0x2B, 0x33))) c.DrawRect(px + 610, py + 40, 1.5f, ph - 80, div);
-        for (int i = 0; i < Layout.Length; i++)
-        {
-            var (item, section) = Layout[i];
-            if (section is not null)
-            {
-                if (section.Length > 0)
-                {
-                    ry += 14;
-                    using var sl = Font(Bold, 17, Faint);
-                    c.DrawText(section, rx + 24, ry + 18, sl);
-                    ry += 30;
-                }
-                else ry += 20;
-            }
-            var r = new SKRect(rx, ry, rx + rw, ry + ih);
-            lock (_gate) _itemRects[i] = r;
-            bool sel = i == selected, danger = item is Item.Disconnect or Item.TurnOff;
-            if (sel)
-                using (var hi = Fill(danger ? new SKColor(0xFF, 0x6B, 0x6B, 0x33) : new SKColor(0x3D, 0xDC, 0x97, 0x2E)))
-                    c.DrawRoundRect(r, 16, 16, hi);
-            using var f = Font(Bold, 27, danger ? Bad : sel ? Accent : Text);
-            c.DrawText(Label(item), r.Left + 24, r.MidY + 9, f);
+        var tabRects = DrawTabBar(c, new SKRect(rx, py + 40, rx + rw, py + 104), tab);
 
-            string? value = item == Item.Tips ? TipsValue(s) : Value(item, s, fullscreen);
+        var rows = Tabs[Math.Clamp(tab, 0, Tabs.Length - 1)].items;
+        var rects = new List<SKRect>();
+        const float ih = 62, gap = 4;
+        float ry = py + 132;
+        using var sep = Fill(new SKColor(0x22, 0x27, 0x2F));
+        for (int i = 0; i < rows.Length; i++)
+        {
+            var item = rows[i];
+            var r = new SKRect(rx, ry, rx + rw, ry + ih);
+            rects.Add(r);
+            bool sel = i == selected;
+            if (sel)
+                using (var hi = Fill(new SKColor(0x3D, 0xDC, 0x97, 0x2E))) c.DrawRoundRect(r, 16, 16, hi);
+            else if (i + 1 < rows.Length && i + 1 != selected)
+                c.DrawRect(r.Left + 24, r.Bottom + gap / 2 - 0.5f, r.Width - 48, 1, sep); // hairline between rows
+            using var f = Font(Bold, 27, sel ? Accent : Text);
+            c.DrawText(ItemLabel(item), r.Left + 24, r.MidY + 9, f);
+
+            string? value = item == Item.Tips ? TipsValue(s) : item == Item.PlayTogether ? TogetherValue() : Value(item, s, fullscreen);
             if (value is not null)
             {
                 bool off = value is "Off" or "0%";
@@ -989,10 +1133,70 @@ public sealed class StreamOverlay : IVideoOverlay
                 }
                 else c.DrawText(value, right - vf.MeasureText(value), r.MidY + 9, vf);
             }
-            else if (item == Item.MoreSettings)
+            else if (item is Item.MoreSettings or Item.PlayTogether)
                 using (var cf = Font(Bold, 28, Muted)) c.DrawText("›", r.Right - 24 - cf.MeasureText("›"), r.MidY + 10, cf);
-            ry += ih + 3;
+            ry += ih + gap;
         }
+
+        // Bottom row: pill buttons in the danger colour, reached by going down past the last row.
+        const float bh = 64;
+        float by = py + ph - 40 - bh, bx = rx;
+        using (var line = Fill(new SKColor(0x26, 0x2B, 0x33))) c.DrawRect(rx, by - 28, rw, 1.5f, line);
+        using var bf = Font(Bold, 25, Text);
+        for (int i = 0; i < Bottom.Length; i++)
+        {
+            string label = ItemLabel(Bottom[i]);
+            var r = new SKRect(bx, by, bx + bf.MeasureText(label) + 72, by + bh);
+            DrawButton(c, r, label, selected == rows.Length + i, danger: true);
+            rects.Add(r);
+            bx = r.Right + 18;
+        }
+        lock (_gate)
+        {
+            _itemRects.Clear(); _itemRects.AddRange(rects);
+            _tabRects.Clear(); _tabRects.AddRange(tabRects);
+        }
+    }
+
+    /// <summary>The tab bar: LB and RB badges at the ends, the tabs between on a track, the open one lit in the accent.</summary>
+    private List<SKRect> DrawTabBar(SKCanvas c, SKRect bar, int tab)
+    {
+        var rects = new List<SKRect>();
+        bool hints = Tabs.Length > 1;
+        float badgeW = 54, badgeH = 34, inset = hints ? badgeW + 16 : 0;
+        if (hints)
+        {
+            using var bf = Font(Bold, 17, Text);
+            using var bg = Fill(new SKColor(0x40, 0x48, 0x55));
+            foreach (var (bx, text) in new[] { (bar.Left, "LB"), (bar.Right - badgeW, "RB") })
+            {
+                var r = new SKRect(bx, bar.MidY - badgeH / 2, bx + badgeW, bar.MidY + badgeH / 2);
+                c.DrawRoundRect(r, 12, 12, bg);
+                c.DrawText(text, r.MidX - bf.MeasureText(text) / 2, r.MidY + 6, bf);
+            }
+        }
+        var track = new SKRect(bar.Left + inset, bar.Top, bar.Right - inset, bar.Bottom);
+        using (var t = Fill(Tile)) c.DrawRoundRect(track, track.Height / 2, track.Height / 2, t);
+        using var f = Font(Bold, 24, Text);
+        // Each tab is its text plus an equal share of the room left, so long names ("Sound & controls") fit.
+        var names = Tabs.Select(t => TabNames[(int)t.tab]).ToArray();
+        float pad = 6, extra = (track.Width - pad * 2 - names.Sum(n => f.MeasureText(n))) / names.Length, x = track.Left + pad;
+        for (int i = 0; i < names.Length; i++)
+        {
+            var r = new SKRect(x, track.Top + pad, x + f.MeasureText(names[i]) + extra, track.Bottom - pad);
+            rects.Add(r);
+            bool on = i == tab;
+            if (on)
+            {
+                using (var hi = Fill(Accent.WithAlpha(0x40))) c.DrawRoundRect(r, r.Height / 2, r.Height / 2, hi);
+                using var ring = new SKPaint { Color = Accent, IsStroke = true, StrokeWidth = 2.5f, IsAntialias = true };
+                c.DrawRoundRect(r, r.Height / 2, r.Height / 2, ring);
+            }
+            f.Color = on ? Accent : Muted;
+            c.DrawText(names[i], r.MidX - f.MeasureText(names[i]) / 2, r.MidY + 8, f);
+            x = r.Right;
+        }
+        return rects;
     }
 
     private static string Label(Item item) => item switch
@@ -1004,6 +1208,8 @@ public sealed class StreamOverlay : IVideoOverlay
         Item.Picture => "Picture",
         Item.Clarity => "Clarity boost",
         Item.Fullscreen => "Full screen",
+        Item.MiniPlayer => "Mini player (F8)",
+        Item.ColorFilter => "Colour filter",
         Item.Enhance => "Enhance (sharper when enlarged)",
         Item.Stats => "Stats on screen",
         Item.Volume => "Volume",
@@ -1018,10 +1224,11 @@ public sealed class StreamOverlay : IVideoOverlay
         Item.Type => "Type on the console",
         Item.TurnOff => "End and turn off Xbox",
         Item.MoreSettings => "More settings…",
+        Item.PlayTogether => "Play together…",
         _ => "Disconnect",
     };
 
-    private static bool Adjustable(Item item) => item is Item.Profile or Item.MaxBitrate or Item.Picture or Item.Clarity
+    private static bool Adjustable(Item item) => item is Item.Profile or Item.MaxBitrate or Item.Picture or Item.Clarity or Item.ColorFilter
         or Item.Volume or Item.Rumble or Item.Stats or Item.MouseSpeed;
 
     /// <summary>Stats readout: Off → Simple → Detailed → Off (dir -1 goes the other way).</summary>
@@ -1047,6 +1254,7 @@ public sealed class StreamOverlay : IVideoOverlay
         Item.Picture => s.Scaling switch { VideoScaling.Fill => "Fill", VideoScaling.Stretch => "Stretch", _ => "Fit" },
         Item.Clarity => ClarityNames[Math.Clamp((int)s.Clarity, 0, 3)],
         Item.Fullscreen => fullscreen ? "On" : "Off",
+        Item.ColorFilter => ColorFilterNames[Math.Clamp((int)s.ColorFilter, 0, ColorFilterNames.Length - 1)],
         Item.Enhance => s.Enhance ? "On" : "Off",
         Item.Stats => !s.ShowStatsHud ? "Off" : s.StatsDetailed ? "Detailed" : "Simple",
         Item.Volume => s.Audio ? $"{s.Volume}%" : "Off",

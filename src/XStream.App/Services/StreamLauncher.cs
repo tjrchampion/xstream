@@ -21,6 +21,24 @@ public sealed class StreamLauncher
     private bool _standbyReady;
     private bool _stopRequested;
 
+    // The launcher's own record of starting streams (which process, what it said, how it exited): a start that
+    // fails before the session's log opens leaves nothing else behind. logs/launcher.log, trimmed at 2 MB.
+    private static readonly object LogGate = new();
+    private static readonly string LogPath = Path.Combine(XStream.Core.Config.AppPaths.Logs, "launcher.log");
+    private static void Trace(string m)
+    {
+        lock (LogGate)
+        {
+            try
+            {
+                if (File.Exists(LogPath) && new FileInfo(LogPath).Length > 2_000_000) File.Delete(LogPath);
+                File.AppendAllText(LogPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {m}\n");
+            }
+            catch { }
+        }
+    }
+    private static string Id(Process? p) { try { return p is null ? "none" : $"pid {p.Id}"; } catch { return "?"; } }
+
     public event Action<PlayerStage, string>? StageChanged;
     public event Action<LiveStats>? Stats;
     public event Action<SessionInfo>? Info;
@@ -87,7 +105,8 @@ public sealed class StreamLauncher
         try
         {
             _standbyReady = false;
-            _standby = Spawn(PlayerHost.StandbyArg, null);
+            _standby = Spawn(PlayerHost.StandbyArg);
+            Trace($"Standby spawned {Id(_standby)}");
         }
         catch { _standby = null; }
     }
@@ -105,6 +124,7 @@ public sealed class StreamLauncher
 
     public void Start(string serverId, string consoleName)
     {
+        Trace($"Start {consoleName}: current {Id(_proc)} running={Running}, standby {Id(_standby)} ready={_standbyReady} exited={(_standby is { } sb ? sb.HasExited.ToString() : "-")}");
         if (Running) throw new InvalidOperationException("A stream is already running.");
         _stopRequested = false;
         string place = Placement?.Invoke()?.ToString() ?? "";
@@ -116,10 +136,12 @@ public sealed class StreamLauncher
             AllowToFront(_proc);
             ArmWatchdog();
             Log?.Invoke("Using the warmed-up stream process");
+            Trace($"  using standby {Id(_proc)}");
             return;
         }
         DropStandby();
-        _proc = Spawn(serverId, consoleName, place);
+        _proc = place.Length > 0 ? Spawn(serverId, consoleName, place) : Spawn(serverId, consoleName);
+        Trace($"  spawned {Id(_proc)}");
         AllowToFront(_proc);
         ArmWatchdog();
     }
@@ -150,7 +172,31 @@ public sealed class StreamLauncher
         });
     }
 
-    private Process Spawn(string serverId, string? consoleName, string place = "")
+    /// <summary>
+    /// Play together: watch a friend's stream in a child process (no sign-in needed). The warmed-up standby child is
+    /// kept for the next console stream.
+    /// </summary>
+    public void StartGuest(string invite, string name)
+    {
+        if (Running) throw new InvalidOperationException("A stream is already running.");
+        _stopRequested = false;
+        string place = Placement?.Invoke()?.ToString() ?? "";
+        _proc = place.Length > 0 ? Spawn(PlayerHost.JoinArg, invite, name, place) : Spawn(PlayerHost.JoinArg, invite, name);
+        AllowToFront(_proc);
+        ArmWatchdog();
+    }
+
+    /// <summary>Play together: who's in (host or guest), the codes to show. For the Play together page and Discord's party size.</summary>
+    public event Action<TogetherStatus>? TogetherChanged;
+
+    // Play together from the launcher's page: the stream does these exactly as if its own panel had been used, and
+    // answers with a together event either way. False if there's no stream to tell.
+    public bool ShareTogether() => Send(_proc, new TogetherCommand(TogetherCommandKind.Share).ToLine());
+    public bool StopSharing() => Send(_proc, new TogetherCommand(TogetherCommandKind.Stop).ToLine());
+    public bool RemoveGuest(int slot) => Send(_proc, new TogetherCommand(TogetherCommandKind.Remove, slot).ToLine());
+    public bool AcceptReply(string code) => Send(_proc, new TogetherCommand(TogetherCommandKind.Reply, Code: code).ToLine());
+
+    private Process Spawn(params string[] childArgs)
     {
         var psi = new ProcessStartInfo
         {
@@ -163,18 +209,22 @@ public sealed class StreamLauncher
         if (Path.GetFileNameWithoutExtension(self).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
             psi.ArgumentList.Add(Assembly.GetEntryAssembly()!.Location);
         psi.ArgumentList.Add(StreamLauncherArgs.ChildCommand);
-        psi.ArgumentList.Add(serverId);
-        if (consoleName is not null) psi.ArgumentList.Add(consoleName);
-        if (consoleName is not null && place.Length > 0) psi.ArgumentList.Add(place);
+        foreach (var a in childArgs) psi.ArgumentList.Add(a);
 
         var p = new Process { StartInfo = psi, EnableRaisingEvents = true };
         // Only the session process talks to the UI; a standby child only says when it's ready.
         p.OutputDataReceived += (_, e) => OnLine(p, e.Data);
-        p.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data) && p == _proc) Post(() => Log?.Invoke(e.Data)); };
+        p.ErrorDataReceived += (_, e) =>
+        {
+            if (string.IsNullOrWhiteSpace(e.Data)) return;
+            Trace($"  [{Id(p)} stderr] {e.Data}");
+            if (p == _proc) Post(() => Log?.Invoke(e.Data));
+        };
         p.Exited += (_, _) =>
         {
             int code = -1;
             try { p.WaitForExit(); code = p.ExitCode; } catch { }
+            Trace($"  {Id(p)} exited with {code} ({(p == _standby ? "standby" : p == _proc ? "session" : "old")}{(_stopRequested ? ", stop requested" : "")})");
             Post(() =>
             {
                 if (p == _standby) { _standby = null; _standbyReady = false; return; }
@@ -204,7 +254,8 @@ public sealed class StreamLauncher
     {
         if (line is null) return;
         var e = PlayerEvent.TryParse(line);
-        if (e?.Type == "ready") { Post(() => { if (from == _standby) _standbyReady = true; }); return; }
+        if (e?.Type == "ready") { Trace($"  {Id(from)} ready"); Post(() => { if (from == _standby) _standbyReady = true; }); return; }
+        if (e?.Type is "stage" or "summary" || e is null) Trace($"  [{Id(from)}] {(e is null ? line : e.Type == "stage" ? $"{e.Stage}: {e.Message}" : "summary")}");
         Post(() =>
         {
             if (from != _proc) return;
@@ -220,6 +271,7 @@ public sealed class StreamLauncher
                 case "returned": ReturnedToGame?.Invoke(); break;
                 case "heartbeat": OnHeartbeat(e.Message); break;
                 case "window" when WindowPlace.Parse(e.Message) is { } w: WindowClosedAt?.Invoke(w); break;
+                case "together" when e.Together is not null: TogetherChanged?.Invoke(e.Together); break;
             }
         });
     }

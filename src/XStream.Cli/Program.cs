@@ -23,6 +23,12 @@ using XStream.WebRtc;
 //   xstream video-test [file.h264]     decode + window test (built-in test pattern if no file)
 //   video-test --screenshot            saves one picture to Pictures/XStream after 2 s (checks the screenshot path)
 //   video-test --kbm                   keyboard & mouse as a controller: click to capture, prints the pad it makes (sends nothing)
+//   xstream together-host [file.h264] [--loss N] [--panel]   Play together with no console (prints the invite and guests' input)
+//   xstream together-join <invite|@file> [--loss N]          join it (or a real stream) as a guest
+//   video-test --pattern colours       colour-blindness test card (digits on confusable backgrounds) instead of plain colours
+//   video-test --color-filter <mode>   off | deuteranopia | protanopia | tritanopia (--color-strength 0-1, default 1)
+//   video-test --mini                  start as the mini player (F8 toggles it; double-click it to go back)
+//   video-test --screenshot-to <file>  like --screenshot, saved to that file
 //   play/video-test options: --windowed  --headless (no video)  --software (no GPU decode)  --vsync
 
 var dir = AppPaths.Root;
@@ -148,6 +154,14 @@ try
                 _ = Task.Delay(TimeSpan.FromSeconds(double.Parse(secs["--seconds=".Length..], System.Globalization.CultureInfo.InvariantCulture))).ContinueWith(_ => player.Stop());
             return player.Run(options, client, () => auth.GetTransferTokenAsync(tokens));
         }
+        case "together-host":
+            // Play together with no console: the test pattern (or an .h264 file) shared through a real host.
+            return TogetherHarness.Host(args);
+        case "together-invite":
+            return TogetherHarness.MakeInvite(args);
+        case "together-join":
+            // The real guest player, joining a together-host (or a real stream's invite).
+            return TogetherHarness.Join(args);
         case "mics":
             // The microphones Vexel can use (Settings > Sound and controls > Which microphone).
             foreach (var m in XStream.Core.Audio.Microphone.Devices()) Console.WriteLine(m);
@@ -160,8 +174,13 @@ try
         {
             // Plays an H.264 file (or a built-in test pattern) through the real receive path:
             // RTP packets -> frame assembler -> decoder -> window, paced at 60 fps. No console needed.
-            var file = args.Skip(1).Where((a, k) => !a.StartsWith("--") && args[k] is not ("--size" or "--clarity" or "--enhance" or "--overlay")).FirstOrDefault();
-            var stream = file is not null ? File.ReadAllBytes(file) : TestPattern.Stream(80, 45, 600, 60); // 1280x720, 10 s
+            string[] valued = ["--size", "--clarity", "--enhance", "--overlay", "--together", "--pattern", "--color-filter", "--color-strength", "--screenshot-to", "--seconds"];
+            var file = args.Skip(1).Where((a, k) => !a.StartsWith("--") && !valued.Contains(args[k])).FirstOrDefault();
+            string? Opt(string name) => args.SkipWhile(a => a != name).Skip(1).FirstOrDefault();
+            int testFrames = Opt("--seconds") is { } ts0 ? (int)(double.Parse(ts0, System.Globalization.CultureInfo.InvariantCulture) * 60) : 600;
+            var stream = file is not null ? File.ReadAllBytes(file)
+                : Opt("--pattern") is "colours" or "colors" ? TestPattern.ColourPatches(testFrames)
+                : TestPattern.Stream(80, 45, testFrames, 60); // 1280x720, 10 s
             var sw = System.Diagnostics.Stopwatch.StartNew();
             double Now() => sw.Elapsed.TotalMilliseconds;
             var mailbox = new FrameMailbox();
@@ -172,23 +191,51 @@ try
             if (args.SkipWhile(a => a != "--clarity").Skip(1).FirstOrDefault() is { } cl) window.Sharpen = int.Parse(cl);
             // --enhance 0|1: edge-aware upscaling when the picture is enlarged (on by default).
             if (args.SkipWhile(a => a != "--enhance").Skip(1).FirstOrDefault() is { } en) window.Enhance = en != "0";
-            // --overlay stats|detailed|menu: draw the stream overlay with made-up numbers (checks its layout).
+            // --color-filter off|deuteranopia|protanopia|tritanopia (or d/p/t), --color-strength 0-1: the colour-blind filter.
+            if (Opt("--color-filter") is { } cf)
+                window.ColorFilter = cf.ToLowerInvariant() switch
+                {
+                    "d" or "deutan" or "deuteranopia" => ColorFilter.Deuteranopia, "p" or "protan" or "protanopia" => ColorFilter.Protanopia,
+                    "t" or "tritan" or "tritanopia" => ColorFilter.Tritanopia, _ => ColorFilter.Off,
+                };
+            if (Opt("--color-strength") is { } cs) window.ColorFilterStrength = double.Parse(cs, System.Globalization.CultureInfo.InvariantCulture);
+            if (window.ColorFilter != ColorFilter.Off) Console.WriteLine($"Colour filter: {window.ColorFilter} at {window.ColorFilterStrength:P0}");
+            // --mini: start as the mini player. F8 toggles it (without --overlay; with it the stream menu's F8 does).
+            if (args.Contains("--mini")) window.FirstPicture += () => window.SetMiniPlayer(true);
+            // --overlay stats|detailed|menu|mini: draw the stream overlay with made-up numbers (checks its layout).
+            // menu:<tab> opens on that tab (menu:picture, menu:sound, menu:stream); add :bottom to select Disconnect.
             StreamOverlay? demoOverlay = null;
             var rnd = new Random(1);
             if (args.SkipWhile(a => a != "--overlay").Skip(1).FirstOrDefault() is { } ov)
             {
-                var demo = AppSettings.Load() with { ShowStatsHud = ov != "menu", StatsDetailed = ov == "detailed" };
-                demoOverlay = new StreamOverlay("Xbox Series X", demo, false, consoleControl: true, clips: true);
+                var ovParts = ov.Split(':');
+                ov = ovParts[0];
+                var demo = AppSettings.Load() with { ShowStatsHud = ov is not ("menu" or "mini"), StatsDetailed = ov == "detailed" };
+                // --together host|guest: the Play together host's menu, or a guest's shorter one.
+                var together = Opt("--together") switch { "host" => TogetherMode.Host, "guest" => TogetherMode.Guest, _ => TogetherMode.None };
+                bool guest = together == TogetherMode.Guest;
+                demoOverlay = new StreamOverlay("Xbox Series X", demo, false, consoleControl: !guest, clips: !guest, together: together);
                 demoOverlay.SetRoute("Home network");
                 window.Overlay = demoOverlay;
                 window.KeyDown = demoOverlay.OnKey;
-                if (ov == "menu") demoOverlay.OnKey(0x1B);
+                if (ov == "menu")
+                {
+                    // Through the real keys: Esc opens, E steps to the tab, Down walks to the bottom row.
+                    demoOverlay.OnKey(0x1B);
+                    if (ovParts.Skip(1).FirstOrDefault(p => p != "bottom") is { } want)
+                        for (int t = 0; t < demoOverlay.MenuTabs.Count && !demoOverlay.MenuTab.StartsWith(want, StringComparison.OrdinalIgnoreCase); t++)
+                            demoOverlay.OnKey('e');
+                    if (ovParts.Contains("bottom"))
+                        for (int d = 0; d < 20; d++) demoOverlay.OnKey(0x40000051);
+                }
                 // Sample connection tips and a muted mic, to check how they're drawn.
                 demoOverlay.SetTips(XStream.Core.Diagnostics.ConnectionCheck.Analyze(
                     Enumerable.Range(0, 20).Select(_ => new XStream.Core.Diagnostics.CheckSample(22, 50, 2.5, 9, 16)).ToList(),
                     new XStream.Core.Diagnostics.LocalLink { Kind = "Wi-Fi", BandGHz = 2.4, SignalPct = 60 }, false, "Home network", 0));
                 demoOverlay.SetMic(true, true, false, false);
             }
+            if (demoOverlay is null)
+                window.KeyDown = sym => { if (sym != 0x40000041) return false; window.SetMiniPlayer(!window.IsMiniPlayer); Console.WriteLine(window.IsMiniPlayer ? "Mini player" : "Normal size"); return true; };
             window.FirstPicture += () => Console.WriteLine($"First picture shown after {Now():F0} ms (window {(args.Contains("--hidden") ? "was hidden until now" : "was already visible")})");
             var buffer = new PlayoutBuffer<AccessUnit> { TargetDelayMs = 0 };
             using var pipe = new VideoPipeline(buffer, new H264Decoder(!args.Contains("--software")), mailbox, Now);
@@ -203,10 +250,11 @@ try
                 var kbm = KeyboardMouseInput.FromSettings(settings);
                 kbm.Mode = KeyboardMouseMode.On;
                 bool menu = false;
-                kbm.Blocked = () => menu;
+                kbm.Blocked = () => menu || window.IsMiniPlayer;
                 kbm.Hint += () => Console.WriteLine("Keyboard & mouse ready: click the window to capture. F1 toggles a pretend menu, Esc quits.");
                 window.Input = kbm;
-                window.KeyDown = sym => { if (sym == 0x4000003A) { menu = !menu; Console.WriteLine(menu ? "menu open (mouse freed)" : "menu closed"); return true; } return false; };
+                var miniKey = window.KeyDown;
+                window.KeyDown = sym => { if (sym == 0x4000003A) { menu = !menu; Console.WriteLine(menu ? "menu open (mouse freed)" : "menu closed"); return true; } return miniKey?.Invoke(sym) ?? false; };
                 GamepadState lastPad = default; double lastPrintMs = 0;
                 var none = new NoPads();
                 kbmPump = new InputPump(none, new InputOptions { KeyboardMouse = kbm }, f =>
@@ -222,26 +270,44 @@ try
             var packets = H264Packetizer.Packetize(H264Packetizer.AccessUnits(stream)).ToList();
             var depack = new H264Depacketizer();
             int i = 0; double next = Now(), lastPrint = Now();
-            bool shot = !args.Contains("--screenshot"); // --screenshot: save one picture after 2 s, then quit
+            string? shotTo = Opt("--screenshot-to");
+            bool shot = !args.Contains("--screenshot") && shotTo is null; // --screenshot: save one picture after 2 s, then quit
             while (!window.QuitRequested && (i < packets.Count || Now() < next + 200))
             {
-                if (!shot && Now() > (demoOverlay is null ? 2000 : 9000))
+                // --overlay mini: press F8 after 2 s (the real menu path), screenshot while its message shows.
+                bool miniDemo = args.SkipWhile(a => a != "--overlay").Skip(1).FirstOrDefault() == "mini";
+                if (miniDemo && !window.IsMiniPlayer && Now() > 2000 && Now() < 2100) demoOverlay?.OnKey(0x40000041);
+                if (!shot && Now() > (demoOverlay is null ? 2000 : miniDemo ? 3500 : 9000))
                 {
                     shot = true;
                     window.RequestScreenshot((px, w, h) =>
                     {
-                        if (demoOverlay is not null && w == StreamOverlay.CanvasWidth && h == StreamOverlay.CanvasHeight)
+                        if (demoOverlay is not null && w * StreamOverlay.CanvasHeight == h * StreamOverlay.CanvasWidth && StreamOverlay.CanvasWidth % w == 0)
                         {
-                            // The screenshot is the picture only: blend the overlay on top so its layout can be checked.
-                            var ovl = new byte[w * h * 4];
-                            demoOverlay.Render(ovl, w * 4);
-                            for (int q = 0; q < ovl.Length; q += 4)
-                            {
-                                int al = ovl[q + 3];
-                                for (int ch = 0; ch < 3; ch++) px[q + ch] = (byte)((ovl[q + ch] * al + px[q + ch] * (255 - al)) / 255);
-                            }
+                            // The screenshot is the picture only: blend the overlay on top so its layout can be checked
+                            // (averaged down when the window is smaller than the overlay's canvas, as in the mini player).
+                            int cw = StreamOverlay.CanvasWidth, k = cw / w;
+                            var ovl = new byte[cw * StreamOverlay.CanvasHeight * 4];
+                            demoOverlay.Render(ovl, cw * 4);
+                            for (int y = 0; y < h; y++)
+                                for (int x = 0; x < w; x++)
+                                {
+                                    double[] sum = new double[4];
+                                    for (int dy = 0; dy < k; dy++)
+                                        for (int dx = 0; dx < k; dx++)
+                                        {
+                                            int o = ((y * k + dy) * cw + x * k + dx) * 4;
+                                            double a0 = ovl[o + 3] / 255.0;
+                                            for (int ch = 0; ch < 3; ch++) sum[ch] += ovl[o + ch] * a0;
+                                            sum[3] += a0;
+                                        }
+                                    int q = (y * w + x) * 4;
+                                    double al = sum[3] / (k * k);
+                                    for (int ch = 0; ch < 3; ch++) px[q + ch] = (byte)Math.Round(sum[ch] / (k * k) + px[q + ch] * (1 - al));
+                                }
                         }
-                        Console.WriteLine($"Screenshot {w}x{h}: {Screenshots.Save(px, w, h, "video test")}");
+                        if (shotTo is not null) Screenshots.SaveTo(px, w, h, shotTo);
+                        Console.WriteLine($"Screenshot {w}x{h}: {shotTo ?? Screenshots.Save(px, w, h, "video test")}");
                         Environment.Exit(0);
                     });
                 }
@@ -254,6 +320,7 @@ try
                     next += 1000.0 / 60;
                 }
                 window.PumpOnce(1);
+                demoOverlay?.Apply(window); // window changes the overlay asks for (F8 mini player, F11)
                 if (Now() - lastPrint >= 1000)
                 {
                     lastPrint = Now();

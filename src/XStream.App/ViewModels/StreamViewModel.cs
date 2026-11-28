@@ -39,7 +39,8 @@ public sealed partial class StreamViewModel : ObservableObject
     ];
     public ObservableCollection<string> LogLines { get; } = [];
 
-    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasPanel), nameof(IsConnecting), nameof(ShowLoader), nameof(ShowStartScreen), nameof(ShowSummary), nameof(HasHero))] public partial bool IsRunning { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasPanel), nameof(IsConnecting), nameof(ShowLoader), nameof(ShowStartScreen), nameof(ShowSummary), nameof(HasHero),
+        nameof(CanShare), nameof(IsSharing), nameof(ShareNotReady), nameof(GuestText))] public partial bool IsRunning { get; set; }
     [ObservableProperty, NotifyPropertyChangedFor(nameof(HasPanel), nameof(ShowSummary), nameof(HasHero))] public partial bool HasResult { get; set; }
     [ObservableProperty, NotifyPropertyChangedFor(nameof(IsConnecting), nameof(ShowLoader), nameof(ShowStartScreen), nameof(HasHero))] public partial bool IsStreaming { get; set; }
     [ObservableProperty] public partial bool IsReconnecting { get; set; }
@@ -160,11 +161,154 @@ public sealed partial class StreamViewModel : ObservableObject
         launcher.OpenSettingsRequested += () => IsAway = true;
         launcher.ReturnedToGame += () => IsAway = false;
         launcher.Hung += reason => Error = reason;
+        launcher.TogetherChanged += OnTogether;
     }
+
+    // ---- Play together ------------------------------------------------------------------------------------
+    /// <summary>Watching a friend's stream (Play together) rather than streaming a console.</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(TargetLabel), nameof(FirstPhaseLabel))] public partial bool IsGuest { get; set; }
+    /// <summary>Guest: the code to send the host (their router needs both sides to connect at once). Empty when not needed.</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasReplyCode))] public partial string ReplyCode { get; set; } = "";
+    public bool HasReplyCode => ReplyCode.Length > 0;
+    /// <summary>Everyone playing together on this stream, the host included (0: not sharing). Discord's party size.</summary>
+    [ObservableProperty] public partial int TogetherPlayers { get; set; }
+    /// <summary>The latest Play together status (who's in, the invite): the Play together page shows it.</summary>
+    [ObservableProperty] public partial TogetherStatus? Together { get; set; }
+    /// <summary>Raised whenever the number of players together changes (for Discord's party size).</summary>
+    public event Action<int>? TogetherPlayersChanged;
+    partial void OnTogetherPlayersChanged(int value) => TogetherPlayersChanged?.Invoke(value);
+    private (string invite, string name)? _lastJoin;
+
+    // ---- Play together host controls (the Play together page; the stream menu's panel does the same in the stream) ----
+    /// <summary>This stream can be shared now: it's a console or cloud stream of ours and its share is ready (it said so).</summary>
+    public bool CanShare => IsRunning && !IsGuest && Together is { Role: "host" };
+    /// <summary>Sharing this stream (anyone may or may not have joined yet).</summary>
+    public bool IsSharing => CanShare && Together is { Players: > 0 };
+    /// <summary>Running, ours, but the share isn't ready yet (still connecting).</summary>
+    public bool ShareNotReady => IsRunning && !IsGuest && Together is null;
+    /// <summary>Share pressed, waiting for the stream to say it started.</summary>
+    [ObservableProperty] public partial bool SharePending { get; set; }
+    /// <summary>Guest: "You're in Alex's stream as Player 2" (or still joining).</summary>
+    public string GuestText => Together is { Role: "guest" } g
+        ? g.Slot >= 0 ? $"You're in {g.HostName ?? "your friend"}'s stream as Player {g.Slot + 1}" : $"Joining {g.HostName ?? "your friend"}'s stream…"
+        : IsGuest && IsRunning ? "Joining your friend's stream…" : "";
+    public event Action? TogetherPageRequested;
+    private bool _demoTogether;
+
+    partial void OnTogetherChanged(TogetherStatus? value) => NotifyShare();
+    partial void OnIsGuestChanged(bool value) => NotifyShare();
+    private void NotifyShare()
+    {
+        OnPropertyChanged(nameof(CanShare)); OnPropertyChanged(nameof(IsSharing)); OnPropertyChanged(nameof(ShareNotReady)); OnPropertyChanged(nameof(GuestText));
+    }
+
+    [RelayCommand]
+    private void ShareTogether()
+    {
+        if (!CanShare || IsSharing) return;
+        if (_demoTogether) { DemoStatus(sharing: true, guests: []); return; }
+        SharePending = _launcher.ShareTogether();
+    }
+
+    [RelayCommand]
+    private void StopSharing()
+    {
+        if (!IsSharing) return;
+        if (_demoTogether) { DemoStatus(sharing: false, guests: []); return; }
+        _launcher.StopSharing();
+    }
+
+    [RelayCommand]
+    private void RemoveGuest(int slot)
+    {
+        if (!IsSharing || slot is < 1 or > 3) return;
+        if (_demoTogether) { DemoStatus(sharing: true, guests: Together!.People?.Where(p => p.Slot != slot).ToArray() ?? []); return; }
+        _launcher.RemoveGuest(slot);
+    }
+
+    /// <summary>A guest's reply code (already checked by the page). The stream's answer comes back in the status note.</summary>
+    public void AcceptReply(string code)
+    {
+        if (!IsSharing) return;
+        if (_demoTogether) { Together = Together! with { Note = "Reply code accepted: connecting to your friend…", NoteIsProblem = false }; return; }
+        _launcher.AcceptReply(code);
+    }
+
+    [RelayCommand] private void OpenTogether() => TogetherPageRequested?.Invoke();
+
+    /// <summary>
+    /// XSTREAM_DEMO_TOGETHER=ready|host|guest (testing): the Play together page with a pretend stream, not shared yet, shared
+    /// with Sam as Player 2, or watching Alex's. The page's buttons act on the pretend status; nothing is sent anywhere.
+    /// </summary>
+    public void DemoTogether(string mode)
+    {
+        _demoTogether = true;
+        IsCloud = false;
+        IsGuest = mode == "guest";
+        ConsoleName = IsGuest ? "Alex's stream" : "Living room Xbox";
+        ProfileText = IsGuest ? "Play together" : "Balanced";
+        Elapsed = "12:48";
+        IsRunning = true;
+        IsStreaming = true;
+        if (IsGuest) Together = new TogetherStatus { Role = "guest", HostName = "Alex", Slot = 1, Players = 2 };
+        else DemoStatus(sharing: mode == "host", guests: mode == "host" ? [new TogetherPlayer { Slot = 1, Name = "Sam", PingMs = 23, LossPct = 0.2 }] : []);
+    }
+
+    private void DemoStatus(bool sharing, TogetherPlayer[] guests)
+    {
+        Together = new TogetherStatus
+        {
+            Role = "host", Players = sharing ? guests.Length + 1 : 0, Guests = guests.Select(g => g.Name).ToArray(), People = guests,
+            Invite = sharing ? "VX1-06FW5V588ZF27SQFC2S7311GYW9HMWDV4PT0PXBQEJZ4ZERKH6PF4G1V3XT04060N123VJ270HZG0001S13R6E0" : null,
+            CapMbps = sharing && guests.Length > 0 ? 15 : null,
+        };
+        TogetherPlayers = Together.Players;
+    }
+
+    private void OnTogether(TogetherStatus t)
+    {
+        SharePending = false;
+        Together = t;
+        TogetherPlayers = t.Players;
+        if (t.Role == "guest")
+        {
+            ReplyCode = t.ReplyCode ?? "";
+            if (t.HostName is { Length: > 0 } h) ConsoleName = $"{h}'s stream";
+        }
+    }
+
+    /// <summary>Join a friend's stream with their invite (no sign-in needed).</summary>
+    public void StartGuest(string invite, string name)
+    {
+        if (IsRunning) return;
+        _lastJoin = (invite, name);
+        IsCloud = false;
+        IsGuest = true;
+        ReplyCode = "";
+        Begin("", "your friend's stream", ProfileProvider(), launch: () => _launcher.StartGuest(invite, name));
+        ProfileText = "Play together";
+        Tip = GuestTips[Random.Shared.Next(GuestTips.Length)];
+    }
+
+    [RelayCommand]
+    private async Task CopyReplyCode()
+    {
+        if (ReplyCode.Length == 0) return;
+        await Platform.CopyAsync(ReplyCode);
+        AddLog("Reply code copied");
+    }
+
+    private static readonly string[] GuestTips =
+    [
+        "Your controller becomes the next player on your friend's console.",
+        "Hold {view} + {menu} for your own menu: volume, stats, full screen, Leave.",
+        "Your friend's upload carries the picture: it's capped at about 15 Mbps while you play together.",
+    ];
 
     public void Start(ConsoleItemViewModel console, StreamProfile profile)
     {
         IsCloud = false;
+        IsGuest = false;
         Begin(console.ServerId, console.Name, profile, console.WirelessWarning);
     }
 
@@ -233,6 +377,7 @@ public sealed partial class StreamViewModel : ObservableObject
     {
         if (IsRunning) return;
         IsCloud = true;
+        IsGuest = false;
         if (heroArt is not null) Art = [new GameArt(game.Name, heroArt, game.TitleId, game.HeroUrl ?? ""), .. Art.Where(a => a.Path != heroArt)];
         Begin(PlayerHost.CloudPrefix + game.TitleId, game.Name, ProfileProvider());
     }
@@ -242,12 +387,12 @@ public sealed partial class StreamViewModel : ObservableObject
 
     /// <summary>Streaming a cloud game (vs one of your consoles): changes the connecting screen's wording.</summary>
     [ObservableProperty, NotifyPropertyChangedFor(nameof(TargetLabel))] public partial bool IsCloud { get; set; }
-    public string TargetLabel => IsCloud ? "Starting" : "Connecting to";
+    public string TargetLabel => IsGuest ? "Joining" : IsCloud ? "Starting" : "Connecting to";
     /// <summary>First label under the connecting screen's progress bar.</summary>
-    public string FirstPhaseLabel => IsCloud ? "Get a server" : "Wake console";
+    public string FirstPhaseLabel => IsGuest ? "Find your friend" : IsCloud ? "Get a server" : "Wake console";
     partial void OnIsCloudChanged(bool value) => OnPropertyChanged(nameof(FirstPhaseLabel));
 
-    private void Begin(string serverId, string name, StreamProfile profile, bool consoleOnWifi = false)
+    private void Begin(string serverId, string name, StreamProfile profile, bool consoleOnWifi = false, Action? launch = null)
     {
         if (IsRunning) return;
         Reset();
@@ -269,7 +414,7 @@ public sealed partial class StreamViewModel : ObservableObject
         _sinceStart.Restart();
         _marks.Clear();
         _progressTimer.Start();
-        try { _launcher.Start(serverId, name); }
+        try { if (launch is not null) launch(); else _launcher.Start(serverId, name); }
         catch (Exception ex)
         {
             IsRunning = false;
@@ -308,7 +453,9 @@ public sealed partial class StreamViewModel : ObservableObject
     [RelayCommand]
     private void StreamAgain()
     {
-        if (IsRunning || ServerId.Length == 0) return;
+        if (IsRunning) return;
+        if (IsGuest && _lastJoin is { } j) { StartFailed = false; StartGuest(j.invite, j.name); return; }
+        if (ServerId.Length == 0) return;
         StartFailed = false;
         StreamAgainRequested?.Invoke(ServerId);
     }
@@ -365,6 +512,7 @@ public sealed partial class StreamViewModel : ObservableObject
             Phase = stage switch { PlayerStage.Connecting => 1, PlayerStage.StartingVideo => 2, _ => 0 };
             LoaderText = stage switch
             {
+                PlayerStage.Connecting or PlayerStage.StartingVideo or PlayerStage.Starting when IsGuest => message,
                 PlayerStage.WakingConsole => IsCloud ? "Starting the game in the cloud" : "Waking your console",
                 PlayerStage.InQueue => message.Replace("In the queue for a cloud server: ", "In the queue: "),
                 PlayerStage.RequestingSession when IsCloud => "Finding a cloud server",
@@ -443,6 +591,10 @@ public sealed partial class StreamViewModel : ObservableObject
         IsStreaming = false;
         IsStopping = false;
         IsReconnecting = false;
+        ReplyCode = "";
+        TogetherPlayers = 0;
+        Together = null;
+        SharePending = false;
         if (failed && Error.Length == 0 && _stage != PlayerStage.Ended)
             Error = "The stream stopped unexpectedly. The log below may say why.";
         if (!_everStreamed && !_cancelled)

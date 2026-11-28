@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using XStream.Core.Input;
 using XStream.Core.Stability;
 using XStream.Core.Video;
 using XStream.Core.Xbox;
@@ -8,19 +9,63 @@ namespace XStream.Core.Config;
 
 public enum ClarityLevel { Off, Low, Medium, High }
 
-/// <summary>User settings shared by the launcher UI and the CLI. Stored in ~/.xstream/settings.json.</summary>
-/// <summary>A controller setup for one game (or the default, with an empty key).</summary>
+/// <summary>A spot on the screen as fractions of its usable area (0-1 across and down), so it survives a change of display.</summary>
+public sealed record ScreenSpot(double X, double Y);
+
+/// <summary>
+/// A game's setup (or the default, "All games", with an empty key). The positional fields are its button layout and
+/// gyro; the nullable ones are overrides, null meaning "same as all games", so files written before they existed
+/// load unchanged. <see cref="AppSettings.ControllerFor"/> returns profiles with every field resolved.
+/// </summary>
 public sealed record ControllerProfile(string GameKey, string GameName, string ButtonMapping = "", bool GyroAim = false,
     double GyroSensitivity = 1, string GyroHoldButton = "")
 {
-    public bool NeedsExtras => GyroAim || ButtonMapping.Contains("Paddle", StringComparison.OrdinalIgnoreCase)
-                               || GyroHoldButton.StartsWith("Paddle", StringComparison.OrdinalIgnoreCase);
+    /// <summary>
+    /// Whether the layout fields (buttons, gyro, turbo) are this game's own. Null: yes (every profile before 0.5.2 was a
+    /// layout). False: a profile made only for the keyboard, mouse or picture overrides; the layout follows all games.
+    /// </summary>
+    public bool? OwnLayout { get; init; }
+    /// <summary>Turbo and toggle buttons ("A:turbo,LT:toggle"; see <see cref="Input.ButtonModes"/>). Null: all games' ones.</summary>
+    public string? ButtonModes { get; init; }
+    /// <summary>Turbo presses a second (2 to 20). Null: all games' rate.</summary>
+    public double? TurboRate { get; init; }
+    public KeyboardMouseMode? KeyboardMouse { get; init; }
+    /// <summary>Real keyboard and mouse (true) or controller emulation (false).</summary>
+    public bool? KeyboardMouseNative { get; init; }
+    public double? MouseSensitivity { get; init; }
+    public bool? MouseInvertY { get; init; }
+    public bool? Enhance { get; init; }
+    public ClarityLevel? Clarity { get; init; }
 
-    /// <summary>Same controls, ignoring which game it's for.</summary>
-    public bool SameSetup(ControllerProfile o) =>
-        ButtonMapping == o.ButtonMapping && GyroAim == o.GyroAim && GyroSensitivity == o.GyroSensitivity && GyroHoldButton == o.GyroHoldButton;
+    public bool HasOwnLayout => OwnLayout ?? true;
+    /// <summary>Has any keyboard, mouse or picture override.</summary>
+    public bool HasOverrides => KeyboardMouse is not null || KeyboardMouseNative is not null || MouseSensitivity is not null
+                                || MouseInvertY is not null || Enhance is not null || Clarity is not null;
 
-    /// <summary>A short description ("Swap A/B, gyro 1.5x while LB").</summary>
+    public bool NeedsExtras => HasOwnLayout && (GyroAim || ButtonMapping.Contains("Paddle", StringComparison.OrdinalIgnoreCase)
+                               || GyroHoldButton.StartsWith("Paddle", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Same controller layout, gyro and turbo/toggle (what the input pump needs), ignoring which game it's for.</summary>
+    public bool SameController(ControllerProfile o) =>
+        ButtonMapping == o.ButtonMapping && GyroAim == o.GyroAim && GyroSensitivity == o.GyroSensitivity && GyroHoldButton == o.GyroHoldButton
+        && (ButtonModes ?? "") == (o.ButtonModes ?? "") && (TurboRate ?? Input.ButtonModes.DefaultRate) == (o.TurboRate ?? Input.ButtonModes.DefaultRate);
+
+    /// <summary>Same keyboard-and-mouse setup.</summary>
+    public bool SameKeyboardMouse(ControllerProfile o) =>
+        KeyboardMouse == o.KeyboardMouse && KeyboardMouseNative == o.KeyboardMouseNative && MouseSensitivity == o.MouseSensitivity && MouseInvertY == o.MouseInvertY;
+
+    /// <summary>Same controls and picture, ignoring which game it's for.</summary>
+    public bool SameSetup(ControllerProfile o) => SameController(o) && SameKeyboardMouse(o) && Enhance == o.Enhance && Clarity == o.Clarity;
+
+    /// <summary>How keyboard and mouse play, in a few words ("real keyboard and mouse"); "" when not known.</summary>
+    public string KeyboardMouseText => KeyboardMouse switch
+    {
+        null => "",
+        KeyboardMouseMode.Off => "keyboard and mouse off",
+        _ => KeyboardMouseNative == true ? "real keyboard and mouse" : "keyboard and mouse as a controller",
+    };
+
+    /// <summary>A short description ("remapped (A=B), gyro 1.5x while LB is held, turbo A, RB at 10 a second, toggle LT, ...").</summary>
     public string Summary
     {
         get
@@ -28,11 +73,19 @@ public sealed record ControllerProfile(string GameKey, string GameName, string B
             var parts = new List<string>();
             parts.Add(ButtonMapping.Length == 0 ? "standard buttons" : "remapped (" + ButtonMapping + ")");
             if (GyroAim) parts.Add($"gyro {GyroSensitivity:0.##}x" + (GyroHoldButton.Length > 0 ? " while " + GyroHoldButton + " is held" : ""));
+            var modes = Input.ButtonModes.Parse(ButtonModes);
+            if (modes.Turbo != 0) parts.Add($"turbo {modes.Describe(ButtonMode.Turbo)} at {TurboRate ?? Input.ButtonModes.DefaultRate:0.#} a second");
+            if (modes.Toggle != 0) parts.Add("toggle " + modes.Describe(ButtonMode.Toggle));
+            if (KeyboardMouseText.Length > 0)
+                parts.Add(KeyboardMouseText + (KeyboardMouse != KeyboardMouseMode.Off && KeyboardMouseNative != true && MouseSensitivity is { } m ? $" (mouse {m:0.##}x)" : ""));
+            if (Enhance is { } e) parts.Add("Enhance " + (e ? "on" : "off"));
+            if (Clarity is { } c) parts.Add("Clarity " + c);
             return string.Join(", ", parts);
         }
     }
 }
 
+/// <summary>User settings shared by the launcher UI and the CLI. Stored in ~/.xstream/settings.json.</summary>
 public sealed record AppSettings
 {
     public StreamProfile Profile { get; init; } = StreamProfile.Balanced;
@@ -83,6 +136,12 @@ public sealed record AppSettings
     public bool Enhance { get; init; } = true;
     /// <summary>How a 16:9 stream fills a screen of another shape (e.g. a 16:10 Mac): Fit (bars), Fill (trim edges), Stretch.</summary>
     public VideoScaling Scaling { get; init; } = VideoScaling.Fit;
+    /// <summary>Colour-blind filter: shifts colours that look alike apart (daltonisation). Off by default.</summary>
+    public ColorFilter ColorFilter { get; init; }
+    /// <summary>How strongly the colour filter corrects, 0 to 1.</summary>
+    public double ColorFilterStrength { get; init; } = 1;
+    /// <summary>Where the mini player sits (null: bottom right); remembered when it's dragged.</summary>
+    public ScreenSpot? MiniPlayerPlace { get; init; }
 
     /// <summary>Switch the display to 60 Hz for the stream (the console sends 60 fps) and back afterwards. Windows.</summary>
     public bool MatchRefreshRate { get; init; } = OperatingSystem.IsWindows();
@@ -107,6 +166,8 @@ public sealed record AppSettings
     public bool ConnectionAlerts { get; init; } = true;
     /// <summary>"Achievement unlocked: Name · 20G" over the game when one unlocks during a stream.</summary>
     public bool AchievementAlerts { get; init; } = true;
+    /// <summary>Save a clip of the moment an achievement unlocks (keeps the last minute in memory while streaming a console).</summary>
+    public bool AchievementClips { get; init; } = true;
     /// <summary>Check for, download and offer new versions automatically (Windows build).</summary>
     public bool AutoUpdate { get; init; } = true;
     /// <summary>Release feed (latest.json) override; empty uses the built-in one.</summary>
@@ -124,6 +185,17 @@ public sealed record AppSettings
     public bool InstantReplay { get; init; }
     public int ReplaySeconds { get; init; } = 30;
     /// <summary>
+    /// Play together: the console's bitrate while friends are watching. Your upload carries their picture, and most
+    /// home uploads can't take a 40-50 Mbps stream per friend. Lowered further (to 5) if a friend keeps losing packets.
+    /// </summary>
+    public double TogetherMaxMbps { get; init; } = 15;
+    /// <summary>Play together: let friends press the Xbox button (it opens the guide over everyone's game).</summary>
+    public bool TogetherGuestXboxButton { get; init; }
+    /// <summary>Play together: the name you last joined a friend's stream with ("" = your gamertag or computer user name).</summary>
+    public string TogetherName { get; init; } = "";
+    /// <summary>Play together: UDP port to share on (0 = any free port; set one to forward it on the router yourself).</summary>
+    public int TogetherPort { get; init; }
+    /// <summary>
     /// Controller remapping, "From=To" pairs separated by commas (e.g. "A=B,B=A,Paddle1=LeftThumb"). Sources are
     /// any Xbox button or Paddle1-4 (Elite / DualSense Edge back buttons); "To" may be None to turn a button off.
     /// </summary>
@@ -135,7 +207,7 @@ public sealed record AppSettings
     /// <summary>Gyro only while this button is held ("" = always on). Usually LeftShoulder or a paddle.</summary>
     public string GyroHoldButton { get; init; } = "";
     /// <summary>Play with keyboard and mouse in the stream window (a virtual controller). Auto: only while no controller is connected.</summary>
-    public XStream.Core.Input.KeyboardMouseMode KeyboardMouse { get; init; } = XStream.Core.Input.KeyboardMouseMode.Auto;
+    public KeyboardMouseMode KeyboardMouse { get; init; } = KeyboardMouseMode.Auto;
     /// <summary>Keyboard-and-mouse keys, as changes from the default layout ("A=Space,RightTrigger=MouseLeft"; see KeyboardBindings).</summary>
     public string KeyboardMouseBindings { get; init; } = "";
     /// <summary>Mouse aim speed on the right stick (1 = default; 0.25 to 4).</summary>
@@ -144,6 +216,10 @@ public sealed record AppSettings
     public static double DefaultMouseSensitivity => OperatingSystem.IsMacOS() ? 0.35 : 1;
     /// <summary>Mouse forward looks down.</summary>
     public bool MouseInvertY { get; init; }
+    /// <summary>Turbo and toggle buttons for all games ("A:turbo,LT:toggle"; see <see cref="Input.ButtonModes"/>).</summary>
+    public string ButtonModes { get; init; } = "";
+    /// <summary>Turbo presses a second while a turbo button is held (2 to 20).</summary>
+    public double TurboRate { get; init; } = Input.ButtonModes.DefaultRate;
     /// <summary>
     /// Per-game controller setups: used instead of the ones above while that game is running (the stream switches
     /// when the game changes). Keyed by Xbox title id, or "cloud:ID" for a cloud game.
@@ -151,12 +227,86 @@ public sealed record AppSettings
     public ControllerProfile[]? GameProfiles { get; init; }
 
     /// <summary>The default controller setup (the fields above) as a profile.</summary>
-    public ControllerProfile DefaultController => new("", "All games", ButtonMapping, GyroAim, GyroSensitivity, GyroHoldButton);
+    public ControllerProfile DefaultController => new("", "All games", ButtonMapping, GyroAim, GyroSensitivity, GyroHoldButton)
+    {
+        ButtonModes = ButtonModes, TurboRate = TurboRate,
+        KeyboardMouse = KeyboardMouse, KeyboardMouseNative = KeyboardMouseNative, MouseSensitivity = MouseSensitivity, MouseInvertY = MouseInvertY,
+        Enhance = Enhance, Clarity = Clarity,
+    };
 
-    /// <summary>The controller setup for a game: its own profile if it has one, else the default.</summary>
-    public ControllerProfile ControllerFor(string? gameKey) =>
-        gameKey is { Length: > 0 } && GameProfiles?.FirstOrDefault(p => p.GameKey.Equals(gameKey, StringComparison.OrdinalIgnoreCase)) is { } p
-            ? p : DefaultController;
+    /// <summary>A game's profile as stored (overrides still null), or null when it has none.</summary>
+    public ControllerProfile? GameProfile(string? gameKey) =>
+        gameKey is { Length: > 0 } ? GameProfiles?.FirstOrDefault(p => p.GameKey.Equals(gameKey, StringComparison.OrdinalIgnoreCase)) : null;
+
+    /// <summary>
+    /// The setup for a game: its own profile if it has one, else the default, with every field resolved (what the game
+    /// hasn't set comes from all games).
+    /// </summary>
+    public ControllerProfile ControllerFor(string? gameKey)
+    {
+        var d = DefaultController;
+        if (GameProfile(gameKey) is not { } p) return d;
+        var layout = p.HasOwnLayout ? p : d;
+        // Choosing real keyboard and mouse or controller emulation for a game means playing it with them, even when
+        // keyboard and mouse is off for all games.
+        var mode = p.KeyboardMouse ?? (p.KeyboardMouseNative is not null && KeyboardMouse == KeyboardMouseMode.Off ? KeyboardMouseMode.Auto : KeyboardMouse);
+        return new ControllerProfile(p.GameKey, p.GameName, layout.ButtonMapping, layout.GyroAim, layout.GyroSensitivity, layout.GyroHoldButton)
+        {
+            OwnLayout = p.OwnLayout,
+            ButtonModes = p.HasOwnLayout ? p.ButtonModes ?? ButtonModes : ButtonModes,
+            TurboRate = p.HasOwnLayout ? p.TurboRate ?? TurboRate : TurboRate,
+            KeyboardMouse = mode,
+            KeyboardMouseNative = p.KeyboardMouseNative ?? KeyboardMouseNative,
+            MouseSensitivity = p.MouseSensitivity ?? MouseSensitivity,
+            MouseInvertY = p.MouseInvertY ?? MouseInvertY,
+            Enhance = p.Enhance ?? Enhance,
+            Clarity = p.Clarity ?? Clarity,
+        };
+    }
+
+    /// <summary>
+    /// These settings with a game's profile applied to the top-level fields: what a stream of that game uses (the
+    /// session and the stream menu both read this, so they agree).
+    /// </summary>
+    public AppSettings EffectiveFor(string? gameKey)
+    {
+        if (GameProfile(gameKey) is null) return this;
+        var c = ControllerFor(gameKey);
+        return this with
+        {
+            ButtonMapping = c.ButtonMapping, GyroAim = c.GyroAim, GyroSensitivity = c.GyroSensitivity, GyroHoldButton = c.GyroHoldButton,
+            ButtonModes = c.ButtonModes ?? ButtonModes, TurboRate = c.TurboRate ?? TurboRate,
+            KeyboardMouse = c.KeyboardMouse ?? KeyboardMouse, KeyboardMouseNative = c.KeyboardMouseNative ?? KeyboardMouseNative,
+            MouseSensitivity = c.MouseSensitivity ?? MouseSensitivity, MouseInvertY = c.MouseInvertY ?? MouseInvertY,
+            Enhance = c.Enhance ?? Enhance, Clarity = c.Clarity ?? Clarity,
+        };
+    }
+
+    /// <summary>
+    /// A change made while a game is running (the stream menu edits the effective settings). If the game has a profile,
+    /// a change to a field a game can set (Enhance, Clarity, the mouse) goes to that game's profile; otherwise, and for
+    /// every other setting, it goes to these settings as usual.
+    /// </summary>
+    public AppSettings ApplyEdit(string? gameKey, Func<AppSettings, AppSettings> change)
+    {
+        if (GameProfile(gameKey) is not { } p) return change(this);
+        var before = EffectiveFor(gameKey);
+        var after = change(before);
+        if (after.Enhance != before.Enhance) p = p with { Enhance = after.Enhance };
+        if (after.Clarity != before.Clarity) p = p with { Clarity = after.Clarity };
+        if (after.KeyboardMouse != before.KeyboardMouse) p = p with { KeyboardMouse = after.KeyboardMouse };
+        if (after.KeyboardMouseNative != before.KeyboardMouseNative) p = p with { KeyboardMouseNative = after.KeyboardMouseNative };
+        if (after.MouseSensitivity != before.MouseSensitivity) p = p with { MouseSensitivity = after.MouseSensitivity };
+        if (after.MouseInvertY != before.MouseInvertY) p = p with { MouseInvertY = after.MouseInvertY };
+        // Everything else as changed; the fields a game can set keep their all-games values.
+        var next = after with
+        {
+            ButtonMapping = ButtonMapping, GyroAim = GyroAim, GyroSensitivity = GyroSensitivity, GyroHoldButton = GyroHoldButton,
+            ButtonModes = ButtonModes, TurboRate = TurboRate, KeyboardMouse = KeyboardMouse, KeyboardMouseNative = KeyboardMouseNative,
+            MouseSensitivity = MouseSensitivity, MouseInvertY = MouseInvertY, Enhance = Enhance, Clarity = Clarity, GameProfiles = GameProfiles,
+        };
+        return next.WithProfile(p);
+    }
 
     /// <summary>Add or replace a game's profile.</summary>
     public AppSettings WithProfile(ControllerProfile profile) => this with

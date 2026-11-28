@@ -38,7 +38,7 @@ public sealed partial class MappingViewModel
     }
 
     /// <summary>Showing keyboard-and-mouse keys instead of the controller layout.</summary>
-    [ObservableProperty] public partial bool KeyboardView { get; set; }
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ShowGameSection))] public partial bool KeyboardView { get; set; }
     partial void OnKeyboardViewChanged(bool value)
     {
         PickSlot(null);
@@ -75,7 +75,7 @@ public sealed partial class MappingViewModel
         if (!KeyNames.TryParse(name, out int code)) return false;
         if (KeyNames.IsReserved(code))
         {
-            KeyMessage = $"{KeyNames.Long(code)} is kept for Vexel (Esc menu, F3 stats, F10 clip, F11 full screen, F12 screenshot).";
+            KeyMessage = $"{KeyNames.Long(code)} is kept for Vexel (Esc menu, F3 stats, F8 mini player, F10 clip, F11 full screen, F12 screenshot).";
             return true;
         }
         var took = Enum.GetValues<KbmTarget>().Where(t => t != target && _keys.Keys(t).Contains(code)).ToList();

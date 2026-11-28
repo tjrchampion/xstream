@@ -43,6 +43,8 @@ public sealed class ReplayBuffer(double seconds = 30, double keyframeEverySecond
     /// <summary>Clock used for the timestamps (ms); exposed for tests.</summary>
     public Func<double>? Clock { get; init; }
     private double Now => Clock?.Invoke() ?? _clock.Elapsed.TotalMilliseconds;
+    /// <summary>The buffer's clock now (ms): the time base for <see cref="SaveRange"/>.</summary>
+    public double NowMs => Now;
 
     public void AddVideo(ReadOnlySpan<byte> annexB, bool keyframe)
     {
@@ -101,6 +103,36 @@ public sealed class ReplayBuffer(double seconds = 30, double keyframeEverySecond
             return (_video.Select(f => f with { AtMs = f.AtMs - t0 }).ToList(),
                     _audio.Select(a => a with { AtMs = a.AtMs - t0 }).ToList());
         }
+    }
+
+    /// <summary>
+    /// Part of the buffer, on its own clock (<see cref="NowMs"/>): from the last keyframe at or before
+    /// <paramref name="fromMs"/> (or the oldest frame) to <paramref name="toMs"/>; times from the clip's first frame.
+    /// </summary>
+    public (List<ClipFrame> Video, List<ClipAudio> Audio) Range(double fromMs, double toMs)
+    {
+        lock (_gate)
+        {
+            var start = _video.First;
+            for (var n = _video.First; n is not null && n.Value.AtMs <= fromMs; n = n.Next)
+                if (n.Value.Keyframe) start = n;
+            if (start is null) return ([], []);
+            double t0 = start.Value.AtMs;
+            var video = new List<ClipFrame>();
+            for (var n = start; n is not null && n.Value.AtMs <= toMs; n = n.Next) video.Add(n.Value with { AtMs = n.Value.AtMs - t0 });
+            double end = video.Count > 0 ? video[^1].AtMs + t0 : t0;
+            var audio = _audio.Where(a => a.AtMs >= t0 && a.AtMs <= end).Select(a => a with { AtMs = a.AtMs - t0 }).ToList();
+            return (video, audio);
+        }
+    }
+
+    /// <summary>Write part of the buffer (see <see cref="Range"/>) to an MP4. Returns its length in seconds (0: nothing to save).</summary>
+    public double SaveRange(string path, double fromMs, double toMs)
+    {
+        var (video, audio) = Range(fromMs, toMs);
+        if (video.Count < 2) return 0;
+        using (var f = File.Create(path)) Mp4Writer.Write(f, video, audio);
+        return video[^1].AtMs / 1000.0;
     }
 
     /// <summary>Write the buffer to an MP4 file. Returns the clip's length in seconds (0 if there was nothing to save).</summary>

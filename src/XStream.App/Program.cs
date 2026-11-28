@@ -29,6 +29,9 @@ internal static class Program
                 }.ToLine());
                 return 1;
             }
+            // Play together: watching a friend's stream (no sign-in needed).
+            if (args[1] == PlayerHost.JoinArg && args.Length > 2)
+                return PlayerHost.RunGuestChild(args[2], args.Length > 3 ? args[3] : null, args.Length > 4 ? args[4] : null);
             return PlayerHost.RunChild(args[1], args.Length > 2 ? args[2] : null, args.Length > 3 ? args[3] : null);
         }
 
