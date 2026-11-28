@@ -193,7 +193,8 @@ public sealed partial class StreamOverlay
 
     // ---- Drawing ---------------------------------------------------------------------------------------
 
-    private static readonly SKTypeface Mono = SKTypeface.FromFamilyName(OperatingSystem.IsWindows() ? "Consolas" : "Menlo", SKFontStyle.Bold) ?? Bold;
+    private static SKTypeface? _mono;
+    private static SKTypeface Mono => _mono ??= SKTypeface.FromFamilyName(OperatingSystem.IsWindows() ? "Consolas" : "Menlo", SKFontStyle.Bold) ?? Bold;
 
     /// <summary>Breaks a code into lines that fit (codes have no spaces to wrap at).</summary>
     private static List<string> CodeLines(string code, SKPaint p, float max)

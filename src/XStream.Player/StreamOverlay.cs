@@ -662,8 +662,10 @@ public sealed partial class StreamOverlay : IVideoOverlay
     private static readonly SKColor Faint = new(0x5D, 0x66, 0x72);
     private static readonly SKColor Panel = new(0x16, 0x1A, 0x20, 0xF5);
     private static readonly SKColor Tile = new(0x1D, 0x22, 0x2A);
-    private static readonly SKTypeface Regular = SKTypeface.FromFamilyName(null, SKFontStyle.Normal);
-    private static readonly SKTypeface Bold = SKTypeface.FromFamilyName(null, SKFontStyle.Bold);
+    // Fonts load on first draw, not with the class: the menu logic (and its tests) must not need Skia's native library.
+    private static SKTypeface? _regular, _bold;
+    private static SKTypeface Regular => _regular ??= SKTypeface.FromFamilyName(null, SKFontStyle.Normal);
+    private static SKTypeface Bold => _bold ??= SKTypeface.FromFamilyName(null, SKFontStyle.Bold);
 
     public unsafe void Render(Span<byte> rgba, int stride)
     {
